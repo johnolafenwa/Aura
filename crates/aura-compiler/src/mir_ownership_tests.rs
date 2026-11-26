@@ -302,6 +302,7 @@ fn calls_consume_arguments_except_extern_and_runtime_borrows() {
     assert_eq!(
         roles(&call(
             CallTarget::Extern(MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "c".to_string(),
                 abi: "C".to_string(),

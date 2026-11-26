@@ -60,7 +60,7 @@ enables direct native execution and `aura build`.
 Run the installer:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 Add Aura to the Ubuntu login environment:

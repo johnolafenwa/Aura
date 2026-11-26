@@ -77,7 +77,7 @@ impl IntegerKind {
             Self::Int32 | Self::Uint32 => 32,
             Self::Int64 | Self::Uint64 => 64,
             Self::Int128 | Self::Uint128 => 128,
-            Self::IntSize | Self::UintSize => usize::BITS,
+            Self::IntSize | Self::UintSize => (crate::layout::POINTER_BYTES * 8) as u32,
         }
     }
 
@@ -104,8 +104,8 @@ impl IntegerKind {
                 max: i128::MAX,
             },
             Self::IntSize => IntegerBounds::Signed {
-                min: isize::MIN as i128,
-                max: isize::MAX as i128,
+                min: i64::MIN as i128,
+                max: i64::MAX as i128,
             },
             Self::Uint8 => IntegerBounds::Unsigned {
                 max: u8::MAX as u128,
@@ -121,7 +121,7 @@ impl IntegerKind {
             },
             Self::Uint128 => IntegerBounds::Unsigned { max: u128::MAX },
             Self::UintSize => IntegerBounds::Unsigned {
-                max: usize::MAX as u128,
+                max: u64::MAX as u128,
             },
         }
     }
@@ -651,15 +651,13 @@ impl IntegerValue {
             IntegerKind::Int8 => signed!(i8),
             IntegerKind::Int16 => signed!(i16),
             IntegerKind::Int32 => signed!(i32),
-            IntegerKind::Int64 => signed!(i64),
+            IntegerKind::Int64 | IntegerKind::IntSize => signed!(i64),
             IntegerKind::Int128 => signed!(i128),
-            IntegerKind::IntSize => signed!(isize),
             IntegerKind::Uint8 => unsigned!(u8),
             IntegerKind::Uint16 => unsigned!(u16),
             IntegerKind::Uint32 => unsigned!(u32),
-            IntegerKind::Uint64 => unsigned!(u64),
+            IntegerKind::Uint64 | IntegerKind::UintSize => unsigned!(u64),
             IntegerKind::Uint128 => unsigned!(u128),
-            IntegerKind::UintSize => unsigned!(usize),
         }
     }
 
@@ -705,15 +703,13 @@ impl IntegerValue {
             IntegerKind::Int8 => signed!(i8),
             IntegerKind::Int16 => signed!(i16),
             IntegerKind::Int32 => signed!(i32),
-            IntegerKind::Int64 => signed!(i64),
+            IntegerKind::Int64 | IntegerKind::IntSize => signed!(i64),
             IntegerKind::Int128 => signed!(i128),
-            IntegerKind::IntSize => signed!(isize),
             IntegerKind::Uint8 => unsigned!(u8),
             IntegerKind::Uint16 => unsigned!(u16),
             IntegerKind::Uint32 => unsigned!(u32),
-            IntegerKind::Uint64 => unsigned!(u64),
+            IntegerKind::Uint64 | IntegerKind::UintSize => unsigned!(u64),
             IntegerKind::Uint128 => unsigned!(u128),
-            IntegerKind::UintSize => unsigned!(usize),
         })
     }
 
@@ -740,15 +736,13 @@ impl IntegerValue {
             IntegerKind::Int8 => signed!(i8),
             IntegerKind::Int16 => signed!(i16),
             IntegerKind::Int32 => signed!(i32),
-            IntegerKind::Int64 => signed!(i64),
+            IntegerKind::Int64 | IntegerKind::IntSize => signed!(i64),
             IntegerKind::Int128 => signed!(i128),
-            IntegerKind::IntSize => signed!(isize),
             IntegerKind::Uint8 => unsigned!(u8),
             IntegerKind::Uint16 => unsigned!(u16),
             IntegerKind::Uint32 => unsigned!(u32),
-            IntegerKind::Uint64 => unsigned!(u64),
+            IntegerKind::Uint64 | IntegerKind::UintSize => unsigned!(u64),
             IntegerKind::Uint128 => unsigned!(u128),
-            IntegerKind::UintSize => unsigned!(usize),
         })
     }
 
@@ -812,15 +806,13 @@ impl IntegerValue {
             IntegerKind::Int8 => signed!(i8),
             IntegerKind::Int16 => signed!(i16),
             IntegerKind::Int32 => signed!(i32),
-            IntegerKind::Int64 => signed!(i64),
+            IntegerKind::Int64 | IntegerKind::IntSize => signed!(i64),
             IntegerKind::Int128 => signed!(i128),
-            IntegerKind::IntSize => signed!(isize),
             IntegerKind::Uint8 => unsigned!(u8),
             IntegerKind::Uint16 => unsigned!(u16),
             IntegerKind::Uint32 => unsigned!(u32),
-            IntegerKind::Uint64 => unsigned!(u64),
+            IntegerKind::Uint64 | IntegerKind::UintSize => unsigned!(u64),
             IntegerKind::Uint128 => unsigned!(u128),
-            IntegerKind::UintSize => unsigned!(usize),
         }
     }
 
@@ -874,15 +866,13 @@ impl IntegerValue {
             IntegerKind::Int8 => signed!(i8),
             IntegerKind::Int16 => signed!(i16),
             IntegerKind::Int32 => signed!(i32),
-            IntegerKind::Int64 => signed!(i64),
+            IntegerKind::Int64 | IntegerKind::IntSize => signed!(i64),
             IntegerKind::Int128 => signed!(i128),
-            IntegerKind::IntSize => signed!(isize),
             IntegerKind::Uint8 => unsigned!(u8),
             IntegerKind::Uint16 => unsigned!(u16),
             IntegerKind::Uint32 => unsigned!(u32),
-            IntegerKind::Uint64 => unsigned!(u64),
+            IntegerKind::Uint64 | IntegerKind::UintSize => unsigned!(u64),
             IntegerKind::Uint128 => unsigned!(u128),
-            IntegerKind::UintSize => unsigned!(usize),
         }
     }
 

@@ -803,11 +803,19 @@ fn dense_arrays_validate_shape_storage_and_deep_clone() {
         )
     );
 
-    ArrayValue::new(
+    // A zero dimension empties the array, but the other dimensions still
+    // feed row-major strides, so their product must fit too.
+    let zero_error = ArrayValue::new(
         vec![i64::MAX as usize, 2, 0].into_boxed_slice(),
         ArrayStorage::Float32(Vec::new().into_boxed_slice().into()),
     )
-    .expect("a zero dimension makes the checked row-major product zero regardless of axis order");
+    .expect_err("non-zero dimensions of an empty array must still fit");
+    assert_eq!(zero_error.code, "AU4005");
+    ArrayValue::new(
+        vec![3, 0, 2].into_boxed_slice(),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice().into()),
+    )
+    .expect("a zero dimension makes the element count zero");
 
     let dimension_error = ArrayValue::new(
         vec![i64::MAX as usize + 1, 0].into_boxed_slice(),
@@ -6168,11 +6176,11 @@ fn float_floor_divmod_matches_python_sign_precision_and_zero_rules() {
 fn float_power_uses_destination_width_and_shared_exception_rules() {
     assert_eq!(
         float_power(1.5, 2.0, FloatPowerWidth::Float32).expect("float32 power should succeed"),
-        (1.5_f32.powf(2.0)) as f64
+        2.25
     );
     assert_eq!(
         float_power(1.5, 2.0, FloatPowerWidth::Float64).expect("float64 power should succeed"),
-        1.5_f64.powf(2.0)
+        2.25
     );
 
     let float32_overflow = float_power(100.0, 100.0, FloatPowerWidth::Float32)
@@ -9112,6 +9120,16 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
         .render(),
         "None"
     );
+    std::env::set_var("AURA_TEST_ENV_THAT_IS_SET_52D3", "present");
+    let present = call(
+        "sys::env",
+        vec![Value::String(
+            "AURA_TEST_ENV_THAT_IS_SET_52D3".to_string().into(),
+        )],
+    )
+    .render();
+    std::env::remove_var("AURA_TEST_ENV_THAT_IS_SET_52D3");
+    assert!(present.contains("present"), "{present}");
     assert!(call("sys::current_dir", vec![])
         .render()
         .starts_with("Result.Ok("));
@@ -21391,4 +21409,291 @@ fn first_stack_gives_the_arguments_after_the_program_name() {
     let stack = stack_of(&strings, 9);
     assert_eq!(args(&stack, 5), None);
     assert_eq!(unsafe { super::initial_stack_args(std::ptr::null()) }, None);
+}
+
+#[test]
+fn closure_environment_settle_blocks_concurrent_readers_until_captures_are_ready() {
+    use super::DirectCallable;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+    static ENTERED: AtomicBool = AtomicBool::new(false);
+    static RELEASE: AtomicBool = AtomicBool::new(false);
+    ENTERED.store(false, Ordering::SeqCst);
+    RELEASE.store(false, Ordering::SeqCst);
+
+    unsafe extern "C-unwind" fn noop_drop(_words: *mut i64) {}
+    #[repr(C)]
+    struct Descriptor {
+        _invoke: usize,
+        drop_fn: unsafe extern "C-unwind" fn(*mut i64),
+    }
+    static DESCRIPTOR: Descriptor = Descriptor {
+        _invoke: 0,
+        drop_fn: noop_drop,
+    };
+
+    fn slow_box_captures(_callable: &DirectCallable) -> Vec<ClosureCaptureValue> {
+        ENTERED.store(true, Ordering::SeqCst);
+        while !RELEASE.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        vec![ClosureCaptureValue {
+            name: "x".to_string(),
+            ty: Type::named("int64"),
+            value: Value::Int(IntegerValue::from_i64(42)),
+            source_place: None,
+            mutable: false,
+        }]
+    }
+
+    let callable = Arc::new(unsafe {
+        DirectCallable::new(
+            [(&raw const DESCRIPTOR) as i64, 0, 0, 0],
+            7,
+            false,
+            1,
+            slow_box_captures,
+        )
+    });
+    let env = Arc::new(ClosureEnvironment::deferred(callable));
+
+    let env1 = Arc::clone(&env);
+    let t1 = std::thread::spawn(move || env1.arguments("worker").expect("settler succeeds"));
+
+    while !ENTERED.load(Ordering::SeqCst) {
+        std::thread::yield_now();
+    }
+
+    let env2 = Arc::clone(&env);
+    let t2 = std::thread::spawn(move || {
+        env2.arguments("worker")
+            .expect("concurrent reader succeeds")
+    });
+
+    // Give t2 time to enter `settle()` while `slow_box_captures` is still running.
+    std::thread::sleep(Duration::from_millis(25));
+    RELEASE.store(true, Ordering::SeqCst);
+
+    let first = t1.join().expect("settler thread should not panic");
+    let second = t2.join().expect("reader thread should not panic");
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert_eq!(first[0].value, Value::Int(IntegerValue::from_i64(42)));
+    assert_eq!(second[0].value, Value::Int(IntegerValue::from_i64(42)));
+}
+
+#[test]
+fn mutable_direct_callable_clone_settles_and_detaches() {
+    use super::DirectCallable;
+    unsafe extern "C-unwind" fn noop_drop(_words: *mut i64) {}
+    #[repr(C)]
+    struct Descriptor {
+        _invoke: usize,
+        drop_fn: unsafe extern "C-unwind" fn(*mut i64),
+    }
+    static DESCRIPTOR: Descriptor = Descriptor {
+        _invoke: 0,
+        drop_fn: noop_drop,
+    };
+
+    fn box_captures(_callable: &DirectCallable) -> Vec<ClosureCaptureValue> {
+        vec![ClosureCaptureValue {
+            name: "count".to_string(),
+            ty: Type::named("int64"),
+            value: Value::Int(IntegerValue::from_i64(9)),
+            source_place: None,
+            mutable: true,
+        }]
+    }
+
+    let callable = Arc::new(unsafe {
+        DirectCallable::new(
+            [(&raw const DESCRIPTOR) as i64, 0, 0, 0],
+            11,
+            true,
+            1,
+            box_captures,
+        )
+    });
+    let func = FunctionValue {
+        name: "mut_cb".to_string(),
+        signature: Type::Unit,
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+        closure_environment: Some(Arc::new(ClosureEnvironment::deferred(Arc::clone(
+            &callable,
+        )))),
+        direct_callable: Some(Arc::clone(&callable)),
+    };
+
+    let cloned = func.clone();
+    assert!(
+        cloned.direct_callable.is_none(),
+        "cloning a mutable FunctionValue must not share an unlocked DirectCallable"
+    );
+    assert!(
+        callable.words_for(11).is_none(),
+        "original mutable DirectCallable must be settled and released on clone"
+    );
+    let captures = cloned
+        .closure_environment
+        .as_ref()
+        .expect("environment preserved")
+        .arguments("mut_cb")
+        .expect("captures settled");
+    assert_eq!(captures.len(), 1);
+    assert_eq!(captures[0].value, Value::Int(IntegerValue::from_i64(9)));
+}
+
+#[test]
+fn mutable_direct_callable_clone_without_environment_releases_the_words() {
+    use super::DirectCallable;
+    use std::sync::atomic::AtomicUsize;
+    static DROPS: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C-unwind" fn counting_drop(_words: *mut i64) {
+        DROPS.fetch_add(1, Ordering::SeqCst);
+    }
+    #[repr(C)]
+    struct Descriptor {
+        _invoke: usize,
+        drop_fn: unsafe extern "C-unwind" fn(*mut i64),
+    }
+    static DESCRIPTOR: Descriptor = Descriptor {
+        _invoke: 0,
+        drop_fn: counting_drop,
+    };
+    fn no_captures(_callable: &DirectCallable) -> Vec<ClosureCaptureValue> {
+        Vec::new()
+    }
+    DROPS.store(0, Ordering::SeqCst);
+
+    let callable = Arc::new(unsafe {
+        DirectCallable::new(
+            [(&raw const DESCRIPTOR) as i64, 0, 0, 0],
+            5,
+            true,
+            0,
+            no_captures,
+        )
+    });
+    assert!(callable.live_words().is_some());
+    let func = FunctionValue {
+        name: "bare_mut_cb".to_string(),
+        signature: Type::Unit,
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+        closure_environment: None,
+        direct_callable: Some(Arc::clone(&callable)),
+    };
+    let cloned = func.clone();
+    assert!(cloned.direct_callable.is_none());
+    assert!(cloned.closure_environment.is_none());
+    assert!(
+        callable.live_words().is_none(),
+        "the clone released the words"
+    );
+    assert!(callable.words_for(5).is_none());
+    assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+    drop(func);
+    drop(callable);
+    assert_eq!(DROPS.load(Ordering::SeqCst), 1, "a release runs only once");
+}
+
+#[test]
+fn a_closure_environment_gives_up_its_captures_only_when_uniquely_owned() {
+    let capture = |value: i64| ClosureCaptureValue {
+        name: "x".to_string(),
+        ty: Type::named("int64"),
+        value: Value::Int(IntegerValue::from_i64(value)),
+        source_place: None,
+        mutable: false,
+    };
+    let env = Arc::new(ClosureEnvironment::new(vec![capture(1), capture(2)], false));
+    assert!(env.any_capture(|value| *value == Value::Int(IntegerValue::from_i64(2))));
+    let shared = Arc::clone(&env);
+    assert!(shared.into_captured_values().is_empty());
+    assert_eq!(
+        env.into_captured_values(),
+        vec![
+            Value::Int(IntegerValue::from_i64(1)),
+            Value::Int(IntegerValue::from_i64(2))
+        ]
+    );
+    let taken = Arc::new(ClosureEnvironment::new(vec![capture(3)], true));
+    assert_eq!(
+        taken.take_captures().map(|captures| captures.len()),
+        Some(1)
+    );
+    assert!(taken.into_captured_values().is_empty());
+}
+
+#[test]
+fn a_pending_task_exit_from_a_trap_hands_the_trap_back() {
+    use super::PendingTaskExit;
+    let exit = PendingTaskExit::from_trap(Diagnostic::coded("AU4001", "cleanup failed"));
+    assert!(!exit.is_cancelled());
+    let trap = exit.into_trap().ok().expect("a trap exit yields its trap");
+    assert_eq!(trap.code, "AU4001");
+    assert_eq!(trap.message, "cleanup failed");
+
+    let cancelled = PendingTaskExit(TaskExecutionResult::Cancelled);
+    assert!(cancelled.is_cancelled());
+    let Err(unchanged) = cancelled.into_trap() else {
+        panic!("a cancellation is not a trap");
+    };
+    assert!(
+        unchanged.is_cancelled(),
+        "a non-trap exit comes back unchanged"
+    );
+}
+
+#[test]
+fn a_closure_environment_still_answers_after_a_holder_of_its_lock_panicked() {
+    let env = Arc::new(ClosureEnvironment::new(
+        vec![ClosureCaptureValue {
+            name: "x".to_string(),
+            ty: Type::named("int64"),
+            value: Value::Int(IntegerValue::from_i64(5)),
+            source_place: None,
+            mutable: false,
+        }],
+        false,
+    ));
+    let poisoner = Arc::clone(&env);
+    let joined = std::thread::spawn(move || {
+        let _held = poisoner.captures.lock().expect("an unpoisoned lock");
+        panic!("poison the capture lock");
+    })
+    .join();
+    assert!(joined.is_err());
+    assert!(env.captures.is_poisoned());
+    assert!(env.any_capture(|value| *value == Value::Int(IntegerValue::from_i64(5))));
+    assert_eq!(
+        env.into_captured_values(),
+        vec![Value::Int(IntegerValue::from_i64(5))]
+    );
+}
+
+#[test]
+fn floating_point_casts_check_the_exclusive_upper_bound_of_wide_integers() {
+    for (name, exponent) in [("int128", 127), ("uint128", 128)] {
+        let upper = 2.0_f64.powi(exponent);
+        let largest = f64::from_bits(upper.to_bits() - 1);
+        let target = Type::named(name);
+        let valid = cast_numeric_value(Value::Float(largest), &target, None)
+            .expect("the preceding representable float fits");
+        let Value::Int(valid) = valid else {
+            panic!("expected an integer")
+        };
+        assert_eq!(valid.to_f64(), largest);
+        let overflow = cast_numeric_value(Value::Float(upper), &target, None)
+            .expect_err("the power of two just above the maximum is out of range");
+        assert!(overflow
+            .message
+            .contains(&format!("does not fit in `{name}`")));
+    }
 }

@@ -382,6 +382,11 @@ impl Specializer<'_> {
     /// The function implementing `trait_name.method` for `ty`, chosen as
     /// trait dispatch chooses it: the most specific matching impl.
     fn implementation(&self, trait_name: &str, ty: &Type, method: &str) -> Option<String> {
+        if let Some(target) =
+            super::delegation::associated_alias_for_bound(self.program, trait_name, ty, method)
+        {
+            return Some(target);
+        }
         let mut best: Option<(usize, &str)> = None;
         for trait_impl in self.trait_impls {
             if trait_impl.trait_name != trait_name {

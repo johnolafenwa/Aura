@@ -1,0 +1,5 @@
+public type Read[T] = Callable[def(self: T) -> int64]
+
+public def setter[T](f: own Read[T]) -> Read[T]:
+    print("register score")
+    return Read[T](lambda [own f] self: f(self) + 1)

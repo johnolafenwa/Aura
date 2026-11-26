@@ -1,0 +1,61 @@
+# A list literal of scalars or copy classes stores its leading elements in
+# place once the first one gave the list its storage. Long literals, every
+# scalar width, and literals built in a loop give the same lists.
+copy class Entry:
+    dist: int64
+    node: int64
+
+copy class Pixel:
+    red: uint8
+    count: uint16
+
+
+def channel(value: int64) -> int64:
+    return value * 3 % 256
+
+
+def main():
+    print([1])
+    print([1, 2])
+    print([1, 2, 3, 4, 5])
+    print([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    print([0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5])
+    print([true, false, true, true, false, false, true, false, true, true])
+    bytes: list[uint8] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 250]
+    print(bytes)
+    narrow: list[int16] = [-1, 2, -3, 4, -5, 6, -7, 8, -9, 10]
+    print(narrow)
+    wide: list[uint32] = [4000000000, 1, 2]
+    print(wide)
+    singles: list[float32] = [0.25, 0.5, 0.75]
+    print(singles)
+    print([Entry(dist=1, node=2), Entry(dist=3, node=4), Entry(dist=5, node=6)])
+    print(
+        [
+            Pixel(red=1, count=10),
+            Pixel(red=2, count=20),
+            Pixel(red=3, count=30),
+            Pixel(red=4, count=40),
+            Pixel(red=5, count=50),
+            Pixel(red=6, count=60),
+            Pixel(red=7, count=70),
+            Pixel(red=8, count=80),
+            Pixel(red=9, count=90),
+            Pixel(red=10, count=100),
+        ]
+    )
+    mut checksum = 0
+    mut kept: list[list[int64]] = []
+    for i in range(50):
+        for value in [channel(i), channel(i + 1), channel(i + 2)]:
+            checksum = (checksum * 131 + value) % 1000000007
+        row = [i, i * 2, i * 3, i * 4]
+        if i % 10 == 0:
+            kept.append(row)
+    print(checksum)
+    print(kept)
+    mut grown = [1, 2, 3]
+    grown.append(4)
+    copy = grown.copy()
+    grown.append(5)
+    print(f"{copy} {grown}")

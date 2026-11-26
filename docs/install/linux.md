@@ -29,7 +29,7 @@ downloaded archive.
 ## 3. Install Aura
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 The installer selects `x86_64-unknown-linux-gnu` and downloads the archive
@@ -40,7 +40,7 @@ To build programs for another Linux target with `aura build --target`,
 name the target and the installer adds its target pack:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
 ```
 
 ## 4. Add Aura To Bash

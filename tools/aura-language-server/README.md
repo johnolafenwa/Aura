@@ -16,6 +16,8 @@ The server provides:
 
 Compiler-backed analysis supplies all of these. It also covers:
 
+- target-specific suites reported as unnecessary hints. Editors can dim their
+  source and still navigate to identifiable declarations inside them
 - contextual lambda parameter scope, captured-name navigation, callable hover,
   and closure ownership diagnostics
 - progressively scoped comprehension targets, including hover, exact
@@ -71,9 +73,23 @@ Responses are bounded to 16 MiB. With a matching compiler, the server:
 - refreshes importers on `workspace/didChangeWatchedFiles`, along with any
   document whose last check failed
 
+The compiler reports discarded suites in an optional `inactive_lines` array.
+Each `{start, end}` pair uses zero-based line numbers and excludes `end`.
+A saved change to `Aura.toml` refreshes open documents.
+
 The compiler's `dependencies` list names every source file an analysis read,
 including the files read before a failed check. The server keys dependents by
 that canonical path, so a linked path to the same file still refreshes them.
+
+## Freestanding Workspaces
+
+Set `aura.freestanding` to `true` in VS Code to check, navigate and verify
+freestanding code. Other clients can start the server with
+`AURA_LSP_FREESTANDING=1`. Hosted checking is the default.
+
+The server sends `"freestanding": true` on compiler service requests in this
+profile. The compiler resolves imports and unsaved buffers with the same
+package permissions as a build.
 
 ## Positions
 

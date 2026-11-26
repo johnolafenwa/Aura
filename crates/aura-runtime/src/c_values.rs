@@ -27,7 +27,10 @@ use crate::runtime_value::{InstanceValue, RuntimeName, Value, VecValue};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CValueError {
     /// The value is not the shape the C type needs.
-    Shape { expected: String, found: String },
+    Shape {
+        expected: String,
+        found: String,
+    },
     /// An array field holds a list of the wrong length.
     Length {
         field: String,
@@ -42,14 +45,26 @@ pub enum CValueError {
     },
     /// C left a byte other than 0 or 1 in a `bool`.
     BadBool(u8),
+    /// A C struct or array byte count overflowed or exceeded layout limits.
+    LayoutOverflow {
+        name: String,
+    },
+    BitWidth {
+        field: String,
+        width: u8,
+    },
 }
 
 impl CValueError {
     /// The diagnostic code the failure reports under.
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Shape { .. } | Self::Length { .. } | Self::UnionLength { .. } => "AU4005",
+            Self::Shape { .. }
+            | Self::Length { .. }
+            | Self::UnionLength { .. }
+            | Self::LayoutOverflow { .. } => "AU4005",
             Self::BadBool(_) => "AU4001",
+            Self::BitWidth { .. } => "AU4033",
         }
     }
 }
@@ -77,9 +92,14 @@ impl fmt::Display for CValueError {
                 formatter,
                 "C union `{name}` is {expected} byte(s), but its `{UNION_BYTES_FIELD}` list has {found}"
             ),
+            Self::BitWidth { field, width } => write!(formatter, "value does not fit the {width}-bit C field `{field}`"),
             Self::BadBool(byte) => write!(
                 formatter,
                 "C left the byte {byte} in a `bool`, which holds only 0 or 1"
+            ),
+            Self::LayoutOverflow { name } => write!(
+                formatter,
+                "C layout `{name}` byte size overflows addressable memory"
             ),
         }
     }
@@ -106,8 +126,21 @@ fn scalar_name(scalar: FfiScalar) -> &'static str {
 pub fn kind_type(kind: &CFieldKind) -> Type {
     match kind {
         CFieldKind::Scalar(scalar) => Type::named(scalar_name(*scalar)),
+        CFieldKind::Struct(layout) if fixed_wide_kind(layout).is_some() => {
+            Type::named(fixed_wide_kind(layout).unwrap().runtime_type_name())
+        }
         CFieldKind::Struct(layout) => Type::named(layout.name.clone()),
         CFieldKind::Array(element, _) => Type::Named("list".to_string(), vec![kind_type(element)]),
+    }
+}
+
+/// Compiler-private descriptors for the two-word payload of a hosted wide
+/// integer. A C class name cannot start with '#'.
+fn fixed_wide_kind(layout: &CStruct) -> Option<IntegerKind> {
+    match layout.name.as_str() {
+        "#fixed.int128" => Some(IntegerKind::Int128),
+        "#fixed.uint128" => Some(IntegerKind::Uint128),
+        _ => None,
     }
 }
 
@@ -198,7 +231,7 @@ fn scalar_value(scalar: FfiScalar, word: u64) -> Result<Value, CValueError> {
 
 /// Writes `value`, of kind `kind`, at the start of `bytes`. `field` names
 /// the field for a message.
-fn pack_kind(
+pub fn pack_kind(
     value: &Value,
     kind: &CFieldKind,
     field: &str,
@@ -209,6 +242,17 @@ fn pack_kind(
             let word = scalar_word(*scalar, value)?;
             let size = scalar.size();
             bytes[..size].copy_from_slice(&word.to_le_bytes()[..size]);
+            Ok(())
+        }
+        CFieldKind::Struct(layout) if fixed_wide_kind(layout).is_some() => {
+            let Value::Int(integer) = value else {
+                return Err(shape(layout.name.clone(), value));
+            };
+            let bits = match integer.representation() {
+                IntegerRepresentation::Signed(value) => value as u128,
+                IntegerRepresentation::Unsigned(value) => value,
+            };
+            bytes[..16].copy_from_slice(&bits.to_le_bytes());
             Ok(())
         }
         CFieldKind::Struct(layout) => pack(value, layout, &mut bytes[..layout.size()]),
@@ -248,13 +292,23 @@ fn pack_kind(
 }
 
 /// The value of kind `kind` at the start of `bytes`.
-fn unpack_kind(kind: &CFieldKind, bytes: &[u8]) -> Result<Value, CValueError> {
+pub fn unpack_kind(kind: &CFieldKind, bytes: &[u8]) -> Result<Value, CValueError> {
     match kind {
         CFieldKind::Scalar(scalar) => {
             let size = scalar.size();
             let mut word = [0_u8; 8];
             word[..size].copy_from_slice(&bytes[..size]);
             scalar_value(*scalar, u64::from_le_bytes(word))
+        }
+        CFieldKind::Struct(layout) if fixed_wide_kind(layout).is_some() => {
+            let kind = fixed_wide_kind(layout).unwrap();
+            let bits = u128::from_le_bytes(bytes[..16].try_into().unwrap());
+            let integer = if kind.is_signed() {
+                IntegerValue::from_signed(bits as i128)
+            } else {
+                IntegerValue::from_literal(bits)
+            };
+            Ok(Value::Int(integer.with_runtime_kind(kind).unwrap()))
         }
         CFieldKind::Struct(layout) => unpack(layout, &bytes[..layout.size()]),
         CFieldKind::Array(element, count) => {
@@ -314,8 +368,25 @@ pub fn pack(value: &Value, layout: &CStruct, bytes: &mut [u8]) -> Result<(), CVa
             other => other,
         });
     }
-    for (field, offset) in layout.fields_with_offsets() {
+    for (field, position) in layout.positions() {
+        let offset = position.byte;
         let held = instance.fields.get(&field.name).ok_or_else(mismatch)?;
+        if let (Some((start, width)), CFieldKind::Scalar(scalar)) = (position.bits, &field.kind) {
+            let value = scalar_word(*scalar, &held)?;
+            if width < 64 && value >> width != 0 {
+                return Err(CValueError::BitWidth {
+                    field: field.name.clone(),
+                    width,
+                });
+            }
+            for (byte, (src, dst, mask)) in bytes[offset..]
+                .iter_mut()
+                .zip(crate::c_layout::bit_chunks(start, width))
+            {
+                *byte = (*byte & !mask) | (((value >> src) as u8) << dst & mask);
+            }
+            continue;
+        }
         pack_kind(&held, &field.kind, &field.name, &mut bytes[offset..])?;
     }
     Ok(())
@@ -331,11 +402,22 @@ pub fn unpack(layout: &CStruct, bytes: &[u8]) -> Result<Value, CValueError> {
             Value::Vec(VecValue::new(Type::named("uint8"), elements)),
         );
     } else {
-        for (field, offset) in layout.fields_with_offsets() {
-            fields.insert(
-                field.name.clone(),
-                unpack_kind(&field.kind, &bytes[offset..])?,
-            );
+        for (field, position) in layout.positions() {
+            let bytes = &bytes[position.byte..];
+            let value = if let (Some((start, width)), CFieldKind::Scalar(scalar)) =
+                (position.bits, &field.kind)
+            {
+                let value = bytes
+                    .iter()
+                    .zip(crate::c_layout::bit_chunks(start, width))
+                    .fold(0, |word, (byte, (dst, src, mask))| {
+                        word | (u64::from((byte & mask) >> src) << dst)
+                    });
+                scalar_value(*scalar, value)?
+            } else {
+                unpack_kind(&field.kind, bytes)?
+            };
+            fields.insert(field.name.clone(), value);
         }
     }
     Ok(Value::Instance(InstanceValue {
@@ -350,8 +432,18 @@ pub fn pack_elements(value: &Value, layout: &CStruct) -> Result<Vec<u8>, CValueE
     let Value::Vec(list) = value else {
         return Err(shape(format!("list[{}]", layout.name), value));
     };
-    let size = layout.size();
-    let mut bytes = vec![0_u8; size * list.elements.len()];
+    let size = layout
+        .checked_size()
+        .ok_or_else(|| CValueError::LayoutOverflow {
+            name: layout.name.clone(),
+        })?;
+    let total = size
+        .checked_mul(list.elements.len())
+        .filter(|total| *total <= isize::MAX as usize)
+        .ok_or_else(|| CValueError::LayoutOverflow {
+            name: layout.name.clone(),
+        })?;
+    let mut bytes = vec![0_u8; total];
     for (index, held) in list.elements.iter().enumerate() {
         pack(&held, layout, &mut bytes[index * size..(index + 1) * size])?;
     }

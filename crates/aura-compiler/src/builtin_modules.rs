@@ -11,6 +11,9 @@ use crate::sema::{
     FunctionInfo, FunctionParamContract, FunctionSignature, ImportedBinding, ModuleNamespace, Type,
 };
 
+#[path = "builtin_modules_build.rs"]
+mod build;
+
 fn builtin_span() -> Span {
     Span::new(1, 1)
 }
@@ -209,8 +212,12 @@ fn float_expr_from_bits(bits: u64) -> Expr {
 
 fn builtin_float_constant(module_name: &str, name: &str, bits: u64) -> crate::sema::ConstantInfo {
     crate::sema::ConstantInfo {
+        state: None,
         module_name: module_name.to_string(),
         decl: ConstantDecl {
+            required: false,
+            placement: None,
+            mutable: false,
             public: true,
             name: name.to_string(),
             annotation: Some(type_ref("float64", Vec::new())),
@@ -273,6 +280,7 @@ fn function_info(
             span: builtin_span(),
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc: None,
             contracts: Vec::new(),
             spec: false,
@@ -325,6 +333,7 @@ fn generic_function_info(
             span: builtin_span(),
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc: None,
             contracts: Vec::new(),
             spec: false,
@@ -406,6 +415,7 @@ fn class_info(module_name: &str, name: &str) -> ClassInfo {
             doc: None,
             c_layout: false,
             c_arrays: BTreeMap::new(),
+            layout_controls: Default::default(),
             c_union: None,
         },
         type_param_bounds: BTreeMap::new(),
@@ -2241,40 +2251,73 @@ fn sync_namespace() -> ModuleNamespace {
         params.extend(extra);
         function_info("sync", name, params, result)
     };
+    let with_transfer_bounds = |mut info: FunctionInfo, params: &[&str]| {
+        for param in params {
+            info.decl
+                .type_param_bounds
+                .insert((*param).to_string(), vec![type_ref("Transfer", Vec::new())]);
+            info.type_param_bounds.insert(
+                (*param).to_string(),
+                vec![aura_core::types::TraitBound {
+                    trait_name: "Transfer".to_string(),
+                    trait_args: Vec::new(),
+                }],
+            );
+        }
+        info
+    };
     let mut namespace = function_only_namespace(
         "sync",
         vec![
-            generic_function_info(
-                "sync",
-                "__aura_cell_new",
-                vec!["T"],
-                vec![own_param("value", payload())],
-                cell(),
+            with_transfer_bounds(
+                generic_function_info(
+                    "sync",
+                    "__aura_cell_new",
+                    vec!["T"],
+                    vec![own_param("value", payload())],
+                    cell(),
+                ),
+                &["T"],
             ),
-            generic_function_info(
-                "sync",
-                "__aura_cell_take",
-                vec!["T"],
-                vec![value_param("cell", cell())],
-                payload(),
+            with_transfer_bounds(
+                generic_function_info(
+                    "sync",
+                    "__aura_cell_take",
+                    vec!["T"],
+                    vec![value_param("cell", cell())],
+                    payload(),
+                ),
+                &["T"],
             ),
-            generic_function_info(
-                "sync",
-                "__aura_cell_put",
-                vec!["T"],
-                vec![value_param("cell", cell()), own_param("value", payload())],
-                unit(),
+            with_transfer_bounds(
+                generic_function_info(
+                    "sync",
+                    "__aura_cell_put",
+                    vec!["T"],
+                    vec![value_param("cell", cell()), own_param("value", payload())],
+                    unit(),
+                ),
+                &["T"],
             ),
-            generic_function_info(
-                "sync",
-                "__aura_map_get",
-                vec!["K", "V"],
-                vec![
-                    value_param("cell", cell()),
-                    value_param("key", type_ref("K", Vec::new())),
-                ],
-                type_ref("Lookup", vec![type_ref("V", Vec::new())]),
-            ),
+            {
+                let mut info = with_transfer_bounds(
+                    generic_function_info(
+                        "sync",
+                        "__aura_map_get",
+                        vec!["K", "V"],
+                        vec![
+                            value_param("cell", cell()),
+                            value_param("key", type_ref("K", Vec::new())),
+                        ],
+                        type_ref("Lookup", vec![type_ref("V", Vec::new())]),
+                    ),
+                    &["K", "V"],
+                );
+                info.signature
+                    .rng_clone_safe_type_params
+                    .insert("V".to_string());
+                info
+            },
             function_info(
                 "sync",
                 "__aura_cell_poisoned",
@@ -2560,6 +2603,35 @@ fn mem_namespace() -> ModuleNamespace {
     let none = || type_ref("None", Vec::new());
     let address = || value_param("address", unsigned(64));
     let mut functions = Vec::new();
+    functions.push(function_info(
+        "mem",
+        "__pointer_offset",
+        vec![
+            address(),
+            value_param("count", type_ref("int64", Vec::new())),
+            value_param("stride", unsigned(64)),
+        ],
+        unsigned(64),
+    ));
+    for kind in [
+        "bool", "int8", "int16", "int32", "int64", "float32", "float64",
+    ] {
+        let ty = || type_ref(kind, Vec::new());
+        for prefix in ["", "volatile_"] {
+            functions.push(function_info(
+                "mem",
+                &format!("{prefix}read_{kind}"),
+                vec![address()],
+                ty(),
+            ));
+            functions.push(function_info(
+                "mem",
+                &format!("{prefix}write_{kind}"),
+                vec![address(), value_param("value", ty())],
+                none(),
+            ));
+        }
+    }
     for bits in [8, 16, 32, 64] {
         for prefix in ["", "volatile_"] {
             functions.push(function_info(
@@ -2576,30 +2648,43 @@ fn mem_namespace() -> ModuleNamespace {
             ));
         }
     }
-    for bits in [32, 64] {
+    let atomic_function = |name: &str, mut params: Vec<Param>, result| {
+        let order_param = |name: &str, default: &str| {
+            value_param_with_default(
+                name,
+                type_ref("str", Vec::new()),
+                Expr {
+                    kind: ExprKind::String(default.to_owned()),
+                    span: builtin_span(),
+                },
+            )
+        };
+        params.push(order_param("order", "seq_cst"));
+        if name.starts_with("atomic_compare_exchange") {
+            params.push(order_param("failure_order", ""));
+        }
+        function_info("mem", name, params, result)
+    };
+    for bits in [8, 16, 32, 64] {
         let value = || value_param("value", unsigned(bits));
-        functions.push(function_info(
-            "mem",
+        functions.push(atomic_function(
             &format!("atomic_load_uint{bits}"),
             vec![address()],
             unsigned(bits),
         ));
-        functions.push(function_info(
-            "mem",
+        functions.push(atomic_function(
             &format!("atomic_store_uint{bits}"),
             vec![address(), value()],
             none(),
         ));
         for name in ["atomic_swap", "atomic_add"] {
-            functions.push(function_info(
-                "mem",
+            functions.push(atomic_function(
                 &format!("{name}_uint{bits}"),
                 vec![address(), value()],
                 unsigned(bits),
             ));
         }
-        functions.push(function_info(
-            "mem",
+        functions.push(atomic_function(
             &format!("atomic_compare_exchange_uint{bits}"),
             vec![
                 address(),
@@ -2609,7 +2694,39 @@ fn mem_namespace() -> ModuleNamespace {
             unsigned(bits),
         ));
     }
-    functions.push(function_info("mem", "fence", Vec::new(), none()));
+    functions.push(atomic_function("fence", Vec::new(), none()));
+    // The allocation functions (ADR-0128).
+    let word = |name: &str| value_param(name, unsigned(64));
+    functions.push(function_info(
+        "mem",
+        "alloc",
+        vec![word("size"), word("align")],
+        unsigned(64),
+    ));
+    functions.push(function_info(
+        "mem",
+        "free",
+        vec![address(), word("size"), word("align")],
+        none(),
+    ));
+    functions.push(function_info(
+        "mem",
+        "realloc",
+        vec![address(), word("old_size"), word("align"), word("new_size")],
+        unsigned(64),
+    ));
+    functions.push(function_info(
+        "mem",
+        "heap_add_region",
+        vec![word("start"), word("size")],
+        none(),
+    ));
+    functions.push(function_info(
+        "mem",
+        "heap_free_bytes",
+        Vec::new(),
+        unsigned(64),
+    ));
     function_only_namespace("mem", functions)
 }
 
@@ -3508,6 +3625,7 @@ fn numbers_namespace() -> ModuleNamespace {
 
 fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
     match name {
+        "build" => Some(build::namespace()),
         "io" => Some(io_namespace()),
         "fs" => Some(fs_namespace()),
         "net" => Some(net_namespace()),
@@ -3659,7 +3777,7 @@ pub(crate) fn builtin_module_function_metadata(name: &str) -> Option<&'static Ho
     static METADATA: OnceLock<BTreeMap<String, HostBuiltinMetadata>> = OnceLock::new();
     METADATA
         .get_or_init(|| {
-            builtin_module_registry()
+            builtin_registry_for_imports(false)
                 .into_values()
                 .flat_map(|namespace| namespace.functions.into_values())
                 .map(|function| {
@@ -3676,7 +3794,9 @@ pub(crate) fn builtin_module_function_metadata(name: &str) -> Option<&'static Ho
 pub(crate) fn is_builtin_root_module(name: &str) -> bool {
     matches!(
         name,
-        "io" | "fs"
+        "build"
+            | "io"
+            | "fs"
             | "net"
             | "process"
             | "random"
@@ -3714,6 +3834,12 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 }
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
+    builtin_registry_for_imports(true)
+}
+
+pub(crate) fn builtin_registry_for_imports(
+    imports_build: bool,
+) -> BTreeMap<String, ModuleNamespace> {
     [
         "io",
         "fs",
@@ -3745,6 +3871,7 @@ pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
         "sync",
     ]
     .into_iter()
+    .chain(imports_build.then_some("build"))
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))
     .collect()
 }
@@ -3776,6 +3903,7 @@ pub(crate) fn builtin_imported_binding(
     if let Some(trait_info) = namespace.traits.get(name) {
         return Ok(ImportedBinding::Trait(trait_info.clone()));
     }
+    crate::hardware::check_missing_member(&namespace.path, name, span)?;
     Err(Diagnostic::at(
         span,
         format!(

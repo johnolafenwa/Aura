@@ -326,6 +326,29 @@ error[AU2001]: module constant `full_width` is used before initialization
 Swap the two lines and it compiles, with `full_width` usable inside
 `settings.au` but invisible outside it.
 
+### Choosing the width at build time
+
+Suppose a small terminal needs half the usual bar width. We can build two
+versions of the same program from one settings file. The `const` marker
+asks the compiler to calculate the normal width before the program runs.
+The `if` gives each build one public name for the width it should use.
+
+```aura
+import build
+
+const normal_width = 4 * 5
+
+if "compact" in build.cfg:
+    public const bar_width = normal_width // 2
+else:
+    public const bar_width = normal_width
+```
+
+Run the tracker with `aura run --cfg compact src/main.au` to get a width
+of ten. Omit the flag and the width is twenty. The progress bar can keep
+reading `settings.bar_width` in both builds. The [manual](/manual/compile-time)
+lists the OS, architecture and other properties you can use in a condition.
+
 ### Constants really are constant
 
 A module constant can't change. That's true from inside its module and from
@@ -344,9 +367,9 @@ error[AU3003]: cannot assign through immutable place `settings.bar_width`
    |     ^
 ```
 
-and a module can't declare a mutable top-level binding in the first place:
+A hosted module also rejects a mutable top-level binding.
 
-```aura check-fail:AU3003
+```aura check-fail:AU3030
 mut pages_read: int64 = 0
 
 def main():
@@ -355,19 +378,19 @@ def main():
 
 ```console
 $ aura check src/main.au
-error[AU3003]: module bindings are immutable; `mut` module state is not supported
+error[AU3030]: hosted module bindings are immutable
  --> src/main.au:1:5
   |
 1 | mut pages_read: int64 = 0
   |     ^
-  = help: put mutable state in a local value owned by `main` or another explicit owner
+  = help: share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task
 ```
 
-The help line is the whole design in one sentence. Python modules are a
+Python modules are a
 common place to keep global state: a cache, a counter, a configuration
 object that gets patched in tests. Every function that touches that state is
 quietly coupled to every other one, and once tasks run in parallel (Chapter
-15), shared mutable globals become data races. Aura removes the option.
+15), unsynchronized reads and writes can race. A hosted Aura module can bind a synchronization handle such as `sync.AtomicInt` for a shared counter.
 Mutable state lives in a value with an owner, usually created in `main`, and
 it's passed to the functions that need it, where their signatures say whether
 they read it or change it.

@@ -943,6 +943,28 @@ fn slices_of_records_in_place_copy_their_words() {
 }
 
 #[test]
+fn the_first_record_appended_in_place_makes_room_for_four() {
+    let layout = test_record_layout();
+    let words = vec![0u64; layout.stride_words()];
+    let mut list = ListElements::new();
+    // SAFETY: zeroed words encode a `ListTestRecord` of zeros.
+    unsafe { list.push_plain(layout, words.as_ptr()) };
+    let (form, elements, len, room) = list.view();
+    assert_eq!(form, ListForm::Typed(layout.access()));
+    assert_eq!((len, room), (1, 4));
+    // The next three fit the storage the first one took.
+    for _ in 0..3 {
+        unsafe { list.push_plain(layout, words.as_ptr()) };
+    }
+    let (_, grown, len, room) = list.view();
+    assert_eq!((grown, len, room), (elements, 4, 4));
+    // A copy shares the storage, and its first append takes its own.
+    let mut copy = list.clone();
+    unsafe { copy.push_plain(layout, words.as_ptr()) };
+    assert_eq!((copy.len(), list.len()), (5, 4));
+}
+
+#[test]
 fn records_in_place_iterate_from_either_end() {
     let layout = test_record_layout();
     let values: Vec<Value> = (1..=5).map(record).collect();
@@ -1152,4 +1174,16 @@ fn scalar_forms_lend_their_elements_as_a_c_array() {
         "boxed values are no C array"
     );
     assert_eq!(text.len(), 1, "a list that cannot move keeps its elements");
+}
+
+#[test]
+fn a_bool_byte_keeps_its_raw_byte_until_sanitized() {
+    assert_eq!(BoolByte::from_bool(true).raw(), 1);
+    assert_eq!(BoolByte::from_bool(false).raw(), 0);
+    let mut foreign = BoolByte(7);
+    assert_eq!(foreign.raw(), 7, "a C write can leave any byte");
+    assert!(foreign.as_bool());
+    assert_eq!(foreign.sanitize(), Some(7));
+    assert_eq!(foreign.raw(), 1);
+    assert_eq!(foreign.sanitize(), None);
 }

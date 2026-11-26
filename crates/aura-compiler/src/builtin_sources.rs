@@ -29,6 +29,7 @@ const IMAGE_SOURCE: &str = include_str!("../std/image.au");
 
 fn module_source(name: &str) -> Option<&'static str> {
     match name {
+        "mem" => crate::freestanding_check_target().map(crate::hardware::source),
         "json" => Some(JSON_SOURCE),
         "iter" => Some(ITER_SOURCE),
         "collections" => Some(COLLECTIONS_SOURCE),
@@ -51,7 +52,12 @@ pub(crate) fn has_source_part(path: &[String]) -> bool {
     matches!(path, [name] if module_source(name).is_some())
 }
 
-/// The builtin modules with an Aura-source part that `module` imports.
+/// Source modules and the target-specific namespace are materialized on import.
+pub(crate) fn needs_registry_entry(path: &[String]) -> bool {
+    has_source_part(path) || matches!(path, [name] if name == "build")
+}
+
+/// The builtin imports whose target-specific or source definitions the registry needs.
 pub(crate) fn imported_source_parts(module: &crate::ast::Module) -> BTreeSet<String> {
     module
         .imports
@@ -60,7 +66,7 @@ pub(crate) fn imported_source_parts(module: &crate::ast::Module) -> BTreeSet<Str
             ImportKind::Module { path, .. } => path,
             ImportKind::From { module_path, .. } => module_path,
         })
-        .filter(|path| has_source_part(path))
+        .filter(|path| needs_registry_entry(path))
         .map(|path| path[0].clone())
         .collect()
 }
@@ -73,10 +79,22 @@ thread_local! {
     static CHECKED: RefCell<BTreeMap<String, ModuleNamespace>> = const { RefCell::new(BTreeMap::new()) };
 }
 
+/// Swap the checked source namespaces when entering or leaving a configuration scope.
+pub(crate) fn swap_checked_sources(cache: &mut BTreeMap<String, ModuleNamespace>) {
+    CHECKED.with_borrow_mut(|checked| std::mem::swap(checked, cache));
+}
+
 /// The exports of the Aura-source part of builtin module `name`.
 fn source_part(name: &str) -> Option<ModuleNamespace> {
     let source = module_source(name)?;
-    if let Some(namespace) = CHECKED.with(|checked| checked.borrow().get(name).cloned()) {
+    // The mem source varies by architecture. The target triple cannot collide
+    // with a builtin module name and is shared by both x86-64 profiles.
+    let key = if name == "mem" {
+        crate::freestanding_check_target()?.name()
+    } else {
+        name
+    };
+    if let Some(namespace) = CHECKED.with(|checked| checked.borrow().get(key).cloned()) {
         return Some(namespace);
     }
     let module = crate::parse_source(source)
@@ -87,8 +105,10 @@ fn source_part(name: &str) -> Option<ModuleNamespace> {
     // The registry must include the dependency's impls and associated types
     // as well as its imported names. A module's self-import names its host
     // namespace and must not recursively compile the source being checked.
-    let mut module_registry = crate::builtin_modules::builtin_module_registry();
-    for dependency in imported_source_parts(&module) {
+    let dependencies = imported_source_parts(&module);
+    let mut module_registry =
+        crate::builtin_modules::builtin_registry_for_imports(dependencies.contains("build"));
+    for dependency in dependencies {
         if dependency != name {
             if let (Some(namespace), Some(part)) = (
                 module_registry.get_mut(&dependency),
@@ -121,7 +141,7 @@ fn source_part(name: &str) -> Option<ModuleNamespace> {
     CHECKED.with(|checked| {
         checked
             .borrow_mut()
-            .insert(name.to_string(), namespace.clone())
+            .insert(key.to_string(), namespace.clone())
     });
     Some(namespace)
 }
@@ -132,17 +152,44 @@ pub(crate) fn importable_builtin_namespace(path: &[String]) -> Option<ModuleName
     let mut namespace = builtin_module_namespace(path)?;
     if let [name] = path {
         if let Some(part) = source_part(name) {
-            merge(&mut namespace, part);
+            merge_with(&mut namespace, part, true);
+        }
+    }
+    Some(namespace)
+}
+
+/// The full builtin namespace for compiler-generated desugarings (such as
+/// generator lowering), retaining internal `__aura_*` helpers that user
+/// imports hide.
+pub(crate) fn internal_builtin_namespace(path: &[String]) -> Option<ModuleNamespace> {
+    let mut namespace = builtin_module_namespace(path)?;
+    if let [name] = path {
+        if let Some(part) = source_part(name) {
+            merge_with(&mut namespace, part, false);
         }
     }
     Some(namespace)
 }
 
 fn merge(host: &mut ModuleNamespace, part: ModuleNamespace) {
+    merge_with(host, part, true);
+}
+
+fn merge_with(host: &mut ModuleNamespace, part: ModuleNamespace, hide_internal: bool) {
     host.union_injections.extend(part.union_injections);
     host.narrowed_reads.extend(part.narrowed_reads);
     host.type_param_calls.extend(part.type_param_calls);
+    if hide_internal {
+        // Source modules reach their own raw host namespace through a self
+        // import. Public exports hide internal `__aura_*` host helpers.
+        host.functions
+            .retain(|name, _| !name.starts_with("__aura_"));
+    }
     host.functions.extend(part.functions);
+    if hide_internal && host.name == "iter" {
+        host.functions
+            .retain(|name, _| !name.starts_with("__aura_"));
+    }
     host.all_functions.extend(part.all_functions);
     host.classes.extend(part.classes);
     host.all_classes.extend(part.all_classes);
@@ -152,17 +199,21 @@ fn merge(host: &mut ModuleNamespace, part: ModuleNamespace) {
     host.all_traits.extend(part.all_traits);
     host.trait_impls.extend(part.trait_impls);
     host.imported_modules.extend(part.imported_modules);
-    if host.name == "collections" {
-        // The source module sees the raw host namespace through its self
-        // import. Exports keep its representation and type-erased calls private.
-        host.functions
-            .retain(|name, _| !name.starts_with("__aura_"));
-        host.classes.remove("__Store");
-        // The canonical type registry follows transitive imports as well
-        // as direct exports. Keep the raw self import's internal shape for
-        // lowering without publishing it as a nameable type annotation.
-        if let Some(raw) = host.imported_modules.get_mut("collections") {
-            raw.classes.remove("__Store");
+    if hide_internal {
+        // Keep internal host handle representations in `all_classes` for
+        // lowering without publishing them as nameable user types.
+        let hidden_classes: &[&str] = match host.name.as_str() {
+            "collections" => &["__Store"],
+            "tensor" => &["Node"],
+            "sync" => &["Cell", "Atom"],
+            "iter" => &["GeneratorHandle"],
+            _ => &[],
+        };
+        for class_name in hidden_classes {
+            host.classes.remove(*class_name);
+            if let Some(raw) = host.imported_modules.get_mut(&host.name) {
+                raw.classes.remove(*class_name);
+            }
         }
     }
     host.closures.extend(part.closures);
@@ -175,8 +226,9 @@ fn merge(host: &mut ModuleNamespace, part: ModuleNamespace) {
 /// and one that imports `json` carries nothing of `tensor`: every function
 /// of a merged part is named in the program's output.
 pub(crate) fn builtin_registry(parts: &BTreeSet<String>) -> BTreeMap<String, ModuleNamespace> {
-    let mut registry = crate::builtin_modules::builtin_module_registry();
-    if !parts.is_empty() {
+    let mut registry =
+        crate::builtin_modules::builtin_registry_for_imports(parts.contains("build"));
+    if parts.iter().any(|part| part != "build") {
         for (name, namespace) in registry.iter_mut() {
             if !parts.contains(name) && !IMPLICIT_PARTS.contains(&name.as_str()) {
                 continue;

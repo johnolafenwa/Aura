@@ -238,6 +238,9 @@ pub(super) fn shaped_locals(
                 | Instruction::ReborrowElement { loan, .. } => {
                     excluded.insert(loan);
                 }
+                Instruction::InlineAsm { outputs, .. } => {
+                    excluded.extend(outputs.iter().map(String::as_str));
+                }
                 Instruction::ReturnLoan { loan, origin } => {
                     excluded.insert(root(loan));
                     excluded.insert(root(origin));
@@ -251,6 +254,8 @@ pub(super) fn shaped_locals(
                 | Instruction::EndLoan { .. }
                 | Instruction::Eval { .. }
                 | Instruction::PushCleanup { .. }
+                | Instruction::EndOwner { .. }
+                | Instruction::ArmDrop { .. }
                 | Instruction::PopCleanup { .. } => {}
             }
         }

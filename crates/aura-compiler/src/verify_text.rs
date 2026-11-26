@@ -234,7 +234,8 @@ impl Exec<'_> {
         let digits = self.unmodeled("the digits of an integer", |exec| {
             exec.fresh_const("String", "digits")
         });
-        let longest = ty.lo.to_string().len().max(ty.hi.to_string().len());
+        let (lo, hi) = ty.bounds();
+        let longest = lo.to_string().len().max(hi.to_string().len());
         self.describe(
             &digits,
             format!(
@@ -334,15 +335,6 @@ impl Exec<'_> {
         read.iter()
             .map(|index| format!("(assert {})\n", self.facts[*index]))
             .collect()
-    }
-
-    /// Whether `list` is the parts a `str` method returned, unchanged.
-    pub(super) fn is_part_list(&self, list: &Val) -> bool {
-        matches!(
-            list,
-            Val::List { data: Some(Store::Leaf(array, _)), .. }
-                if self.text.parts.contains_key(array)
-        )
     }
 
     /// A list of the literal `parts`.

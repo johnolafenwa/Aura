@@ -67,6 +67,8 @@ use crate::runtime_reactor::{
 };
 use aura_core::types::Type;
 
+#[path = "class_drop.rs"]
+pub mod class_drop;
 #[path = "generator.rs"]
 mod generator;
 #[path = "host_builtins.rs"]
@@ -92,6 +94,7 @@ pub use generator::{
     GeneratorHooks, GeneratorValue, IsolatedFailure, DIRECT_GENERATOR_STACK_BYTES,
     DIRECT_RECOVER_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
 };
+pub(crate) use generator::{PendingGeneratorDropExit, WeakGeneratorValue};
 pub use http_client::HttpResponseValue;
 #[cfg(any(test, feature = "test-support"))]
 pub use http_client::HttpSnapshot;
@@ -718,11 +721,17 @@ impl FfiHandleValue {
         })
     }
 
+    /// Ends the program's ownership of the foreign object and returns its
+    /// previous address, or null if ownership had already ended.
+    pub fn take_ptr(&self) -> *mut c_void {
+        self.core.address.swap(0, Ordering::AcqRel) as *mut c_void
+    }
+
     /// Ends the program's ownership of the foreign object: a foreign
     /// function took it, or stored another one over it. The `drop`
     /// function does not run for it.
     pub fn give_up(&self) {
-        self.core.address.store(0, Ordering::Relaxed);
+        let _ = self.take_ptr();
     }
 
     pub fn type_name(&self) -> &str {
@@ -730,7 +739,7 @@ impl FfiHandleValue {
     }
 
     pub fn as_ptr(&self) -> *mut c_void {
-        self.core.address.load(Ordering::Relaxed) as *mut c_void
+        self.core.address.load(Ordering::Acquire) as *mut c_void
     }
 }
 
@@ -740,7 +749,7 @@ impl FfiHandleValue {
 /// additionally carries the uniform boxed-argument thunk address used for
 /// indirect calls and task starts. The source metadata keeps task ancestry
 /// diagnostics as precise for calls through stored values as for direct names.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FunctionValue {
     pub name: String,
     pub signature: Type,
@@ -755,6 +764,35 @@ pub struct FunctionValue {
     /// The inline callable that compiled code boxed into this value.
     /// Compiled code that reads the value back calls through it directly.
     pub direct_callable: Option<Arc<DirectCallable>>,
+}
+
+impl Clone for FunctionValue {
+    fn clone(&self) -> Self {
+        let direct_callable = match self.direct_callable.as_ref() {
+            Some(callable) if callable.is_mutable() => {
+                // Mutable inline words are updated without locking, so clones
+                // settle the state into the synchronized closure environment
+                // and drop the shared DirectCallable handle.
+                if let Some(env) = &self.closure_environment {
+                    env.settle();
+                } else {
+                    callable.release();
+                }
+                None
+            }
+            other => other.cloned(),
+        };
+        Self {
+            name: self.name.clone(),
+            signature: self.signature.clone(),
+            source_path: self.source_path.clone(),
+            entry_span: self.entry_span,
+            direct_thunk: self.direct_thunk,
+            direct_default_binder: self.direct_default_binder,
+            closure_environment: self.closure_environment.clone(),
+            direct_callable,
+        }
+    }
 }
 
 /// An inline callable of compiled code kept inside a boxed function value:
@@ -837,7 +875,7 @@ impl DirectCallable {
     /// the key `abi_key`, or `None` when the words were released or belong
     /// to another contract.
     pub fn words_for(&self, abi_key: i64) -> Option<*mut i64> {
-        (self.abi_key == abi_key && !self.released.load(Ordering::Relaxed))
+        (self.abi_key == abi_key && !self.released.load(Ordering::Acquire))
             .then(|| self.words.get().cast::<i64>())
     }
 
@@ -874,7 +912,7 @@ impl DirectCallable {
 
     /// The address of the words while they are live.
     pub fn live_words(&self) -> Option<*mut i64> {
-        (!self.released.load(Ordering::Relaxed)).then(|| self.words.get().cast::<i64>())
+        (!self.released.load(Ordering::Acquire)).then(|| self.words.get().cast::<i64>())
     }
 
     pub fn capture_count(&self) -> usize {
@@ -944,6 +982,28 @@ impl ClosureEnvironment {
             .map_or(0, Vec::len)
     }
 
+    /// Whether any captured value satisfies `predicate`.
+    pub fn any_capture(&self, predicate: impl Fn(&Value) -> bool) -> bool {
+        self.captures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|captures| captures.iter().any(|capture| predicate(&capture.value)))
+    }
+
+    /// Consumes this environment when uniquely owned and returns its captured values.
+    pub fn into_captured_values(self: Arc<Self>) -> Vec<Value> {
+        let Ok(env) = Arc::try_unwrap(self) else {
+            return Vec::new();
+        };
+        env.captures
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .map_or_else(Vec::new, |captures| {
+                captures.into_iter().map(|capture| capture.value).collect()
+            })
+    }
+
     pub fn new(captures: Vec<ClosureCaptureValue>, consuming: bool) -> Self {
         representation_stats::note_closure_environment();
         Self {
@@ -970,12 +1030,11 @@ impl ClosureEnvironment {
     /// Boxes the captures of a deferred environment. A Mutable closure's
     /// state moves to the boxed captures, so its inline words are released.
     fn settle(&self) {
-        let pending = self
+        let mut pending = self
             .pending
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        let Some(callable) = pending else {
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(callable) = pending.take() else {
             return;
         };
         let captures = (callable.boxed_captures)(&callable);
@@ -986,6 +1045,7 @@ impl ClosureEnvironment {
         if callable.is_mutable() {
             callable.release();
         }
+        drop(pending);
     }
 
     /// Takes the captures out, leaving the environment consumed.
@@ -1112,6 +1172,7 @@ pub use crate::native_runtime::TypedFields;
 /// inline, and [`Self::iter`] visits the fields in name order.
 #[derive(Clone)]
 pub enum InstanceFields {
+    Hooked(class_drop::HookFields),
     Map(BTreeMap<String, Value>),
     Typed(TypedFields),
     /// Recovered failure details are formatted when Aura first reads a field.
@@ -1196,6 +1257,7 @@ impl DoubleEndedIterator for InstanceFieldIter<'_> {
 impl InstanceFields {
     pub fn typed(&self) -> Option<&TypedFields> {
         match self {
+            Self::Hooked(fields) => fields.fields.typed(),
             Self::Typed(typed) => Some(typed),
             Self::Map(_) | Self::Recovered(_) => None,
         }
@@ -1206,6 +1268,7 @@ impl InstanceFields {
     /// instances this way.
     pub fn map(&self) -> &BTreeMap<String, Value> {
         match self {
+            Self::Hooked(fields) => fields.fields.map(),
             Self::Map(fields) => fields,
             Self::Recovered(details) => details.map(),
             Self::Typed(typed) => panic!(
@@ -1227,6 +1290,7 @@ impl InstanceFields {
             *self = Self::Map(typed.into_map());
         }
         match self {
+            Self::Hooked(fields) => fields.fields.map_mut(),
             Self::Map(fields) => fields,
             Self::Typed(_) | Self::Recovered(_) => unreachable!("the layout was turned into a map"),
         }
@@ -1234,6 +1298,7 @@ impl InstanceFields {
 
     pub fn len(&self) -> usize {
         match self {
+            Self::Hooked(fields) => fields.fields.len(),
             Self::Map(fields) => fields.len(),
             Self::Recovered(details) => details.map().len(),
             Self::Typed(typed) => typed.len(),
@@ -1246,6 +1311,7 @@ impl InstanceFields {
 
     pub fn contains_key(&self, name: &str) -> bool {
         match self {
+            Self::Hooked(fields) => fields.fields.contains_key(name),
             Self::Map(fields) => fields.contains_key(name),
             Self::Recovered(details) => details.map().contains_key(name),
             Self::Typed(typed) => typed.contains_key(name),
@@ -1254,6 +1320,7 @@ impl InstanceFields {
 
     pub fn get(&self, name: &str) -> Option<Cow<'_, Value>> {
         match self {
+            Self::Hooked(fields) => fields.fields.get(name),
             Self::Map(fields) => fields.get(name).map(Cow::Borrowed),
             Self::Recovered(details) => details.map().get(name).map(Cow::Borrowed),
             Self::Typed(typed) => typed.get(name),
@@ -1262,6 +1329,7 @@ impl InstanceFields {
 
     pub fn iter(&self) -> InstanceFieldIter<'_> {
         match self {
+            Self::Hooked(fields) => fields.fields.iter(),
             Self::Map(fields) => InstanceFieldIter::Map(fields.iter()),
             Self::Recovered(details) => InstanceFieldIter::Map(details.map().iter()),
             Self::Typed(typed) => InstanceFieldIter::Typed(Box::new(typed.iter())),
@@ -1271,6 +1339,7 @@ impl InstanceFields {
     /// The names of the fields that are not moved out, in name order.
     pub fn keys(&self) -> Box<dyn DoubleEndedIterator<Item = &str> + '_> {
         match self {
+            Self::Hooked(fields) => fields.fields.keys(),
             Self::Map(fields) => Box::new(fields.keys().map(String::as_str)),
             Self::Recovered(details) => Box::new(details.map().keys().map(String::as_str)),
             Self::Typed(typed) => Box::new(typed.keys()),
@@ -1285,6 +1354,7 @@ impl InstanceFields {
     /// class has no field for, and a value that does not fit the field.
     pub fn insert(&mut self, name: &str, value: Value) -> std::result::Result<(), String> {
         match self {
+            Self::Hooked(fields) => fields.fields.insert(name, value),
             Self::Map(fields) => {
                 match fields.get_mut(name) {
                     Some(slot) => *slot = value,
@@ -1304,6 +1374,7 @@ impl InstanceFields {
 
     pub fn remove(&mut self, name: &str) -> Option<Value> {
         match self {
+            Self::Hooked(fields) => fields.fields.remove(name),
             Self::Map(fields) => fields.remove(name),
             Self::Typed(typed) => typed.remove(name),
             Self::Recovered(_) => self.map_mut().remove(name),
@@ -2557,6 +2628,7 @@ impl ArrayValue {
     pub fn len(&self) -> usize {
         match &self.strided {
             None => self.base.len(),
+            Some(_) if self.shape.contains(&0) => 0,
             // A live shape's product was checked when the view was made.
             Some(_) => self.shape.iter().product(),
         }
@@ -2785,6 +2857,7 @@ impl ArrayValue {
         }
         let shape =
             array_layout::broadcast_shape(&self.shape, &other.shape).ok_or_else(mismatch)?;
+        checked_array_element_count(&shape)?;
         let left = array_layout::broadcast_layout(&self.shape, &self.layout(), &shape);
         let right = array_layout::broadcast_layout(&other.shape, &other.layout(), &shape);
         let storage = array_simd::widest(
@@ -3075,34 +3148,41 @@ impl ArrayValue {
     }
 
     pub fn render(&self) -> String {
-        // Rendering has no way to report a failed allocation, and a view
-        // too large to pack is too large to print.
-        let elements = self.elements().unwrap_or_else(|_| {
-            Cow::Owned(array_storage_map!(&self.base, |values| values.window(0, 0)))
-        });
-        let values = match &*elements {
-            ArrayStorage::Int32(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
-            }
-            ArrayStorage::Int64(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
-            }
-            ArrayStorage::Float32(values) => {
-                values.iter().map(|value| render_float32(*value)).collect()
-            }
-            ArrayStorage::Float64(values) => {
-                values.iter().map(|value| render_float(*value)).collect()
-            }
-            ArrayStorage::Bool(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
+        use std::fmt::Write;
+
+        let mut text = format!(
+            "Array[{}](shape={:?}, values=[",
+            self.dtype().runtime_type_name(),
+            self.shape
+        );
+        let mut separator = "";
+        let mut append = |position: usize| {
+            text.push_str(separator);
+            separator = ", ";
+            match &self.base {
+                ArrayStorage::Int32(values) => write!(text, "{}", values[position]).unwrap(),
+                ArrayStorage::Int64(values) => write!(text, "{}", values[position]).unwrap(),
+                ArrayStorage::Float32(values) => text.push_str(&render_float32(values[position])),
+                ArrayStorage::Float64(values) => text.push_str(&render_float(values[position])),
+                ArrayStorage::Bool(values) => {
+                    text.push_str(if values[position] { "true" } else { "false" })
+                }
             }
         };
-        format!(
-            "Array[{}](shape={:?}, values=[{}])",
-            self.dtype().runtime_type_name(),
-            self.shape,
-            values.join(", ")
-        )
+        if let Some(layout) = &self.strided {
+            array_layout::walk_runs(&self.shape, [layout], |[start], [step], count| {
+                for index in 0..count as isize {
+                    append((start as isize + index * step) as usize);
+                }
+                true
+            });
+        } else {
+            for position in 0..self.base.len() {
+                append(position);
+            }
+        }
+        text.push_str("])");
+        text
     }
 
     /// Where the element at `coordinates` lies in the storage window.
@@ -3222,27 +3302,30 @@ fn checked_array_shape(shape: &[usize]) -> Result<usize> {
 }
 
 pub(crate) fn checked_array_element_count(shape: &[usize]) -> Result<usize> {
-    for dimension in shape {
-        if *dimension > i64::MAX as usize {
+    let mut has_zero = false;
+    let mut nonzero_product = 1_usize;
+    for &dimension in shape {
+        if dimension > i64::MAX as usize {
             return Err(Diagnostic::coded(
                 "AU4005",
                 format!("array dimension {dimension} exceeds the Aura int64 shape limit"),
             ));
         }
+        if dimension == 0 {
+            has_zero = true;
+        } else {
+            nonzero_product = nonzero_product
+                .checked_mul(dimension)
+                .filter(|&product| product <= isize::MAX as usize)
+                .ok_or_else(|| {
+                    Diagnostic::coded(
+                        "AU4005",
+                        format!("array shape product overflows host allocation bounds: {shape:?}"),
+                    )
+                })?;
+        }
     }
-    if shape.contains(&0) {
-        return Ok(0);
-    }
-    let mut count = 1_usize;
-    for dimension in shape {
-        count = count.checked_mul(*dimension).ok_or_else(|| {
-            Diagnostic::coded(
-                "AU4005",
-                format!("array shape product overflows host allocation bounds: {shape:?}"),
-            )
-        })?;
-    }
-    Ok(count)
+    Ok(if has_zero { 0 } else { nonzero_product })
 }
 
 fn array_allocation_error(label: &str, len: usize) -> Diagnostic {
@@ -3279,6 +3362,7 @@ pub fn with_array_allocation_budget<T>(
 }
 
 pub fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
+    crate::builtin_limit::check((len as u64).saturating_mul(std::mem::size_of::<T>() as u64))?;
     #[cfg(any(test, feature = "test-support"))]
     {
         let injected_failure = ARRAY_ALLOCATION_BUDGET.with(|budget| match budget.get() {
@@ -3300,7 +3384,11 @@ pub fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
     Ok(values)
 }
 
-fn try_filled_array_storage<T: Clone>(len: usize, value: T, label: &str) -> Result<Box<[T]>> {
+pub(crate) fn try_filled_array_storage<T: Clone>(
+    len: usize,
+    value: T,
+    label: &str,
+) -> Result<Box<[T]>> {
     let mut values = try_array_buffer(len, label)?;
     values.resize(len, value);
     Ok(values.into_boxed_slice())
@@ -4652,7 +4740,7 @@ pub(crate) fn is_clone_leaf(value: &Value) -> bool {
             | Value::String(_)
             | Value::Duration(_)
             | Value::Instance(InstanceValue {
-                fields: InstanceFields::Recovered(_),
+                fields: InstanceFields::Recovered(_) | InstanceFields::Hooked(_),
                 ..
             })
     )
@@ -4989,7 +5077,10 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 Value::Instance(instance)
-                    if matches!(instance.fields, InstanceFields::Recovered(_)) =>
+                    if matches!(
+                        instance.fields,
+                        InstanceFields::Recovered(_) | InstanceFields::Hooked(_)
+                    ) =>
                 {
                     Some(Value::Instance(instance.clone()))
                 }
@@ -7339,13 +7430,15 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
                     ));
                 }
                 let truncated = value.trunc();
+                // The first excluded integer is a power of two, exactly representable
+                // as a float even when the inclusive maximum rounds up to it.
                 let coerced = match bounds {
                     IntegerBounds::Signed { min, max } => {
-                        if truncated < min as f64 || truncated > max as f64 {
+                        if truncated < min as f64 || truncated >= max as f64 + 1.0 {
                             return Err(render_target_error(
                                 span,
                                 format!(
-                                    "integer value `{}` does not fit in `{}`",
+                                    "integer value `{:.0}` does not fit in `{}`",
                                     truncated, target
                                 ),
                             ));
@@ -7353,11 +7446,11 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
                         IntegerValue::from_signed(truncated as i128)
                     }
                     IntegerBounds::Unsigned { max } => {
-                        if truncated < 0.0 || truncated > max as f64 {
+                        if truncated < 0.0 || truncated >= max as f64 + 1.0 {
                             return Err(render_target_error(
                                 span,
                                 format!(
-                                    "integer value `{}` does not fit in `{}`",
+                                    "integer value `{:.0}` does not fit in `{}`",
                                     truncated, target
                                 ),
                             ));
@@ -9377,6 +9470,16 @@ impl PendingTaskExit {
         CURRENT_LIGHTWEIGHT_TASK_EXIT
             .with(|slot| slot.borrow_mut().take())
             .map(Self)
+    }
+
+    /// Records a trap diagnostic as a pending task exit.
+    pub fn from_trap(diagnostic: Diagnostic) -> Self {
+        Self(TaskExecutionResult::Ready(Err(diagnostic)))
+    }
+
+    /// Whether the pending task exit represents task cancellation.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self.0, TaskExecutionResult::Cancelled)
     }
 
     /// The trap, when the task was exiting because it failed. Any other
@@ -11838,6 +11941,7 @@ fn append_string_with_limit(output: &mut String, text: &str, limit: usize) -> Re
         .len()
         .checked_add(text.len())
         .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    crate::builtin_limit::check(required as u64)?;
     if required > limit {
         return Err(Diagnostic::coded(
             "AU4005",
@@ -11867,6 +11971,7 @@ pub fn append_text_checked_with(output: &mut Text, text: &str, ascii: bool) -> R
         .len()
         .checked_add(text.len())
         .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    crate::builtin_limit::check(required as u64)?;
     if required > MAX_STRING_BYTES {
         return Err(Diagnostic::coded(
             "AU4005",
@@ -12537,8 +12642,8 @@ pub fn float_power(left: f64, right: f64, width: FloatPowerWidth) -> Result<f64>
     }
 
     let result = match width {
-        FloatPowerWidth::Float32 => (left as f32).powf(right as f32) as f64,
-        FloatPowerWidth::Float64 => left.powf(right),
+        FloatPowerWidth::Float32 => libm::powf(left as f32, right as f32) as f64,
+        FloatPowerWidth::Float64 => libm::pow(left, right),
     };
     if left.is_finite() && right.is_finite() && result.is_infinite() {
         return Err(Diagnostic::coded("AU4002", "floating power overflow"));
@@ -20111,6 +20216,14 @@ fn json_parse_failure_value(error: JsonCodecError) -> Result<Value> {
     json_runtime_enum_value("Result", "Err", json_runtime_single_payload(error)?)
 }
 
+/// Parses on the caller's stack, preserving its resource budget. The compiler
+/// provides a dedicated bounded-evaluation stack for this entry point.
+pub fn json_parse_on_caller(source: &str) -> Result<Value> {
+    json_parse_outcome_to_runtime(
+        json_parse_runtime(source, false).map_err(JsonCodecServiceError::Codec),
+    )
+}
+
 pub fn json_parse_owned_to_runtime(
     source: String,
     reservation: JsonCodecReservation,
@@ -21130,6 +21243,23 @@ pub fn evaluate_host_builtin_with_program_args(
     args: Vec<Value>,
     program_args: &[String],
 ) -> Result<Value> {
+    evaluate_host_builtin_with_args(name, args, Some(program_args))
+}
+
+/// Evaluates a host builtin that may access raw memory (`mem::*`).
+///
+/// # Safety
+///
+/// Any raw-memory address passed to a `mem::*` builtin must satisfy the
+/// operation's validity contract.
+pub unsafe fn evaluate_unsafe_host_builtin_with_program_args(
+    name: &str,
+    args: Vec<Value>,
+    program_args: &[String],
+) -> Result<Value> {
+    if let Some(function) = host_builtins::unsafe_mem_builtin_function(name) {
+        return unsafe { function(args, Some(program_args)) };
+    }
     evaluate_host_builtin_with_args(name, args, Some(program_args))
 }
 

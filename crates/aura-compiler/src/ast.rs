@@ -144,6 +144,13 @@ pub fn docstring_summary(text: &str, limit: usize) -> Option<String> {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Module {
+    /// Zero-based, half-open line ranges of discarded conditional suites.
+    #[serde(skip)]
+    pub inactive_lines: Vec<std::ops::Range<usize>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub module_asm: Vec<String>,
+    #[serde(skip)]
+    pub asm_span: Option<Span>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<DocString>,
     pub imports: Vec<ImportDecl>,
@@ -157,7 +164,8 @@ impl Module {
     /// package with `allow_ffi = true` may do: it holds an FFI declaration
     /// or imports the `mem` module.
     pub fn uses_ffi(&self) -> bool {
-        self.items.iter().any(Item::declares_ffi)
+        self.asm_span.is_some()
+            || self.items.iter().any(Item::declares_ffi)
             || self.imports.iter().any(|import| match &import.kind {
                 ImportKind::Module { path, .. } => path == &["mem"],
                 ImportKind::From { module_path, .. } => module_path == &["mem"],
@@ -167,6 +175,12 @@ impl Module {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ConstantDecl {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Box<crate::machine_data::DataPlacement>>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub mutable: bool,
     pub public: bool,
     pub name: String,
     pub annotation: Option<TypeRef>,
@@ -269,6 +283,8 @@ pub struct ClassDecl {
     /// those fields in order.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub c_layout: bool,
+    #[serde(skip_serializing_if = "crate::c_layout::LayoutControls::is_default")]
+    pub layout_controls: crate::c_layout::LayoutControls,
     /// The fields of an `extern "C"` class that are C arrays, each with
     /// its lengths, the outer array first. The type of such a field is a
     /// `list` nested once per length.
@@ -348,10 +364,12 @@ pub struct FunctionDecl {
     /// read-only computed property.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub property: Option<Span>,
-    /// The decorator expressions written above a module-level function, top
+    /// The decorator expressions written above a function or method, top
     /// to bottom.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub decorators: Vec<Decorator>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine: Option<Box<crate::machine_attributes::MachineAttributes>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<DocString>,
     /// The `requires` and `ensures` clauses at the top of the body, in
@@ -372,6 +390,9 @@ pub struct FunctionDecl {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub export: Option<String>,
 }
+
+/// Suffix on the unspellable method name of a computed property's setter.
+pub const PROPERTY_SETTER_SUFFIX: &str = "$setter";
 
 /// The contextual keyword of a yield statement.
 pub const YIELD_KEYWORD: &str = "yield";
@@ -782,6 +803,9 @@ pub fn assoc_type_param_name(name: &str) -> String {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ImplDecl {
+    /// The field named by a `by field` clause, at the identifier's position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<(String, Span)>,
     pub type_params: Vec<String>,
     pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
     pub trait_name: String,
@@ -869,6 +893,9 @@ pub struct AssertStmt {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AssignStmt {
+    /// Source position of the final identifier of a written member target.
+    #[serde(skip)]
+    pub member_span: Option<Span>,
     pub mutable: bool,
     pub target: AssignTarget,
     pub annotation: Option<TypeRef>,
@@ -1660,5 +1687,21 @@ impl BindingTarget {
 impl Pattern {
     pub fn is_rest(&self) -> bool {
         matches!(self, Self::Rest(_))
+    }
+}
+
+impl Module {
+    /// Selects ELF record layout for a freestanding target, including on a
+    /// Windows host. Every C union uses an inline byte array in this profile.
+    pub fn use_freestanding_c_layout(&mut self) {
+        for item in &mut self.items {
+            if let Item::Class(class) = item {
+                class.layout_controls.microsoft_bit_fields = false;
+                class.layout_controls.inline_union = class.c_union.is_some();
+                if class.c_union.is_some() {
+                    class.copy = true;
+                }
+            }
+        }
     }
 }

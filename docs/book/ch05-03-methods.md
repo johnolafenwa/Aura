@@ -292,9 +292,7 @@ $ aura run src/main.au
 gives back a fresh value. A property getter must take bare `self` and no
 other parameters, since reading a property shouldn't change anything.
 
-A property is read-only. Python lets you add a setter with
-`@pages_left.setter`. Aura has no setters, and assigning to a property is an
-error:
+So far `pages_left` has only a getter. If we try to set it, the checker tells us where the write would go:
 
 ```aura check-fail:AU2045
 class Book:
@@ -321,11 +319,15 @@ error[AU2045]: property `pages_left` is read-only and cannot be assigned
   = help: a property computes a fresh value on each read; bind it to a local to change the copy
 ```
 
-The reasoning is the same as for receivers. Assignment to a field is visibly
-a change to the instance, and the compiler checks that the instance is
-mutable. A setter would hide an arbitrary method call behind something that
-looks like a field write. If changing a value takes logic, write a `mut self`
-method with a name that says what it does, such as `read`.
+We can let a reader set how many pages remain. Add this method inside `Book`:
+
+```aura fragment
+@pages_left.setter
+def pages_left(mut self, value: int64):
+    self.pages_read = self.pages - value
+```
+
+Now `dune.pages_left = 0` records that we've read all 412 pages. Aura calls the setter on the mutable book. Writing `dune.pages_left += 1` reads the getter once, adds one, and passes the result to the setter. We could validate the requested number in the same method.
 
 ## Invariants: what is always true of a book
 
@@ -602,11 +604,11 @@ fresh for every instance, compute fields in `__init__`, and add associated
 functions for other ways of building one. Methods put a type's behavior next
 to its data, and their receivers say what each one does to the instance:
 `self` reads, `mut self` changes, and `own self` consumes. Properties give
-read-only computed values, `impl Display` controls printing, and composition
-and traits take the place of inheritance. An `invariant` line states what is
-true of every instance, Aura checks it at construction and around each
-public method that changes the instance, and `aura verify` proves that the
-methods keep it.
+computed reads and optional writes. Implementing `Display` controls printing,
+and composition and traits take the place of inheritance. An `invariant` line
+states what is true of every instance. Aura checks it at construction and
+around each public method that changes the instance. Use `aura verify` to prove
+that the methods preserve it.
 
 Every field of a class is present at once: a book always has a title, a page
 count, and a position. Plenty of data isn't like that. A command is either

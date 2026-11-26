@@ -45,6 +45,11 @@ impl FunctionCompiler<'_> {
         op: FunctionOp,
         args: &[MirArg],
     ) -> std::result::Result<Option<ValueRef>, String> {
+        if self.freestanding.is_some() {
+            if let Some(result) = self.wide_math(op, args)? {
+                return Ok(Some(result));
+            }
+        }
         let operands = args
             .iter()
             .map(|argument| self.math_operand(&argument.value))

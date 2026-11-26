@@ -40,19 +40,44 @@ if (( ${#fingerprints[@]} != 1 )); then
 fi
 fingerprint="${fingerprints[0]}"
 
+validated_packages=()
+validated_architectures=()
+validated_versions=()
+for package in "${packages[@]}"; do
+  if [[ "$(dpkg-deb -f -- "$package" Package)" != "aura" ]]; then
+    echo "not an Aura package: $package" >&2
+    exit 1
+  fi
+  architecture="$(dpkg-deb -f -- "$package" Architecture)"
+  if [[ ! "$architecture" =~ ^(amd64|arm64)$ ]]; then
+    echo "invalid Debian architecture '$architecture' in $package" >&2
+    exit 1
+  fi
+  version="$(dpkg-deb -f -- "$package" Version)"
+  if [[ ! "$version" =~ ^[0-9][0-9A-Za-z.+~-]*$ || "$version" == *".."* ]]; then
+    echo "invalid Debian version '$version' in $package" >&2
+    exit 1
+  fi
+  validated_packages+=("$package")
+  validated_architectures+=("$architecture")
+  validated_versions+=("$version")
+done
+
 rm -rf "$output"
 pool="$output/pool/main/a/aura"
 mkdir -p "$pool"
 architectures=()
-for package in "${packages[@]}"; do
-  if [[ "$(dpkg-deb -f "$package" Package)" != "aura" ]]; then
-    echo "not an Aura package: $package" >&2
+for i in "${!validated_packages[@]}"; do
+  package="${validated_packages[$i]}"
+  architecture="${validated_architectures[$i]}"
+  version="${validated_versions[$i]}"
+  destination="$pool/aura_${version}_${architecture}.deb"
+  if [[ -e "$destination" ]]; then
+    echo "duplicate Debian package for version $version ($architecture)" >&2
     exit 1
   fi
-  architecture="$(dpkg-deb -f "$package" Architecture)"
-  version="$(dpkg-deb -f "$package" Version)"
   # dpkg-scanpackages picks an architecture's packages by this file name.
-  cp "$package" "$pool/aura_${version}_${architecture}.deb"
+  cp -- "$package" "$destination"
   architectures+=("$architecture")
 done
 mapfile -t architectures < <(printf '%s\n' "${architectures[@]}" | sort -u)

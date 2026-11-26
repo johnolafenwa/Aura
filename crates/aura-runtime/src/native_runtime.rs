@@ -553,6 +553,14 @@ struct DirectTaskRuntimeState {
     /// trap or cancellation can abandon this task's native frames.
     foreign_callback_cleanup_base: Option<usize>,
     foreign_callback_failure: Option<Box<dyn std::any::Any + Send>>,
+    /// First trap or cancellation recorded while closing dropped generators
+    /// inside a runtime boundary, for that boundary to propagate.
+    generator_drop_exit: Option<crate::runtime_value::PendingGeneratorDropExit>,
+    /// The task's generators whose suspended bodies hold registered exits,
+    /// by creation order. Nothing resumes them once the task ends, so the
+    /// drain that ends it closes them first, newest first, as when their
+    /// exits shared the task's stack.
+    suspended_generators_with_exits: BTreeMap<u64, crate::runtime_value::WeakGeneratorValue>,
     cleanup_stack: Vec<DirectCleanupRegistration>,
     next_cleanup_id: i64,
     cleanup_draining: bool,
@@ -711,6 +719,8 @@ impl Default for DirectTaskRuntimeState {
             runtime_error_capture: false,
             foreign_callback_cleanup_base: None,
             foreign_callback_failure: None,
+            generator_drop_exit: None,
+            suspended_generators_with_exits: BTreeMap::new(),
             cleanup_stack: Vec::new(),
             next_cleanup_id: 1,
             cleanup_draining: false,
@@ -730,9 +740,31 @@ impl Default for DirectTaskRuntimeState {
 
 impl Drop for DirectTaskRuntimeState {
     fn drop(&mut self) {
+        let owned_values = self.owned_values_mut().take_all();
+        if let Some(payload) = self.foreign_callback_failure.take() {
+            if let Some(signal) = payload.downcast_ref::<LightweightTaskFailureSignal>() {
+                eprintln!(
+                    "unhandled Aura callback failure on foreign thread: {}",
+                    signal.0.message
+                );
+            } else {
+                eprintln!("unhandled Aura callback panic on foreign thread");
+            }
+        }
         // SAFETY: the state owns its stack, and generated code of this task
         // no longer runs once the state is gone.
         unsafe { DirectFrameStack::free(self.frames) };
+        if !owned_values.is_empty() {
+            without_generator_drop_close(|| {
+                for (address, count) in owned_values {
+                    for _ in 0..count {
+                        unsafe {
+                            release_untracked_value(address as *mut OpaqueValue);
+                        }
+                    }
+                }
+            });
+        }
     }
 }
 
@@ -947,11 +979,28 @@ static DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static DIRECT_TASK_CLAIM_FLAG_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
-fn direct_task_claim_flag_test_guard() -> MutexGuard<'static, ()> {
-    match DIRECT_TASK_CLAIM_FLAG_TEST_LOCK.lock() {
+static DIRECT_TASK_CLAIM_FLAG_GUARD_HELD: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+struct DirectTaskClaimFlagTestGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for DirectTaskClaimFlagTestGuard {
+    fn drop(&mut self) {
+        DIRECT_TASK_CLAIM_FLAG_GUARD_HELD.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+fn direct_task_claim_flag_test_guard() -> DirectTaskClaimFlagTestGuard {
+    let lock = match DIRECT_TASK_CLAIM_FLAG_TEST_LOCK.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
-    }
+    };
+    DIRECT_TASK_CLAIM_FLAG_GUARD_HELD.store(true, Ordering::Release);
+    DirectTaskClaimFlagTestGuard { _lock: lock }
 }
 
 fn direct_task_runtime_key() -> u64 {
@@ -1188,6 +1237,7 @@ fn discard_current_direct_task_runtime_state() {
 
 fn release_direct_task_runtime_state(mut state: Box<DirectTaskRuntimeState>) {
     let owned_values = state.owned_values_mut().take_all();
+    let abandoned_owners = !owned_values.is_empty();
     drop(state);
     // The task is gone, so a generator it still owns cannot resume: the
     // same release covers the values its suspended body holds.
@@ -1200,6 +1250,9 @@ fn release_direct_task_runtime_state(mut state: Box<DirectTaskRuntimeState>) {
             }
         }
     });
+    if abandoned_owners {
+        class_drop::finish_retiring_owners();
+    }
 }
 
 fn next_direct_cleanup_id(state: &mut DirectTaskRuntimeState) -> i64 {
@@ -1480,9 +1533,10 @@ pub struct OpaqueValue {
     /// while `list_len` is below it stores the element past the end and
     /// raises `list_len`. The next access adopts that length and sets this
     /// back to 0, so runtime code always sees every element. A read of a
-    /// held box (see [`Self::held_value`]) sets it to 0 too, since a copy
-    /// it makes shares the storage. That read may run on several threads at
-    /// once under a shared holder's lock, so the word is atomic.
+    /// held box (see [`Self::held_value`]) adopts the length and sets it
+    /// to 0 too, since a copy it makes shares the storage. That read may
+    /// run on several threads at once under a shared holder's lock, so the
+    /// word is atomic.
     list_capacity: AtomicU32,
     /// The value's index in the list of the ledger that links it.
     slot: std::cell::Cell<u32>,
@@ -1631,20 +1685,62 @@ impl OpaqueValue {
 
     /// The value of a box its holder owns and reaches it through: a list
     /// element's box or an instance field's box. The holder's access covers
-    /// it, so it takes no access of its own, and generated code never runs
-    /// its list view ahead of it (see `native_class_layouts.rs`), so there
-    /// is nothing to take in. The caller may copy the value, and the copy
-    /// shares its storage, so the box gives up its room as an access
+    /// it, so it takes no access of its own. Generated code appends to a
+    /// list in such a box in place while the holder is confined, so the
+    /// elements it appended are taken in first (see
+    /// [`Self::settle_held_list`]). The caller may copy the value, and the
+    /// copy shares its storage, so the box gives up its room as an access
     /// would: generated code then calls the runtime to change the list,
     /// which copies the storage first, until the next write through the box
     /// or its holder finds the storage unshared again.
     fn held_value(&self) -> &Value {
-        if self.list_capacity.load(Ordering::Relaxed) != 0 {
-            self.list_capacity.store(0, Ordering::Relaxed);
+        if self.list_capacity.load(Ordering::Acquire) != 0 {
+            self.settle_held_list();
         }
         // SAFETY: the holder's access covers the box, and a write takes the
         // holder mutably, so no `&mut Value` exists while this borrow lives.
         unsafe { &*self.value.get() }
+    }
+
+    /// Takes in the elements generated code appended in place to the list
+    /// in a held box, and takes back its room. Every read or write of a
+    /// held box's value through its holder starts here, as every access to
+    /// any other box starts at [`Self::adopt_appended_elements`].
+    ///
+    /// Generated code appends only while the holder is confined, but the
+    /// holder may become shared with elements still to take in, and then
+    /// several readers may come here at once under its lock. One of them
+    /// takes the elements in under a lock of its own and only then clears
+    /// the room, so a reader that finds no room finds the whole list, and
+    /// one that finds room waits here.
+    #[cold]
+    #[inline(never)]
+    fn settle_held_list(&self) {
+        static SETTLING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = SETTLING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.list_capacity.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        // SAFETY: room is only set by a write that has ended, and every
+        // reader of a held box comes here before it reads while there is
+        // room, so no reference into the value is live. The room also
+        // means the storage is unshared, and generated code wrote each
+        // element up to `list_len` before it raised the length.
+        if let Value::Vec(vector) = unsafe { &mut *self.value.get() } {
+            unsafe { vector.elements.adopt_appended(self.list_len.get()) };
+        }
+        self.list_capacity.store(0, Ordering::Release);
+    }
+
+    /// [`Self::settle_held_list`] for a caller that holds the box's holder
+    /// for writing, or owns the box, so no other reader can come.
+    #[inline]
+    fn settle_held_list_for_write(&self) {
+        if self.list_capacity.load(Ordering::Relaxed) != 0 {
+            self.adopt_appended_elements();
+        }
     }
 
     /// Takes in the elements generated code appended in place since the
@@ -1962,6 +2058,13 @@ unsafe fn direct_task_arg_hands_over(ptr: *mut OpaqueValue) -> bool {
 #[cfg(coverage)]
 #[doc(hidden)]
 pub static DIRECT_VALUE_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[path = "native_class_drop.rs"]
+mod class_drop;
+pub use class_drop::{
+    aura_direct_arm_class_drop, aura_direct_copy_class_owners, aura_direct_drain_class_drops,
+    aura_direct_stamp_owner,
+};
 
 type NativeThunk = unsafe extern "C-unwind" fn(*const i64, usize) -> *mut OpaqueValue;
 const DIRECT_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
@@ -3570,6 +3673,9 @@ impl DirectListLayout {
             // Then the 4-byte room count.
             0x0801_0204,
             4,
+            // The runtime takes in what generated code appended in place
+            // to a list in a field's or an element's box.
+            1,
         ];
         fields.iter().fold(0x41_75_72_61_i64, |hash, field| {
             hash.wrapping_mul(0x100_0000_01b3).wrapping_add(*field)
@@ -5399,6 +5505,7 @@ fn drain_direct_cleanup_registrations(key: u64) -> bool {
         return false;
     }
     let _guard = DirectCleanupDrainGuard { key };
+    close_suspended_generators_with_exits(key);
     let previous_depth = with_direct_task_runtime_state_for_key(key, |state| {
         let previous = state.call_depth();
         state.frames_mut().set_depth(0);
@@ -5441,6 +5548,36 @@ fn drain_direct_cleanup_registrations(key: u64) -> bool {
         drop(take_direct_cleanup_registration(id));
     }
     true
+}
+
+/// Closes the task's suspended generators that hold registered exits, so
+/// each body runs its own exits once before the task's exits run. Inside a
+/// generator body or a foreign callback the task is not ending here: the
+/// body's failure or the callback's caller reaches the outer drain.
+fn close_suspended_generators_with_exits(key: u64) {
+    if crate::runtime_value::running_generator_depth() != 0 {
+        return;
+    }
+    loop {
+        let next = with_direct_task_runtime_state_for_key(key, |state| {
+            if state.foreign_callback_cleanup_base.is_some() {
+                return None;
+            }
+            state.suspended_generators_with_exits.pop_last()
+        });
+        let Some((_, generator)) = next else {
+            return;
+        };
+        let Some(generator) = generator.upgrade() else {
+            continue;
+        };
+        if let Err(diagnostic) = generator.close() {
+            // A trap already unwinding the task stays primary.
+            with_direct_task_runtime_state_for_key(key, |state| {
+                state.primary_runtime_diagnostic.get_or_insert(diagnostic);
+            });
+        }
+    }
 }
 
 /// Runs one exit while the cleanups drain. An exit that traps unwinds back
@@ -5561,27 +5698,40 @@ fn try_emit_internal_structured_diagnostic(diagnostic: &Diagnostic) -> InternalD
     }
 }
 
-thread_local! {
-    /// Set by `leaf_trap` for the one `runtime_diagnostic_error` call it
-    /// makes next.
-    static LEAF_TRAP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 /// Ends the running task with the trap `build` describes. For an entry
-/// point generated code calls only to trap: nothing of the runtime is
-/// active between that call and the trap, so when a recovered call on
-/// this machine stack takes the trap (ADR-0104), no Rust frame has to be
-/// unwound to hand it over.
+/// point generated code calls only to trap: when no enclosing Rust runtime
+/// boundary sits between a `control.recover` call on this machine stack and
+/// this trap, no Rust frame has to be unwound to hand the trap over.
 fn leaf_trap(build: impl FnOnce() -> Diagnostic) -> ! {
+    let direct_recovery = recovered_call_takes_exit()
+        && with_direct_task_runtime_state(|state| {
+            state.foreign_callback_cleanup_base.is_none()
+                && state.rust_boundary_depth() == 0
+                && !state.cleanup_draining
+        });
+    if direct_recovery {
+        let mut diagnostic = build().into_runtime_trap();
+        capture_direct_runtime_frames_once(&mut diagnostic);
+        let needs_cleanup = with_direct_task_runtime_state(|state| {
+            !state.cleanup_stack.is_empty() || !state.manager_exit_failures.is_empty()
+        });
+        if needs_cleanup {
+            let diagnostic = {
+                let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
+                drain_direct_cleanup_stack();
+                attach_direct_manager_exit_failures(diagnostic)
+            };
+            fail_current_lightweight_task(diagnostic)
+        }
+        fail_current_lightweight_task(diagnostic)
+    }
     task_runtime_boundary(|| {
         let diagnostic = build();
-        LEAF_TRAP.with(|leaf| leaf.set(true));
         runtime_diagnostic_error(diagnostic)
     })
 }
 
 fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
-    let leaf = LEAF_TRAP.with(|leaf| leaf.replace(false));
     let mut diagnostic = diagnostic.into_runtime_trap();
     capture_direct_runtime_frames_once(&mut diagnostic);
     if direct_cleanup_is_draining() {
@@ -5593,27 +5743,11 @@ fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
         });
         std::panic::panic_any(CleanupTrapSignal);
     }
-    // A generated trap with no pending exits can return its diagnostic
-    // directly. Only a cleanup can replace the primary failure or add notes.
-    // C completes its call before a surrounding recovered call takes a callback trap.
-    let direct_recovery = leaf
-        && recovered_call_takes_exit()
-        && with_direct_task_runtime_state(|state| state.foreign_callback_cleanup_base.is_none());
-    if direct_recovery
-        && with_direct_task_runtime_state(|state| {
-            state.cleanup_stack.is_empty() && state.manager_exit_failures.is_empty()
-        })
-    {
-        fail_current_lightweight_task(diagnostic)
-    }
-    let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
-    drain_direct_cleanup_stack();
-    let diagnostic = attach_direct_manager_exit_failures(diagnostic);
-    if direct_recovery {
-        // The exit is taken where it is recorded, and the frames from here
-        // to the generated code that trapped are abandoned with it.
-        fail_current_lightweight_task(diagnostic)
-    }
+    let diagnostic = {
+        let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
+        drain_direct_cleanup_stack();
+        attach_direct_manager_exit_failures(diagnostic)
+    };
     emit_runtime_diagnostic_error(diagnostic);
 }
 
@@ -5654,44 +5788,208 @@ fn with_task_runtime_error_capture<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
+/// Counts one active `task_runtime_boundary` on the task's frame stack. The
+/// stack is found through the task's native slot, so the common case reads
+/// no task state.
+struct RustBoundaryDepthGuard {
+    stack: *mut DirectFrameStack,
+}
+
+// The boundary guards are plain loads and stores: debug builds of the
+// runtime run generated code too, and every runtime operation enters one.
+impl RustBoundaryDepthGuard {
+    #[inline]
+    fn enter() -> Self {
+        let stack = aura_direct_frame_stack();
+        // SAFETY: every task has a frame stack, which lives as long as the
+        // task's runtime state, and only this task's thread touches it
+        // while the task runs. A depth never nears `usize::MAX`.
+        unsafe { (*stack).rust_boundary_depth += 1 };
+        Self { stack }
+    }
+}
+
+impl Drop for RustBoundaryDepthGuard {
+    #[inline]
+    fn drop(&mut self) {
+        // SAFETY: as in `enter`; a task never moves to another state.
+        let depth = unsafe { &mut (*self.stack).rust_boundary_depth };
+        if *depth > 0 {
+            *depth -= 1;
+        }
+    }
+}
+
+/// Keeps the first exit a dropped generator raised inside a runtime
+/// boundary of the running task, for that boundary to propagate.
+pub(crate) fn record_generator_drop_exit(exit: crate::runtime_value::PendingGeneratorDropExit) {
+    let Some(stack) = current_direct_frame_stack() else {
+        return;
+    };
+    // SAFETY: the stack belongs to the running task, and nothing else uses
+    // it while that task runs.
+    let stack = unsafe { &mut *stack.as_ptr() };
+    if stack.rust_boundary_depth == 0 || stack.generator_drop_exit_armed {
+        return;
+    }
+    stack.generator_drop_exit_armed = true;
+    with_direct_task_runtime_state(|state| state.generator_drop_exit = Some(exit));
+}
+
+/// Takes the exit `record_generator_drop_exit` kept, if any.
+fn take_generator_drop_exit() -> Option<crate::runtime_value::PendingGeneratorDropExit> {
+    let stack = current_direct_frame_stack()?;
+    // SAFETY: as in `record_generator_drop_exit`.
+    let armed = unsafe { &mut (*stack.as_ptr()).generator_drop_exit_armed };
+    if !std::mem::replace(armed, false) {
+        return None;
+    }
+    with_direct_task_runtime_state(|state| state.generator_drop_exit.take())
+}
+
+/// The runtime boundaries active on the current task's machine stack.
+fn current_rust_boundary_depth() -> usize {
+    // SAFETY: as in `RustBoundaryDepthGuard::enter`.
+    unsafe { (*aura_direct_frame_stack()).rust_boundary_depth }
+}
+
+impl DirectTaskRuntimeState {
+    fn rust_boundary_depth(&self) -> usize {
+        // SAFETY: the state owns its frame stack.
+        unsafe { self.frames.as_ref().rust_boundary_depth }
+    }
+
+    fn rust_boundary_depth_mut(&mut self) -> &mut usize {
+        // SAFETY: the state owns its frame stack, and `&mut self` excludes
+        // other users on this thread.
+        unsafe { &mut (*self.frames.as_ptr()).rust_boundary_depth }
+    }
+}
+
+fn finish_task_boundary_failure(mut diagnostic: Diagnostic) -> Diagnostic {
+    capture_direct_runtime_frames_once(&mut diagnostic);
+    // A trapping cleanup must not replace the failure that caused this
+    // boundary to drain the remaining task-local cleanup registrations.
+    // Drop `_primary_guard` before returning so `_longjmp` never skips it.
+    {
+        let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
+        if direct_runtime_error_capture_enabled() {
+            drain_direct_cleanup_stack();
+        }
+    }
+    attach_direct_manager_exit_failures(diagnostic)
+}
+
 #[track_caller]
 fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-        Ok(value) => value,
+    // Only the normal return path lives in this generic function: generated
+    // code calls one boundary per runtime operation, and debug builds of
+    // the runtime run that code too. The failure paths are out of line.
+    let depth_guard = RustBoundaryDepthGuard::enter();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    // SAFETY: as in `RustBoundaryDepthGuard::enter`.
+    let drop_exit_armed = unsafe { (*depth_guard.stack).generator_drop_exit_armed };
+    drop(depth_guard);
+    match outcome {
+        Ok(value) => {
+            if drop_exit_armed {
+                propagate_generator_drop_exit();
+            }
+            value
+        }
+        Err(payload) => task_runtime_boundary_unwound(payload),
+    }
+}
+
+fn enclosing_rust_boundary() -> bool {
+    current_rust_boundary_depth() > 0
+}
+
+fn in_foreign_callback() -> bool {
+    with_direct_task_runtime_state(|state| state.foreign_callback_cleanup_base.is_some())
+}
+
+/// Propagates the exit a dropped generator recorded inside a runtime
+/// boundary whose work returned. Returns only when no exit is pending.
+#[cold]
+#[inline(never)]
+fn propagate_generator_drop_exit() {
+    if let Some(exit) = take_generator_drop_exit() {
+        let (enclosing_rust_boundary, in_foreign_callback) =
+            (enclosing_rust_boundary(), in_foreign_callback());
+        match exit {
+            crate::runtime_value::PendingGeneratorDropExit::Trap(diagnostic) => {
+                if direct_cleanup_is_draining() {
+                    with_direct_task_runtime_state(|state| {
+                        state.primary_runtime_diagnostic.get_or_insert(diagnostic);
+                    });
+                    std::panic::panic_any(CleanupTrapSignal);
+                }
+                if enclosing_rust_boundary || in_foreign_callback {
+                    std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
+                }
+                let diagnostic = finish_task_boundary_failure(diagnostic);
+                fail_current_lightweight_task(diagnostic)
+            }
+            crate::runtime_value::PendingGeneratorDropExit::Cancelled => {
+                if in_foreign_callback {
+                    drain_direct_cleanup_stack();
+                    std::panic::panic_any(TaskCancelledSignal);
+                }
+                if enclosing_rust_boundary {
+                    std::panic::panic_any(TaskCancelledSignal);
+                }
+                if let Some(diagnostic) = drain_cleanups_for_task_exit() {
+                    fail_current_lightweight_task(diagnostic)
+                }
+                cancel_current_lightweight_task_boundary()
+            }
+        }
+    }
+}
+
+/// Handles a panic that unwound out of a runtime boundary's work.
+#[cold]
+#[inline(never)]
+fn task_runtime_boundary_unwound(payload: Box<dyn std::any::Any + Send>) -> ! {
+    match payload {
         // The callback guard is the nearest boundary. A forced task exit
         // here would bypass C's cleanup and the entry's argument releases.
-        Err(payload)
-            if with_direct_task_runtime_state(|state| {
-                state.foreign_callback_cleanup_base.is_some()
-            }) =>
-        {
+        payload if in_foreign_callback() => {
+            drop(take_generator_drop_exit());
             if payload.is::<TaskCancelledSignal>() {
                 drain_direct_cleanup_stack();
             }
             std::panic::resume_unwind(payload)
         }
-        Err(payload) if payload.is::<TaskCancelledSignal>() => {
-            if direct_runtime_error_capture_enabled() {
-                drain_direct_cleanup_stack();
+        payload if payload.is::<TaskCancelledSignal>() => {
+            drop(take_generator_drop_exit());
+            if enclosing_rust_boundary() {
+                std::panic::resume_unwind(payload)
             }
-            // No diagnostic is primary under cancellation, so a failing
-            // manager exit has nothing to attach to.
-            with_direct_task_runtime_state(|state| state.manager_exit_failures.clear());
+            if let Some(diagnostic) = drain_cleanups_for_task_exit() {
+                fail_current_lightweight_task(diagnostic)
+            }
             cancel_current_lightweight_task_boundary()
         }
-        Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
+        payload => match payload.downcast::<LightweightTaskFailureSignal>() {
             Ok(signal) => {
-                let mut diagnostic = signal.0;
-                capture_direct_runtime_frames_once(&mut diagnostic);
-                // A trapping cleanup must not replace the failure that caused this
-                // boundary to drain the remaining task-local cleanup registrations.
-                let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
-                if direct_runtime_error_capture_enabled() {
-                    drain_direct_cleanup_stack();
+                drop(take_generator_drop_exit());
+                // Free the `Box<LightweightTaskFailureSignal>` before any
+                // non-local exit or recovery jump.
+                // `identity` moves the box into a temporary that drops at
+                // the end of this statement.
+                let diagnostic = std::convert::identity(signal).0;
+                if enclosing_rust_boundary() {
+                    std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
                 }
-                fail_current_lightweight_task(attach_direct_manager_exit_failures(diagnostic))
+                let diagnostic = finish_task_boundary_failure(diagnostic);
+                fail_current_lightweight_task(diagnostic)
             }
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => {
+                drop(take_generator_drop_exit());
+                std::panic::resume_unwind(payload)
+            }
         },
     }
 }
@@ -6652,8 +6950,13 @@ pub extern "C-unwind" fn aura_direct_box_uint_literal(
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_box_f32(value: f64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_typed_value(Value::Float(value), "float32"))
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_box_f64(value: f64) -> *mut OpaqueValue {
-    task_runtime_boundary(|| boxed_value(Value::Float(value)))
+    task_runtime_boundary(|| boxed_typed_value(Value::Float(value), "float64"))
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -8084,10 +8387,8 @@ pub extern "C-unwind" fn aura_direct_duration_from_i64(
             | crate::runtime_value::NANOS_PER_MINUTE => i128::from(unit_nanoseconds),
             other => runtime_error(format!("unknown Duration constructor unit `{other}`")),
         };
-        let nanoseconds = i128::from(value)
-            .checked_mul(unit_nanoseconds)
-            .unwrap_or_else(|| runtime_error("duration overflow"));
-        boxed_value(Value::Duration(nanoseconds))
+        // An `int64` count of at most minutes always fits in `i128` nanoseconds.
+        boxed_value(Value::Duration(i128::from(value) * unit_nanoseconds))
     })
 }
 
@@ -9503,6 +9804,10 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
         // SAFETY: generated code passes a live box it owns.
         if unsafe { holds_element_box_value(value) } {
             if let Some(element) = unsafe { adopt_only_box(value) } {
+                // SAFETY: generated code passes null or a live list.
+                let Some(element) = (unsafe { grow_box_list(vec, element) }) else {
+                    return;
+                };
                 with_vector_mut(vec, |vector| {
                     if is_unknown_runtime_type(&vector.element_type) {
                         let inferred = inferred_collection_type(element.value());
@@ -9526,6 +9831,52 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
             vector.elements.push(value);
         });
     })
+}
+
+/// The whole of an append of `element` for a confined list that already
+/// keeps its elements in boxes, in storage no other list shares, and
+/// knows its element type: it appends the box and records where the boxes
+/// now lie, and nothing else. Any other list gets the box back and takes
+/// the general path.
+///
+/// # Safety
+///
+/// `vec` is null or a live box, and a confined one is confined to the
+/// calling thread with no access to it in progress.
+#[inline]
+unsafe fn grow_box_list(vec: *mut OpaqueValue, element: ElementBox) -> Option<ElementBox> {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return Some(element);
+    };
+    // The view must be the one of the boxes, not a table beside them.
+    if !header.shared_lock.load(Ordering::Acquire).is_null()
+        || header.list_access.load(Ordering::Relaxed) != DirectListAccess::Boxes as u32
+    {
+        return Some(element);
+    }
+    // SAFETY: the value is confined to this thread and no access to it is
+    // in progress, so this is the only reference to it.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return Some(element);
+    };
+    if is_unknown_runtime_type(&vector.element_type) {
+        return Some(element);
+    }
+    let ListElements::Boxes(boxes) = &mut vector.elements else {
+        return Some(element);
+    };
+    let Some(boxes) = boxes.unshared_mut() else {
+        return Some(element);
+    };
+    boxes.push(element);
+    header.list_elements.set(boxes.as_ptr() as usize);
+    header.list_len.set(boxes.len());
+    header.list_capacity.store(
+        u32::try_from(boxes.capacity()).unwrap_or(u32::MAX),
+        Ordering::Relaxed,
+    );
+    None
 }
 
 /// Appends the text of `value` to the list `vec` when `value` is a `str`
@@ -9662,6 +10013,10 @@ fn narrow_for_scalar_write(vector: &mut VecValue, kind: i64) {
 /// [`DirectScalarKind`].
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits: i64, kind: i64) {
+    // SAFETY: generated code passes null or a live box.
+    if unsafe { grow_scalar_list(vec, bits, kind) } {
+        return;
+    }
     task_runtime_boundary(|| {
         let kind = DirectScalarKind::of_code(kind);
         // SAFETY: `with_vector_mut` checks the handle before anything else.
@@ -9697,6 +10052,92 @@ pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits
     })
 }
 
+/// The whole of a scalar append for the list generated code's inline
+/// append found full: a confined list that keeps scalars of `kind` unboxed
+/// in storage no other list shares. It takes in what generated code
+/// appended or popped in place, appends `bits`, which grows the storage,
+/// and records where the elements now lie, and nothing else: the list
+/// keeps its form, its element type, and so its shape tag. `false`, with
+/// the list unchanged, for any other value, which takes the general path.
+///
+/// # Safety
+///
+/// `vec` is null or a live box, and a confined one is confined to the
+/// calling thread with no access to it in progress.
+#[inline]
+unsafe fn grow_scalar_list(vec: *mut OpaqueValue, bits: i64, kind: i64) -> bool {
+    use DirectScalarKind as K;
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return false;
+    };
+    // A shared or frozen value has a lock, and takes it on the general path.
+    if !header.shared_lock.load(Ordering::Acquire).is_null() {
+        return false;
+    }
+    let Some(kind) = K::from_code(kind) else {
+        return false;
+    };
+    // SAFETY: the value is confined to this thread and no access to it is
+    // in progress, so this is the only reference to it.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return false;
+    };
+    // The length generated code left, when it appended or popped in place.
+    let left = (header.list_capacity.load(Ordering::Relaxed) != 0).then(|| header.list_len.get());
+    macro_rules! grow {
+        ($values:expr, $value:expr) => {{
+            let Some(values) = $values.unshared_mut() else {
+                return false;
+            };
+            if let Some(len) = left {
+                if len > values.len() && len <= values.capacity() {
+                    // SAFETY: generated code wrote each element up to
+                    // `len` before it raised the length.
+                    unsafe { values.set_len(len) };
+                } else {
+                    values.truncate(len);
+                }
+            }
+            let value = $value;
+            if values.capacity() == 0 {
+                // A list's first storage is one small block, made with no
+                // growth: room for four elements, or the sixteen bytes the
+                // smallest block has.
+                *values = Vec::with_capacity((16 / std::mem::size_of_val(&value)).max(4));
+            }
+            values.push(value);
+            header.list_elements.set(values.as_ptr() as usize);
+            header.list_len.set(values.len());
+            header.list_capacity.store(
+                u32::try_from(values.capacity()).unwrap_or(u32::MAX),
+                Ordering::Relaxed,
+            );
+        }};
+    }
+    // Generated code passes an integer already in its type's range, so
+    // the narrowing casts keep its value.
+    match (&mut vector.elements, kind) {
+        (ListElements::Int64(values), K::Int64) => grow!(values, bits),
+        (ListElements::Float64(values), K::Float64) => grow!(values, f64::from_bits(bits as u64)),
+        (ListElements::Bool(values), K::Bool) => {
+            grow!(values, crate::list_elements::BoolByte::from_bool(bits != 0))
+        }
+        (ListElements::Int8(values), K::Int8) => grow!(values, bits as i8),
+        (ListElements::Int16(values), K::Int16) => grow!(values, bits as i16),
+        (ListElements::Int32(values), K::Int32) => grow!(values, bits as i32),
+        (ListElements::Uint8(values), K::Uint8) => grow!(values, bits as u8),
+        (ListElements::Uint16(values), K::Uint16) => grow!(values, bits as u16),
+        (ListElements::Uint32(values), K::Uint32) => grow!(values, bits as u32),
+        (ListElements::Uint64(values), K::Uint64) => grow!(values, bits as u64),
+        (ListElements::Float32(values), K::Float32) => {
+            grow!(values, f64::from_bits(bits as u64) as f32)
+        }
+        _ => return false,
+    }
+    true
+}
+
 /// Appends `bits` to `elements` the way generated code's inline append
 /// stores them, when the list keeps scalars of `kind` unboxed, so the
 /// slow path of a scalar push builds no runtime value. Any other form
@@ -9708,7 +10149,9 @@ fn push_scalar_bits(elements: &mut ListElements, kind: DirectScalarKind, bits: i
     match (elements, kind) {
         (ListElements::Int64(values), K::Int64) => values.push(bits),
         (ListElements::Float64(values), K::Float64) => values.push(f64::from_bits(bits as u64)),
-        (ListElements::Bool(values), K::Bool) => values.push(bits != 0),
+        (ListElements::Bool(values), K::Bool) => {
+            values.push(crate::list_elements::BoolByte::from_bool(bits != 0))
+        }
         (ListElements::Int8(values), K::Int8) => values.push(bits as i8),
         (ListElements::Int16(values), K::Int16) => values.push(bits as i16),
         (ListElements::Int32(values), K::Int32) => values.push(bits as i32),
@@ -10733,6 +11176,10 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_push_plain(
     src: *const u8,
     cell: *const PlainLayoutCell,
 ) {
+    // SAFETY: the caller's contract.
+    if unsafe { grow_plain_list(list, src, cell) } {
+        return;
+    }
     task_runtime_boundary(|| {
         // SAFETY: the caller's contract.
         let layout = unsafe { plain_layout_in(cell) };
@@ -10741,6 +11188,48 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_push_plain(
             vector.elements.push_plain(layout, src.cast())
         });
     })
+}
+
+/// [`grow_scalar_list`] for a list that keeps the plain records of `cell`
+/// in place.
+///
+/// # Safety
+///
+/// As for [`aura_direct_vec_push_plain`], and a confined `list` is confined
+/// to the calling thread with no access to it in progress.
+#[inline]
+unsafe fn grow_plain_list(
+    list: *mut OpaqueValue,
+    src: *const u8,
+    cell: *const PlainLayoutCell,
+) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { list.as_ref() }) else {
+        return false;
+    };
+    if !header.shared_lock.load(Ordering::Acquire).is_null() {
+        return false;
+    }
+    // SAFETY: as in `grow_scalar_list`.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return false;
+    };
+    let left = (header.list_capacity.load(Ordering::Relaxed) != 0).then(|| header.list_len.get());
+    // SAFETY: the caller's contract.
+    let layout = unsafe { plain_layout_in(cell) };
+    // SAFETY: the caller's contract, and `left` is the length generated
+    // code left in the view.
+    let Some((elements, len, room)) =
+        (unsafe { vector.elements.grow_plain(layout, src.cast(), left) })
+    else {
+        return false;
+    };
+    header.list_elements.set(elements);
+    header.list_len.set(len);
+    header
+        .list_capacity
+        .store(u32::try_from(room).unwrap_or(u32::MAX), Ordering::Relaxed);
+    true
 }
 
 /// Replaces element `index` of `list` with the value whose bytes in the
@@ -12910,6 +13399,88 @@ pub extern "C-unwind" fn aura_direct_map_get_int64_payload(
     task_runtime_boundary(|| with_map(map, |map| boxed_map_payload(map.entries.value_of_i64(key))))
 }
 
+/// Writes the `int64` a map lookup found to `out` and returns 1, or writes
+/// 0 and returns 0 when the key is missing. Generated code keeps a `Lookup`
+/// of an `int64` it only matches and unpacks as these two words, so the
+/// found value never goes in a box.
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+unsafe fn map_lookup_word(found: Option<&Value>, out: *mut i64) -> i64 {
+    // SAFETY: the caller's contract.
+    unsafe { out.write(found.map_or(0, unbox_int64_of)) };
+    i64::from(found.is_some())
+}
+
+/// `aura_direct_map_get_payload` for a dict of `int64` values, as the two
+/// words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_word(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        with_map(map, |map| match tape_lookup_key(map, key) {
+            // SAFETY: the caller's contract.
+            Some(found) => unsafe { map_lookup_word(found.as_ref(), out) },
+            // SAFETY: the caller's contract, and `key` is a live box.
+            None => unsafe {
+                with_value(key, |key| map_lookup_word(map.entries.value_of(key), out))
+            },
+        })
+    })
+}
+
+/// `aura_direct_map_get_str_payload` for a dict of `int64` values, as the
+/// two words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_str_word(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_map(map, |map| match tape_lookup_str(map, key) {
+            // SAFETY: the caller's contract.
+            Some(found) => unsafe { map_lookup_word(found.as_ref(), out) },
+            // SAFETY: the caller's contract.
+            None => unsafe { map_lookup_word(map.entries.value_of_str(key), out) },
+        })
+    })
+}
+
+/// `aura_direct_map_get_int64_payload` for a dict of `int64` values, as
+/// the two words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_int64_word(
+    map: *mut OpaqueValue,
+    key: i64,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        with_map(map, |map| unsafe {
+            map_lookup_word(map.entries.value_of_i64(key), out)
+        })
+    })
+}
+
 /// Turns an owned `Lookup` into the found value's own box, or null for
 /// `Lookup.Missing`. Generated code uses it when a lookup it keeps in that
 /// form came from a path that builds the `Lookup`.
@@ -13413,6 +13984,112 @@ pub extern "C-unwind" fn aura_direct_map_index(
             }
         };
         boxed_value(direct_array_result(value, line, column))
+    })
+}
+
+/// Reports that `map[key]` found no `key`, whose rendering is
+/// `rendered_key`, at `line:column`.
+fn missing_dict_key(rendered_key: &str, line: i64, column: i64) -> ! {
+    let message = format!("dict key `{rendered_key}` was not present");
+    match runtime_span(line, column) {
+        Some(span) => runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message)),
+        None => runtime_diagnostic_error(Diagnostic::coded("AU4003", message)),
+    }
+}
+
+/// `map[key]` for a dict of scalar values: `read` gives the found value as
+/// the scalar generated code keeps, so the value never goes in a box. A
+/// missing key reports what `aura_direct_map_index` reports.
+fn map_index_scalar<T>(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+    read: fn(&Value) -> T,
+) -> T {
+    task_runtime_boundary(|| {
+        let found = with_map(map, |map| unsafe {
+            with_value(key, |key| {
+                map.entries
+                    .value_of(key)
+                    .map(read)
+                    .ok_or_else(|| key.render())
+            })
+        });
+        found.unwrap_or_else(|rendered_key| missing_dict_key(&rendered_key, line, column))
+    })
+}
+
+/// `map[key]` for a dict of `int64` values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_int64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_int64_of)
+}
+
+/// `map[key]` for a dict of integer values narrower than 64 bits.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_i64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_i64_of)
+}
+
+/// `map[key]` for a dict of `uint64` values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_u64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> u64 {
+    map_index_scalar(map, key, line, column, unbox_u64_of)
+}
+
+/// `map[key]` for a dict of float values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_f64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> f64 {
+    map_index_scalar(map, key, line, column, unbox_f64_of)
+}
+
+/// `map[key]` for a dict of `bool` values, as 0 or 1.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_bool(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_bool_of)
+}
+
+/// `map[key]` for a dict from `int64` to `int64`: neither the key nor the
+/// found value goes in a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_int64_pair(
+    map: *mut OpaqueValue,
+    key: i64,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let found = with_map(map, |map| map.entries.value_of_i64(key).map(unbox_int64_of));
+        found.unwrap_or_else(|| {
+            let rendered_key = Value::Int(IntegerValue::from_i64(key)).render();
+            missing_dict_key(&rendered_key, line, column)
+        })
     })
 }
 
@@ -14957,21 +15634,22 @@ fn unbox_u64_of(value: &Value) -> u64 {
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
-    task_runtime_boundary(|| {
-        let value = unsafe { value_ref(value) };
-        // A trait object holds a float beside its width.
-        let held = match &value {
-            Value::TraitObject(object) => &object.value,
-            other => other,
-        };
-        match held {
-            Value::Float(value) => *value,
-            _ => runtime_error(format!(
-                "direct backend expected `float64`, found `{}`",
-                value_type_name(&value)
-            )),
-        }
-    })
+    task_runtime_boundary(|| unbox_f64_of(&unsafe { value_ref(value) }))
+}
+
+fn unbox_f64_of(value: &Value) -> f64 {
+    // A trait object holds a float beside its width.
+    let held = match value {
+        Value::TraitObject(object) => &object.value,
+        other => other,
+    };
+    match held {
+        Value::Float(value) => *value,
+        _ => runtime_error(format!(
+            "direct backend expected `float64`, found `{}`",
+            value_type_name(value)
+        )),
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -15624,7 +16302,12 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::Generator(_) => expected == "iter.GeneratorHandle",
             Value::Range(_) => expected == "Range",
             Value::Bool(_) => expected == "bool",
-            Value::Float(_) => expected == "float64" || expected == "float32",
+            // A float boxed with its width answers for that width only. An
+            // untagged float comes from code that knows its width statically.
+            Value::Float(_) => match explicit_type.as_deref() {
+                Some(actual @ ("float32" | "float64")) => actual == expected,
+                _ => expected == "float64" || expected == "float32",
+            },
             Value::Int(value) => value.runtime_type_name().map_or_else(
                 || expected.starts_with("int") || expected.starts_with("uint"),
                 |actual| actual == expected,
@@ -15705,6 +16388,7 @@ pub extern "C-unwind" fn aura_direct_trait_object_from(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        let explicit_type = unsafe { effective_runtime_type_name(value) };
         let member = unsafe {
             with_value(value, |value| {
                 let mut active = value;
@@ -15713,19 +16397,45 @@ pub extern "C-unwind" fn aura_direct_trait_object_from(
                     member = crate::union_runtime::active_member_type(union);
                     active = &union.payload;
                 }
-                (!std::ptr::eq(active, value)).then(|| {
-                    let held = try_clone_array_containing_value(active)?;
-                    // A float does not say its width; the union member does.
-                    Ok(match (held, member) {
-                        (Value::Float(float), Some(member)) => {
+                if !std::ptr::eq(active, value) {
+                    let held = try_clone_array_containing_value(active);
+                    return Some(held.map(|held| match (held, member) {
+                        (Value::Float(float), Some(member))
+                            if matches!(
+                                member,
+                                Type::Named(name, args)
+                                    if args.is_empty() && matches!(name.as_str(), "float32" | "float64")
+                            ) =>
+                        {
                             Value::TraitObject(Box::new(TraitObjectValue {
                                 held: Arc::new(member.clone()),
                                 value: Value::Float(float),
                             }))
                         }
+                        (Value::Float(float), _) => {
+                            let width = match explicit_type.as_deref() {
+                                Some("float32") => "float32",
+                                _ => "float64",
+                            };
+                            Value::TraitObject(Box::new(TraitObjectValue {
+                                held: Arc::new(Type::named(width)),
+                                value: Value::Float(float),
+                            }))
+                        }
                         (held, _) => held,
-                    })
-                })
+                    }));
+                }
+                if let Value::Float(float) = active {
+                    let width = match explicit_type.as_deref() {
+                        Some("float32") => "float32",
+                        _ => "float64",
+                    };
+                    return Some(Ok(Value::TraitObject(Box::new(TraitObjectValue {
+                        held: Arc::new(Type::named(width)),
+                        value: Value::Float(*float),
+                    }))));
+                }
+                None
             })
         };
         match member {
@@ -15747,7 +16457,9 @@ pub extern "C-unwind" fn aura_direct_trait_object_from(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_trait_object_float(value: *mut OpaqueValue, single: i64) {
     task_runtime_boundary(|| {
-        let held = Type::named(if single == 0 { "float64" } else { "float32" });
+        let name = if single == 0 { "float64" } else { "float32" };
+        let held = Type::named(name);
+        let mut updated = false;
         unsafe {
             value_mut(value, |value| {
                 if matches!(value, Value::Float(_)) {
@@ -15756,8 +16468,13 @@ pub extern "C-unwind" fn aura_direct_trait_object_float(value: *mut OpaqueValue,
                         held: Arc::new(held),
                         value: float,
                     }));
+                    updated = true;
                 }
             });
+            if updated {
+                let tag = interned_runtime_type_tag(name.as_bytes());
+                set_explicit_runtime_type_tag(value, &tag);
+            }
         }
     })
 }
@@ -16528,8 +17245,8 @@ unsafe fn adopt_only_box(boxed: *mut OpaqueValue) -> Option<ElementBox> {
     if header.ref_count.load(Ordering::Acquire) != 1 || header.shared_lock().is_some() {
         return None;
     }
-    // A held box never runs its list view ahead of the list, so the
-    // elements generated code appended are taken in now.
+    // The elements generated code appended are taken in now, so the
+    // holder's first read of the box has nothing to take in.
     if header.list_capacity.load(Ordering::Relaxed) != 0 {
         header.adopt_appended_elements();
     }
@@ -17183,6 +17900,28 @@ fn run_owned_host_builtin(
     })
 }
 
+/// Runs an unsafe host builtin that takes owned arguments from generated code.
+///
+/// # Safety
+///
+/// `args_ptr` must be valid for `arg_count` entries and any raw addresses
+/// supplied in those arguments must satisfy the builtin's memory contract.
+unsafe fn run_unsafe_owned_host_builtin(
+    args_ptr: *mut i64,
+    arg_count: i64,
+    evaluate: host_builtins::UnsafeHostBuiltinFn,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let arg_count = usize::try_from(arg_count)
+            .unwrap_or_else(|_| runtime_error("invalid host builtin argument count"));
+        let args = unsafe { consume_opaque_buffer(args_ptr, arg_count) };
+        match unsafe { evaluate(args, None) } {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
 /// Runs a host builtin that reads one opaque handle per argument, as
 /// `DYNAMIC_HOST_ABI` declares.
 fn run_borrowed_host_builtin(
@@ -17204,22 +17943,38 @@ fn run_borrowed_host_builtin(
     })
 }
 
-macro_rules! host_builtin_entry {
-    (owned $name:literal, $evaluate:expr, $args_ptr:ident, $arg_count:ident) => {
-        run_owned_host_builtin($args_ptr, $arg_count, $evaluate)
+macro_rules! host_builtin_entry_fn {
+    (owned $name:literal => $symbol:ident($evaluate:expr)) => {
+        #[cfg_attr(not(coverage), no_mangle)]
+        pub extern "C-unwind" fn $symbol(args_ptr: *mut i64, arg_count: i64) -> *mut OpaqueValue {
+            run_owned_host_builtin(args_ptr, arg_count, $evaluate)
+        }
     };
-    (borrowed $name:literal, $evaluate:expr, $args_ptr:ident, $arg_count:ident) => {
-        run_borrowed_host_builtin($name, $args_ptr, $arg_count, $evaluate)
+    (unsafe_owned $name:literal => $symbol:ident($evaluate:expr)) => {
+        /// # Safety
+        ///
+        /// `args_ptr` must be valid for `arg_count` entries and any raw
+        /// addresses in those arguments must satisfy the builtin's contract.
+        #[cfg_attr(not(coverage), no_mangle)]
+        pub unsafe extern "C-unwind" fn $symbol(
+            args_ptr: *mut i64,
+            arg_count: i64,
+        ) -> *mut OpaqueValue {
+            unsafe { run_unsafe_owned_host_builtin(args_ptr, arg_count, $evaluate) }
+        }
+    };
+    (borrowed $name:literal => $symbol:ident($evaluate:expr)) => {
+        #[cfg_attr(not(coverage), no_mangle)]
+        pub extern "C-unwind" fn $symbol(args_ptr: *mut i64, arg_count: i64) -> *mut OpaqueValue {
+            run_borrowed_host_builtin($name, args_ptr, arg_count, $evaluate)
+        }
     };
 }
 
 macro_rules! host_builtin_entries {
     ($($passing:ident $name:literal => $symbol:ident($evaluate:expr);)*) => {
         $(
-            #[cfg_attr(not(coverage), no_mangle)]
-            pub extern "C-unwind" fn $symbol(args_ptr: *mut i64, arg_count: i64) -> *mut OpaqueValue {
-                host_builtin_entry!($passing $name, $evaluate, args_ptr, arg_count)
-            }
+            host_builtin_entry_fn!($passing $name => $symbol($evaluate));
         )*
 
         /// Each host builtin's qualified name and the exported entry generated
@@ -17231,7 +17986,7 @@ macro_rules! host_builtin_entries {
         #[cfg(test)]
         pub(crate) const HOST_BUILTIN_ENTRIES: &[(
             &str,
-            extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
+            unsafe extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
         )] = &[$(($name, $symbol)),*];
     };
 }
@@ -17459,33 +18214,77 @@ host_builtin_entries! {
     borrowed "bytes::starts_with" => aura_host_bytes_starts_with(|args| direct_bytes_search("bytes::starts_with", args));
     borrowed "bytes::ends_with" => aura_host_bytes_ends_with(|args| direct_bytes_search("bytes::ends_with", args));
     borrowed "bytes::find" => aura_host_bytes_find(|args| direct_bytes_search("bytes::find", args));
-    owned "mem::read_uint8" => aura_host_mem_read_uint8(host_builtins::host_mem_read_uint8);
-    owned "mem::read_uint16" => aura_host_mem_read_uint16(host_builtins::host_mem_read_uint16);
-    owned "mem::read_uint32" => aura_host_mem_read_uint32(host_builtins::host_mem_read_uint32);
-    owned "mem::read_uint64" => aura_host_mem_read_uint64(host_builtins::host_mem_read_uint64);
-    owned "mem::write_uint8" => aura_host_mem_write_uint8(host_builtins::host_mem_write_uint8);
-    owned "mem::write_uint16" => aura_host_mem_write_uint16(host_builtins::host_mem_write_uint16);
-    owned "mem::write_uint32" => aura_host_mem_write_uint32(host_builtins::host_mem_write_uint32);
-    owned "mem::write_uint64" => aura_host_mem_write_uint64(host_builtins::host_mem_write_uint64);
-    owned "mem::volatile_read_uint8" => aura_host_mem_volatile_read_uint8(host_builtins::host_mem_volatile_read_uint8);
-    owned "mem::volatile_read_uint16" => aura_host_mem_volatile_read_uint16(host_builtins::host_mem_volatile_read_uint16);
-    owned "mem::volatile_read_uint32" => aura_host_mem_volatile_read_uint32(host_builtins::host_mem_volatile_read_uint32);
-    owned "mem::volatile_read_uint64" => aura_host_mem_volatile_read_uint64(host_builtins::host_mem_volatile_read_uint64);
-    owned "mem::volatile_write_uint8" => aura_host_mem_volatile_write_uint8(host_builtins::host_mem_volatile_write_uint8);
-    owned "mem::volatile_write_uint16" => aura_host_mem_volatile_write_uint16(host_builtins::host_mem_volatile_write_uint16);
-    owned "mem::volatile_write_uint32" => aura_host_mem_volatile_write_uint32(host_builtins::host_mem_volatile_write_uint32);
-    owned "mem::volatile_write_uint64" => aura_host_mem_volatile_write_uint64(host_builtins::host_mem_volatile_write_uint64);
-    owned "mem::atomic_load_uint32" => aura_host_mem_atomic_load_uint32(host_builtins::host_mem_atomic_load_uint32);
-    owned "mem::atomic_load_uint64" => aura_host_mem_atomic_load_uint64(host_builtins::host_mem_atomic_load_uint64);
-    owned "mem::atomic_store_uint32" => aura_host_mem_atomic_store_uint32(host_builtins::host_mem_atomic_store_uint32);
-    owned "mem::atomic_store_uint64" => aura_host_mem_atomic_store_uint64(host_builtins::host_mem_atomic_store_uint64);
-    owned "mem::atomic_swap_uint32" => aura_host_mem_atomic_swap_uint32(host_builtins::host_mem_atomic_swap_uint32);
-    owned "mem::atomic_swap_uint64" => aura_host_mem_atomic_swap_uint64(host_builtins::host_mem_atomic_swap_uint64);
-    owned "mem::atomic_add_uint32" => aura_host_mem_atomic_add_uint32(host_builtins::host_mem_atomic_add_uint32);
-    owned "mem::atomic_add_uint64" => aura_host_mem_atomic_add_uint64(host_builtins::host_mem_atomic_add_uint64);
-    owned "mem::atomic_compare_exchange_uint32" => aura_host_mem_atomic_compare_exchange_uint32(host_builtins::host_mem_atomic_compare_exchange_uint32);
-    owned "mem::atomic_compare_exchange_uint64" => aura_host_mem_atomic_compare_exchange_uint64(host_builtins::host_mem_atomic_compare_exchange_uint64);
-    owned "mem::fence" => aura_host_mem_fence(host_builtins::host_mem_fence);
+    unsafe_owned "mem::read_bool" => aura_host_mem_read_bool(host_builtins::host_mem_read_bool);
+    unsafe_owned "mem::write_bool" => aura_host_mem_write_bool(host_builtins::host_mem_write_bool);
+    unsafe_owned "mem::volatile_read_bool" => aura_host_mem_volatile_read_bool(host_builtins::host_mem_volatile_read_bool);
+    unsafe_owned "mem::volatile_write_bool" => aura_host_mem_volatile_write_bool(host_builtins::host_mem_volatile_write_bool);
+    unsafe_owned "mem::read_int8" => aura_host_mem_read_int8(host_builtins::host_mem_read_int8);
+    unsafe_owned "mem::write_int8" => aura_host_mem_write_int8(host_builtins::host_mem_write_int8);
+    unsafe_owned "mem::volatile_read_int8" => aura_host_mem_volatile_read_int8(host_builtins::host_mem_volatile_read_int8);
+    unsafe_owned "mem::volatile_write_int8" => aura_host_mem_volatile_write_int8(host_builtins::host_mem_volatile_write_int8);
+    unsafe_owned "mem::read_int16" => aura_host_mem_read_int16(host_builtins::host_mem_read_int16);
+    unsafe_owned "mem::write_int16" => aura_host_mem_write_int16(host_builtins::host_mem_write_int16);
+    unsafe_owned "mem::volatile_read_int16" => aura_host_mem_volatile_read_int16(host_builtins::host_mem_volatile_read_int16);
+    unsafe_owned "mem::volatile_write_int16" => aura_host_mem_volatile_write_int16(host_builtins::host_mem_volatile_write_int16);
+    unsafe_owned "mem::read_int32" => aura_host_mem_read_int32(host_builtins::host_mem_read_int32);
+    unsafe_owned "mem::write_int32" => aura_host_mem_write_int32(host_builtins::host_mem_write_int32);
+    unsafe_owned "mem::volatile_read_int32" => aura_host_mem_volatile_read_int32(host_builtins::host_mem_volatile_read_int32);
+    unsafe_owned "mem::volatile_write_int32" => aura_host_mem_volatile_write_int32(host_builtins::host_mem_volatile_write_int32);
+    unsafe_owned "mem::read_int64" => aura_host_mem_read_int64(host_builtins::host_mem_read_int64);
+    unsafe_owned "mem::write_int64" => aura_host_mem_write_int64(host_builtins::host_mem_write_int64);
+    unsafe_owned "mem::volatile_read_int64" => aura_host_mem_volatile_read_int64(host_builtins::host_mem_volatile_read_int64);
+    unsafe_owned "mem::volatile_write_int64" => aura_host_mem_volatile_write_int64(host_builtins::host_mem_volatile_write_int64);
+    unsafe_owned "mem::read_float32" => aura_host_mem_read_float32(host_builtins::host_mem_read_float32);
+    unsafe_owned "mem::write_float32" => aura_host_mem_write_float32(host_builtins::host_mem_write_float32);
+    unsafe_owned "mem::volatile_read_float32" => aura_host_mem_volatile_read_float32(host_builtins::host_mem_volatile_read_float32);
+    unsafe_owned "mem::volatile_write_float32" => aura_host_mem_volatile_write_float32(host_builtins::host_mem_volatile_write_float32);
+    unsafe_owned "mem::read_float64" => aura_host_mem_read_float64(host_builtins::host_mem_read_float64);
+    unsafe_owned "mem::write_float64" => aura_host_mem_write_float64(host_builtins::host_mem_write_float64);
+    unsafe_owned "mem::volatile_read_float64" => aura_host_mem_volatile_read_float64(host_builtins::host_mem_volatile_read_float64);
+    unsafe_owned "mem::volatile_write_float64" => aura_host_mem_volatile_write_float64(host_builtins::host_mem_volatile_write_float64);
+    unsafe_owned "mem::read_uint8" => aura_host_mem_read_uint8(host_builtins::host_mem_read_uint8);
+    unsafe_owned "mem::read_uint16" => aura_host_mem_read_uint16(host_builtins::host_mem_read_uint16);
+    unsafe_owned "mem::read_uint32" => aura_host_mem_read_uint32(host_builtins::host_mem_read_uint32);
+    unsafe_owned "mem::read_uint64" => aura_host_mem_read_uint64(host_builtins::host_mem_read_uint64);
+    unsafe_owned "mem::write_uint8" => aura_host_mem_write_uint8(host_builtins::host_mem_write_uint8);
+    unsafe_owned "mem::write_uint16" => aura_host_mem_write_uint16(host_builtins::host_mem_write_uint16);
+    unsafe_owned "mem::write_uint32" => aura_host_mem_write_uint32(host_builtins::host_mem_write_uint32);
+    unsafe_owned "mem::write_uint64" => aura_host_mem_write_uint64(host_builtins::host_mem_write_uint64);
+    unsafe_owned "mem::volatile_read_uint8" => aura_host_mem_volatile_read_uint8(host_builtins::host_mem_volatile_read_uint8);
+    unsafe_owned "mem::volatile_read_uint16" => aura_host_mem_volatile_read_uint16(host_builtins::host_mem_volatile_read_uint16);
+    unsafe_owned "mem::volatile_read_uint32" => aura_host_mem_volatile_read_uint32(host_builtins::host_mem_volatile_read_uint32);
+    unsafe_owned "mem::volatile_read_uint64" => aura_host_mem_volatile_read_uint64(host_builtins::host_mem_volatile_read_uint64);
+    unsafe_owned "mem::volatile_write_uint8" => aura_host_mem_volatile_write_uint8(host_builtins::host_mem_volatile_write_uint8);
+    unsafe_owned "mem::volatile_write_uint16" => aura_host_mem_volatile_write_uint16(host_builtins::host_mem_volatile_write_uint16);
+    unsafe_owned "mem::volatile_write_uint32" => aura_host_mem_volatile_write_uint32(host_builtins::host_mem_volatile_write_uint32);
+    unsafe_owned "mem::volatile_write_uint64" => aura_host_mem_volatile_write_uint64(host_builtins::host_mem_volatile_write_uint64);
+    unsafe_owned "mem::atomic_load_uint8" => aura_host_mem_atomic_load_uint8(host_builtins::host_mem_atomic_load_uint8);
+    unsafe_owned "mem::atomic_load_uint16" => aura_host_mem_atomic_load_uint16(host_builtins::host_mem_atomic_load_uint16);
+    unsafe_owned "mem::atomic_load_uint32" => aura_host_mem_atomic_load_uint32(host_builtins::host_mem_atomic_load_uint32);
+    unsafe_owned "mem::atomic_load_uint64" => aura_host_mem_atomic_load_uint64(host_builtins::host_mem_atomic_load_uint64);
+    unsafe_owned "mem::atomic_store_uint8" => aura_host_mem_atomic_store_uint8(host_builtins::host_mem_atomic_store_uint8);
+    unsafe_owned "mem::atomic_store_uint16" => aura_host_mem_atomic_store_uint16(host_builtins::host_mem_atomic_store_uint16);
+    unsafe_owned "mem::atomic_store_uint32" => aura_host_mem_atomic_store_uint32(host_builtins::host_mem_atomic_store_uint32);
+    unsafe_owned "mem::atomic_store_uint64" => aura_host_mem_atomic_store_uint64(host_builtins::host_mem_atomic_store_uint64);
+    unsafe_owned "mem::atomic_swap_uint8" => aura_host_mem_atomic_swap_uint8(host_builtins::host_mem_atomic_swap_uint8);
+    unsafe_owned "mem::atomic_swap_uint16" => aura_host_mem_atomic_swap_uint16(host_builtins::host_mem_atomic_swap_uint16);
+    unsafe_owned "mem::atomic_swap_uint32" => aura_host_mem_atomic_swap_uint32(host_builtins::host_mem_atomic_swap_uint32);
+    unsafe_owned "mem::atomic_swap_uint64" => aura_host_mem_atomic_swap_uint64(host_builtins::host_mem_atomic_swap_uint64);
+    unsafe_owned "mem::atomic_add_uint8" => aura_host_mem_atomic_add_uint8(host_builtins::host_mem_atomic_add_uint8);
+    unsafe_owned "mem::atomic_add_uint16" => aura_host_mem_atomic_add_uint16(host_builtins::host_mem_atomic_add_uint16);
+    unsafe_owned "mem::atomic_add_uint32" => aura_host_mem_atomic_add_uint32(host_builtins::host_mem_atomic_add_uint32);
+    unsafe_owned "mem::atomic_add_uint64" => aura_host_mem_atomic_add_uint64(host_builtins::host_mem_atomic_add_uint64);
+    unsafe_owned "mem::atomic_compare_exchange_uint8" => aura_host_mem_atomic_compare_exchange_uint8(host_builtins::host_mem_atomic_compare_exchange_uint8);
+    unsafe_owned "mem::atomic_compare_exchange_uint16" => aura_host_mem_atomic_compare_exchange_uint16(host_builtins::host_mem_atomic_compare_exchange_uint16);
+    unsafe_owned "mem::atomic_compare_exchange_uint32" => aura_host_mem_atomic_compare_exchange_uint32(host_builtins::host_mem_atomic_compare_exchange_uint32);
+    unsafe_owned "mem::atomic_compare_exchange_uint64" => aura_host_mem_atomic_compare_exchange_uint64(host_builtins::host_mem_atomic_compare_exchange_uint64);
+    unsafe_owned "mem::__pointer_offset" => aura_host_mem_pointer_offset(host_builtins::host_mem_pointer_offset);
+    unsafe_owned "mem::fence" => aura_host_mem_fence(host_builtins::host_mem_fence);
+    unsafe_owned "mem::alloc" => aura_host_mem_alloc(host_builtins::host_mem_alloc);
+    unsafe_owned "mem::free" => aura_host_mem_free(host_builtins::host_mem_free);
+    unsafe_owned "mem::realloc" => aura_host_mem_realloc(host_builtins::host_mem_realloc);
+    unsafe_owned "mem::heap_add_region" => aura_host_mem_heap_add_region(host_builtins::host_mem_heap_add_region);
+    unsafe_owned "mem::heap_free_bytes" => aura_host_mem_heap_free_bytes(host_builtins::host_mem_heap_free_bytes);
     owned "sync::__aura_cell_new" => aura_host_sync_cell_new(crate::runtime_value::sync_host::host_cell_new);
     owned "sync::__aura_cell_take" => aura_host_sync_cell_take(crate::runtime_value::sync_host::host_cell_take);
     owned "sync::__aura_cell_put" => aura_host_sync_cell_put(crate::runtime_value::sync_host::host_cell_put);
@@ -17504,16 +18303,104 @@ host_builtin_entries! {
     borrowed "iter::__aura_generator_close" => aura_host_iter_generator_close(|args| direct_generator_handle("iter::__aura_generator_close", args));
 }
 
-/// Moves a generator body's frame-stack entries out of the task's stack
-/// while the body is suspended, so the caller's calls stay on top.
+/// Moves a generator body's per-call runtime state out of the task's state
+/// while the body is suspended, so the caller's frames, cleanups, views, and
+/// mutable sinks stay isolated on top.
 #[derive(Default)]
 struct DirectGeneratorFrames {
     base: usize,
     saved: Vec<usize>,
+    cleanup_stack: Vec<DirectCleanupRegistration>,
+    cleanup_draining: bool,
+    primary_runtime_diagnostic: Option<Diagnostic>,
+    manager_exit_failures: Vec<String>,
+    returned_views: DirectReturnedViewStack,
+    pending_mutable_sinks: Option<DirectPendingMutableSinks>,
+    mutable_sinks: HashMap<i64, DirectMutableWritebackSink>,
+    foreign_callback_cleanup_base: Option<usize>,
+    foreign_callback_failure: Option<Box<dyn std::any::Any + Send>>,
+    boundary_depth: usize,
+    drop_trap_exit: Option<crate::runtime_value::PendingGeneratorDropExit>,
+    body_box: Option<Arc<AtomicUsize>>,
+    /// Creation order, and a handle to the generator these frames belong
+    /// to, set once the generator exists.
+    sequence: u64,
+    generator: Arc<std::sync::OnceLock<crate::runtime_value::WeakGeneratorValue>>,
+}
+
+static NEXT_DIRECT_GENERATOR_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+impl DirectGeneratorFrames {
+    fn with_body_box(body_box: Arc<AtomicUsize>) -> Self {
+        let mut frames = Self::default();
+        frames.body_box = Some(body_box);
+        frames.sequence = NEXT_DIRECT_GENERATOR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        frames
+    }
+
+    fn swap_task_state(&mut self) {
+        with_direct_task_runtime_state(|state| {
+            mem::swap(&mut state.cleanup_stack, &mut self.cleanup_stack);
+            mem::swap(&mut state.cleanup_draining, &mut self.cleanup_draining);
+            mem::swap(
+                &mut state.primary_runtime_diagnostic,
+                &mut self.primary_runtime_diagnostic,
+            );
+            mem::swap(
+                &mut state.manager_exit_failures,
+                &mut self.manager_exit_failures,
+            );
+            mem::swap(&mut state.returned_views, &mut self.returned_views);
+            mem::swap(
+                &mut state.pending_mutable_sinks,
+                &mut self.pending_mutable_sinks,
+            );
+            mem::swap(&mut state.mutable_sinks, &mut self.mutable_sinks);
+            mem::swap(
+                &mut state.foreign_callback_cleanup_base,
+                &mut self.foreign_callback_cleanup_base,
+            );
+            mem::swap(
+                &mut state.foreign_callback_failure,
+                &mut self.foreign_callback_failure,
+            );
+            mem::swap(state.rust_boundary_depth_mut(), &mut self.boundary_depth);
+            mem::swap(&mut state.generator_drop_exit, &mut self.drop_trap_exit);
+            let armed = state.generator_drop_exit.is_some();
+            // SAFETY: the state owns its frame stack.
+            unsafe { (*state.frames.as_ptr()).generator_drop_exit_armed = armed };
+            state.refresh_frame_flags();
+            state.refresh_stack_limit();
+        });
+    }
+}
+
+impl Drop for DirectGeneratorFrames {
+    fn drop(&mut self) {
+        for word in self.saved.drain(..) {
+            frame_stack::release_frame_word(word);
+        }
+        if let Some(body_box) = self.body_box.take() {
+            let raw = body_box.swap(0, Ordering::AcqRel);
+            if raw != 0 {
+                // SAFETY: `raw` was created by `untracked_boxed_value` in
+                // `direct_generator_start` and has not yet been released.
+                unsafe { release_untracked_value(raw as *mut OpaqueValue) };
+            }
+        }
+    }
 }
 
 impl GeneratorHooks for DirectGeneratorFrames {
     fn before_resume(&mut self) {
+        if self.generator.get().is_some() && !self.cleanup_stack.is_empty() {
+            let sequence = self.sequence;
+            with_direct_task_runtime_state(|state| {
+                state.suspended_generators_with_exits.remove(&sequence);
+            });
+        }
+        self.swap_task_state();
         let Some(stack) = current_direct_frame_stack() else {
             return;
         };
@@ -17525,12 +18412,23 @@ impl GeneratorHooks for DirectGeneratorFrames {
     }
 
     fn after_suspend(&mut self) {
-        let Some(stack) = current_direct_frame_stack() else {
+        if let Some(stack) = current_direct_frame_stack() {
+            // SAFETY: as in `before_resume`.
+            let stack = unsafe { &mut *stack.as_ptr() };
+            self.saved = stack.take_entries_from(self.base);
+        }
+        self.swap_task_state();
+        if self.cleanup_stack.is_empty() {
             return;
-        };
-        // SAFETY: as in `before_resume`.
-        let stack = unsafe { &mut *stack.as_ptr() };
-        self.saved = stack.take_entries_from(self.base);
+        }
+        if let Some(generator) = self.generator.get() {
+            let (sequence, generator) = (self.sequence, generator.clone());
+            with_direct_task_runtime_state(|state| {
+                state
+                    .suspended_generators_with_exits
+                    .insert(sequence, generator);
+            });
+        }
     }
 }
 
@@ -17542,24 +18440,33 @@ fn direct_generator_start(
         .pop()
         .filter(|body| matches!(body, Value::Function(_)))
         .ok_or_else(|| Diagnostic::new("generator start expects one closure argument"))?;
+    let body_box = Arc::new(AtomicUsize::new(untracked_boxed_value(body, None) as usize));
+    let body_box_for_run = Arc::clone(&body_box);
     let run = move || {
-        let function = untracked_boxed_value(body, None);
+        let function = body_box_for_run.load(Ordering::Acquire) as *mut OpaqueValue;
         let result = aura_direct_function_call(function, std::ptr::null_mut(), 0);
         if !result.is_null() {
             unregister_direct_owned_value(result);
             // SAFETY: the call returned an owned box.
             unsafe { release_untracked_value(result) };
         }
-        // SAFETY: the box was created above and nothing else holds it.
-        unsafe { release_untracked_value(function) };
+        let raw = body_box_for_run.swap(0, Ordering::AcqRel);
+        if raw != 0 {
+            // SAFETY: the box was created above and nothing else holds it.
+            unsafe { release_untracked_value(raw as *mut OpaqueValue) };
+        }
         Ok(())
     };
-    Ok(Value::Generator(GeneratorValue::new(
+    let frames = DirectGeneratorFrames::with_body_box(body_box);
+    let handle = Arc::clone(&frames.generator);
+    let generator = GeneratorValue::new(
         run,
         DIRECT_GENERATOR_STACK_BYTES,
         false,
-        Some(Box::new(DirectGeneratorFrames::default())),
-    )))
+        Some(Box::new(frames)),
+    );
+    let _ = handle.set(generator.downgrade());
+    Ok(Value::Generator(generator))
 }
 
 fn direct_generator_yield(
@@ -22575,7 +23482,13 @@ unsafe fn release_abandoned_direct_task_args(args_address: usize) {
 fn allocate_direct_task_claim_flag() -> usize {
     let address = Box::into_raw(Box::new(AtomicBool::new(false))) as usize;
     #[cfg(test)]
-    DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+    {
+        assert!(
+            DIRECT_TASK_CLAIM_FLAG_GUARD_HELD.load(Ordering::Acquire),
+            "unit tests starting direct tasks must hold direct_task_claim_flag_test_guard()"
+        );
+        DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
     address
 }
 
@@ -23227,7 +24140,9 @@ unsafe fn recover_direct_call(spawn: DirectTaskSpawn) -> *mut OpaqueValue {
             // the caller's run now, as they do when a task is cancelled
             // outside any recovered call.
             caller.restore();
-            drain_cleanups_for_task_exit();
+            if let Some(diagnostic) = drain_cleanups_for_task_exit() {
+                fail_current_lightweight_task(diagnostic)
+            }
             exit.resume()
         }
     };
@@ -23236,12 +24151,22 @@ unsafe fn recover_direct_call(spawn: DirectTaskSpawn) -> *mut OpaqueValue {
 }
 
 /// Runs the current state's `with` exits before its task exits for a
-/// reason other than a trap.
-fn drain_cleanups_for_task_exit() {
-    if direct_runtime_error_capture_enabled() {
-        drain_direct_cleanup_stack();
-    }
+/// reason other than a trap. Returns the first trap raised by a cleanup
+/// exit instead of unwinding out of the caller's boundary.
+fn drain_cleanups_for_task_exit() -> Option<Diagnostic> {
+    let failure = if direct_runtime_error_capture_enabled() {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(drain_direct_cleanup_stack)) {
+            Ok(()) => None,
+            Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
+                Ok(signal) => Some(signal.0),
+                Err(payload) => std::panic::resume_unwind(payload),
+            },
+        }
+    } else {
+        None
+    };
     with_direct_task_runtime_state(|state| state.manager_exit_failures.clear());
+    failure
 }
 
 thread_local! {
@@ -23385,7 +24310,10 @@ fn recycle_recovered_state(mut state: Box<DirectTaskRuntimeState>) {
         && state.returned_views.is_empty()
         && state.pending_mutable_sinks.is_none()
         && state.mutable_sinks.is_empty()
-        && state.manager_exit_failures.is_empty();
+        && state.manager_exit_failures.is_empty()
+        && state.rust_boundary_depth() == 0
+        && state.generator_drop_exit.is_none()
+        && state.suspended_generators_with_exits.is_empty();
     if !clean {
         release_direct_task_runtime_state(state);
         return;
@@ -23477,6 +24405,7 @@ fn stop_exit_at_recovered_call() {
         };
         // The function's exits ran before it recorded the exit. Its state
         // goes as a failed task's does.
+        class_drop::drop_abandoned_owners();
         if let Some(state) = leave_recovered_call() {
             recycle_recovered_state(state);
         }
@@ -23502,8 +24431,11 @@ fn stop_exit_at_recovered_call() {
                 }
             }
             Err(exit) => {
-                drain_cleanups_for_task_exit();
-                exit.restore();
+                if let Some(diagnostic) = drain_cleanups_for_task_exit() {
+                    crate::runtime_value::PendingTaskExit::from_trap(diagnostic).restore();
+                } else {
+                    exit.restore();
+                }
             }
         }
     }
@@ -23731,7 +24663,11 @@ fn direct_assert_string(value: i64, field: &str) -> String {
 /// The code a failed check reports: `AU4001` for an `assert` (kind 0) and
 /// `AU4009` for a contract clause (kinds 1 and 2).
 fn direct_assert_diagnostic(message: String, line: i64, column: i64, kind: i64) -> Diagnostic {
-    let code = if kind == 0 { "AU4001" } else { "AU4009" };
+    let code = match kind {
+        0 => "AU4001",
+        5 => "AU4033",
+        _ => "AU4009",
+    };
     match runtime_span(line, column) {
         Some(span) => Diagnostic::coded_at(code, span, message),
         None => Diagnostic::coded(code, message),
@@ -23973,3 +24909,34 @@ mod tests;
 #[cfg(test)]
 #[path = "native_union_injection_security_tests.rs"]
 mod union_injection_security_tests;
+
+#[path = "native_frozen.rs"]
+mod frozen;
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_integer_bits(
+    value: *mut OpaqueValue,
+    count: i64,
+    opcode: i64,
+) -> *mut OpaqueValue {
+    use aura_core::integer_bits::BitMethod;
+    task_runtime_boundary(|| {
+        if count < 0 {
+            runtime_diagnostic_error(Diagnostic::coded(
+                "AU4034",
+                "rotation count must be nonnegative",
+            ));
+        }
+        let Some(method) = BitMethod::ALL.get(opcode as usize) else {
+            runtime_error("unknown integer bit method");
+        };
+        let Value::Int(integer) = (unsafe { value_ref(value) }) else {
+            runtime_error("integer bit method requires an integer");
+        };
+        let kind = integer.runtime_kind().unwrap_or(IntegerKind::Int64);
+        let result = method
+            .apply(integer, kind, count)
+            .unwrap_or_else(|msg| runtime_error(msg));
+        boxed_value(Value::Int(result))
+    })
+}

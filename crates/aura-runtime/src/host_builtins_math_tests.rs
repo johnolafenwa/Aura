@@ -232,6 +232,20 @@ fn arguments_of_the_wrong_type_or_count_are_rejected() {
         assert!(host(name, vec![Value::Float(1.0)]).is_err(), "{name}");
         assert!(host(name, vec![int(1), int(1)]).is_err(), "{name}");
     }
+    // An integer outside `int64` is not an `int64` argument.
+    let wide = Value::Int(IntegerValue::from_u64(u64::MAX));
+    for (name, args) in [
+        ("math::isqrt", vec![wide.clone()]),
+        ("math::gcd", vec![int(4), wide]),
+    ] {
+        let error = host(name, args).expect_err(name);
+        assert_eq!(error.code, "AU4001", "{name}");
+        assert!(
+            error.message.contains("expects `int64`"),
+            "{}",
+            error.message
+        );
+    }
 }
 
 fn encoding_result(value: Value) -> (String, Vec<Value>) {

@@ -139,6 +139,19 @@ pub struct GeneratorValue {
     inner: Arc<Mutex<GeneratorState>>,
 }
 
+/// A handle that does not keep its generator alive.
+#[derive(Clone)]
+pub struct WeakGeneratorValue {
+    inner: std::sync::Weak<Mutex<GeneratorState>>,
+}
+
+impl WeakGeneratorValue {
+    /// The generator, while any strong handle to it remains.
+    pub fn upgrade(&self) -> Option<GeneratorValue> {
+        self.inner.upgrade().map(|inner| GeneratorValue { inner })
+    }
+}
+
 impl std::fmt::Debug for GeneratorValue {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("<generator>")
@@ -153,8 +166,8 @@ impl PartialEq for GeneratorValue {
 
 impl Drop for GeneratorValue {
     /// Dropping the last handle of a suspended generator closes it, so the
-    /// body's `with` exits run. A failure there has no caller to reach: the
-    /// direct backend reports a trap itself, and the interpreter drops it.
+    /// body's `with` exits run. Any failure is recorded for the enclosing
+    /// runtime boundary instead of unwinding or jumping out of `Drop`.
     fn drop(&mut self) {
         if Arc::strong_count(&self.inner) != 1
             || std::thread::panicking()
@@ -167,9 +180,18 @@ impl Drop for GeneratorValue {
             state.status == GeneratorStatus::Suspended && state.owner == std::thread::current().id()
         };
         if suspended {
-            let _ = self.close();
+            if let Err(error) = self.close_inner(true) {
+                record_generator_drop_exit(PendingGeneratorDropExit::Trap(error));
+            }
         }
     }
+}
+
+/// An exit raised while closing a suspended generator from [`GeneratorValue::drop`],
+/// deferred until the enclosing Rust destructors finish running.
+pub(crate) enum PendingGeneratorDropExit {
+    Trap(Diagnostic),
+    Cancelled,
 }
 
 thread_local! {
@@ -177,6 +199,13 @@ thread_local! {
     /// generators are then discarded without running their bodies, whose
     /// values the same release covers.
     static DROP_CLOSE_SUSPENDED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Hands an exit to the enclosing runtime boundary of the running task,
+/// which propagates it once the boundary's work returns. Outside any
+/// boundary the exit is dropped, as before boundaries tracked it.
+fn record_generator_drop_exit(exit: PendingGeneratorDropExit) {
+    crate::native_runtime::record_generator_drop_exit(exit);
 }
 
 /// Runs `work` with dropped generators discarded instead of closed.
@@ -244,10 +273,17 @@ impl GeneratorValue {
         }
     }
 
+    /// A handle that does not keep the generator alive.
+    pub fn downgrade(&self) -> WeakGeneratorValue {
+        WeakGeneratorValue {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
+
     /// Runs the body until it yields (true, with the item ready for
     /// [`GeneratorValue::take_item`]) or ends (false).
     pub fn resume(&self) -> Result<bool, Diagnostic> {
-        self.drive(GeneratorInput::Next)
+        self.drive(GeneratorInput::Next, false)
     }
 
     /// Whether this handle is the sole remaining reference to a generator
@@ -263,6 +299,10 @@ impl GeneratorValue {
     /// Closes the generator: a suspended body sees its `yield` return false
     /// and runs its cleanup. Closing an ended generator does nothing.
     pub fn close(&self) -> Result<(), Diagnostic> {
+        self.close_inner(false)
+    }
+
+    fn close_inner(&self, from_drop: bool) -> Result<(), Diagnostic> {
         let status = lock(&self.inner).status;
         match status {
             GeneratorStatus::Fresh => {
@@ -272,7 +312,7 @@ impl GeneratorValue {
                 Ok(())
             }
             GeneratorStatus::Suspended => {
-                if self.drive(GeneratorInput::Close)? {
+                if self.drive(GeneratorInput::Close, from_drop)? {
                     let mut state = lock(&self.inner);
                     state.item = None;
                     state.status = GeneratorStatus::Failed;
@@ -297,7 +337,7 @@ impl GeneratorValue {
             .ok_or_else(|| generator_error("a generator has no item ready"))
     }
 
-    fn drive(&self, mut input: GeneratorInput) -> Result<bool, Diagnostic> {
+    fn drive(&self, mut input: GeneratorInput, from_drop: bool) -> Result<bool, Diagnostic> {
         let mut coroutine = {
             let mut state = lock(&self.inner);
             if state.owner != std::thread::current().id() {
@@ -375,10 +415,11 @@ impl GeneratorValue {
                     return Ok(true);
                 }
                 Ok(CoroutineResult::Yield(GeneratorSignal::Wait(TaskYield::Exit))) => {
-                    // The body's task is exiting, so the body never runs
-                    // again. Its stack goes back to the pool now: the exit
-                    // does not return here, whether it ends the task or
-                    // stops at a `control.recover` call around this resume.
+                    // The body's task is exiting, so the body never runs again.
+                    // Retire the coroutine stack first, then propagate the exit
+                    // through Rust error/unwind paths rather than jumping out
+                    // across active Rust frames or destructors.
+                    let exit = super::PendingTaskExit::take();
                     {
                         let mut state = lock(&self.inner);
                         state.status = GeneratorStatus::Failed;
@@ -386,6 +427,29 @@ impl GeneratorValue {
                         // again, and the task's ledger owns its values.
                         unsafe { coroutine.force_reset() };
                         state.retire(coroutine);
+                        if let Some(exit) = exit {
+                            match exit.into_trap() {
+                                Ok(error) => {
+                                    state.failure = Some(error.clone());
+                                    return Err(error);
+                                }
+                                Err(other) => {
+                                    drop(state);
+                                    if other.is_cancelled() {
+                                        if from_drop {
+                                            record_generator_drop_exit(
+                                                PendingGeneratorDropExit::Cancelled,
+                                            );
+                                            return Ok(false);
+                                        }
+                                        panic::panic_any(super::TaskCancelledSignal);
+                                    }
+                                    other.restore();
+                                    super::yield_current_lightweight_task(TaskYield::Exit);
+                                    std::process::abort()
+                                }
+                            }
+                        }
                     }
                     super::yield_current_lightweight_task(TaskYield::Exit);
                     std::process::abort()

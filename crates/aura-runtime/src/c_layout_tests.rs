@@ -12,6 +12,7 @@ fn scalars(name: &str, fields: &[FfiScalar]) -> CStruct {
                 kind: CFieldKind::Scalar(*scalar),
             })
             .collect(),
+        layout_controls: Default::default(),
         union: false,
     }
 }
@@ -28,6 +29,7 @@ fn of_kinds(name: &str, union: bool, kinds: Vec<CFieldKind>) -> CStruct {
                 kind,
             })
             .collect(),
+        layout_controls: Default::default(),
         union,
     }
 }
@@ -85,18 +87,22 @@ fn a_struct_is_laid_out_as_c_lays_it_out() {
         outer.leaves(),
         [
             CLeaf {
+                bits: None,
                 offset: 0,
                 scalar: I8
             },
             CLeaf {
+                bits: None,
                 offset: 2,
                 scalar: I16
             },
             CLeaf {
+                bits: None,
                 offset: 4,
                 scalar: I8
             },
             CLeaf {
+                bits: None,
                 offset: 6,
                 scalar: I8
             },
@@ -475,4 +481,146 @@ fn arrays_and_unions_are_classified_by_every_scalar_that_overlaps() {
     for abi in [CAbi::SysV64, CAbi::Aapcs64, CAbi::Win64] {
         assert_eq!(big.passing(abi), CPassing::Memory);
     }
+}
+
+#[test]
+fn overflowing_c_struct_layout_does_not_panic_in_passing() {
+    let overflowing = of_kinds(
+        "Overflowing",
+        false,
+        vec![array(CFieldKind::Scalar(FfiScalar::U64), usize::MAX / 4)],
+    );
+    assert_eq!(overflowing.checked_size(), None);
+    assert!(overflowing.validate_bounds().is_err());
+    for abi in [CAbi::SysV64, CAbi::Aapcs64, CAbi::Win64] {
+        assert_eq!(overflowing.passing(abi), CPassing::Memory);
+    }
+
+    // Large nested arrays must classify as CPassing::Memory in O(1) space
+    // without expanding leaves().
+    let four_gib = of_kinds(
+        "FourGiB",
+        false,
+        vec![array(
+            array(CFieldKind::Scalar(FfiScalar::U8), 65536),
+            65536,
+        )],
+    );
+    assert_eq!(four_gib.checked_size(), Some(4 * 1024 * 1024 * 1024));
+    assert_eq!(four_gib.checked_leaf_count(), Some(4 * 1024 * 1024 * 1024));
+    assert!(four_gib.validate_bounds().is_err());
+    for abi in [CAbi::SysV64, CAbi::Aapcs64, CAbi::Win64] {
+        assert_eq!(four_gib.passing(abi), CPassing::Memory);
+    }
+
+    let valid = of_kinds(
+        "Small",
+        false,
+        vec![array(CFieldKind::Scalar(FfiScalar::U32), 16)],
+    );
+    assert_eq!(valid.checked_size(), Some(64));
+    assert_eq!(valid.checked_leaf_count(), Some(16));
+    assert!(valid.validate_bounds().is_ok());
+}
+
+#[test]
+fn validate_bounds_counts_overlapping_union_leaves() {
+    // The members of a union overlap in bytes but each counts its scalars.
+    let half = MAX_C_STRUCT_LEAVES / 2;
+    let fits = of_kinds(
+        "Fits",
+        true,
+        vec![
+            array(CFieldKind::Scalar(U8), half),
+            array(CFieldKind::Scalar(U8), half),
+        ],
+    );
+    assert_eq!(fits.checked_size(), Some(half));
+    assert_eq!(fits.checked_leaf_count(), Some(MAX_C_STRUCT_LEAVES));
+    assert!(fits.validate_bounds().is_ok());
+
+    let too_many = of_kinds(
+        "TooMany",
+        true,
+        vec![
+            array(CFieldKind::Scalar(U8), half),
+            array(CFieldKind::Scalar(U8), half + 1),
+        ],
+    );
+    assert_eq!(too_many.checked_size(), Some(half + 1));
+    assert_eq!(
+        too_many.validate_bounds(),
+        Err(format!(
+            "C layout `TooMany` has {} scalar elements, which exceeds the maximum of {MAX_C_STRUCT_LEAVES}",
+            MAX_C_STRUCT_LEAVES + 1
+        ))
+    );
+}
+
+#[test]
+fn bit_field_storage_and_calling_classes_follow_the_record_abi() {
+    let mut s = scalars("Bits", &[U8, U16, U32, U8]);
+    s.layout_controls
+        .bit_widths
+        .extend([("f1".into(), 3), ("f2".into(), 6)]);
+    assert_eq!(
+        (s.size(), s.align(), s.field_offsets()),
+        (4, 4, vec![0, 1, 1, 3])
+    );
+    assert_eq!(s.leaves()[2].bits, Some((3, 6)));
+    s.layout_controls.microsoft_bit_fields = true;
+    assert_eq!(
+        (s.size(), s.align(), s.field_offsets()),
+        (12, 4, vec![0, 2, 4, 8])
+    );
+    s.layout_controls.packed = true;
+    assert_eq!(
+        (s.size(), s.align(), s.field_offsets()),
+        (8, 1, vec![0, 1, 3, 7])
+    );
+    s.layout_controls.alignment = Some(16);
+    assert_eq!((s.size(), s.align()), (16, 16));
+    let mut small = scalars("Small", &[U8, U32]);
+    small.layout_controls.packed = true;
+    assert_eq!(small.passing(CAbi::SysV64), CPassing::Memory);
+    assert_eq!(
+        small.passing(CAbi::Aapcs64),
+        CPassing::Registers(vec![int(0, 5)])
+    );
+    assert_eq!(small.passing(CAbi::Win64), CPassing::Memory);
+    assert_eq!(
+        bit_chunks(7, 3).collect::<Vec<_>>(),
+        [(0, 7, 128), (1, 0, 3)]
+    );
+    assert_eq!(bit_chunks(1, 64).count(), 9);
+}
+
+#[test]
+fn packed_bit_fields_classify_every_integer_register_they_overlap() {
+    let mut record = scalars("Crossing", &[U64, U64]);
+    record.layout_controls.bit_widths = [("f0".into(), 60), ("f1".into(), 12)].into();
+
+    assert_eq!(record.field_offsets(), [0, 8]);
+    assert_eq!((record.size(), record.align()), (16, 8));
+    record.layout_controls.packed = true;
+    assert_eq!(record.field_offsets(), [0, 7]);
+    assert_eq!((record.size(), record.align()), (9, 1));
+    assert_eq!(
+        record.passing(CAbi::SysV64),
+        CPassing::Registers(vec![int(0, 8), int(8, 1)])
+    );
+}
+
+#[test]
+fn over_aligned_float_record_padding_is_not_an_aarch64_float_member() {
+    let mut record = scalars("WideFloat", &[F32]);
+    record.layout_controls.alignment = Some(16);
+    assert_eq!(
+        record.passing(CAbi::Aapcs64),
+        CPassing::Registers(vec![int(0, 8), int(8, 8)])
+    );
+    assert_eq!(
+        record.passing(CAbi::SysV64),
+        CPassing::Registers(vec![sse(0, 8)])
+    );
 }

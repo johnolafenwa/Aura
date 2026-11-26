@@ -1,5 +1,6 @@
 "use strict";
 
+const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const childProcess = require("node:child_process");
@@ -563,6 +564,29 @@ test("compiler bridge ignores workspace binaries and cargo unless explicitly opt
       args: [],
       cwd: workspace
     });
+
+    // An explicit absolute path scopes workspace compiler opt-in to that checkout only.
+    process.env.AURA_LSP_USE_WORKSPACE_COMPILER = path.join(tempRoot, "other-checkout");
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: binaryName(),
+      args: [],
+      cwd: undefined
+    });
+    process.env.AURA_LSP_USE_WORKSPACE_COMPILER = workspace;
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: path.join(workspace, "target", "debug", binaryName()),
+      args: [],
+      cwd: workspace
+    });
+
+    // A directory path in AURA_LSP_AURA_PATH is ignored rather than treated as a binary.
+    delete process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
+    process.env.AURA_LSP_AURA_PATH = tempRoot;
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: binaryName(),
+      args: [],
+      cwd: undefined
+    });
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) {
@@ -661,10 +685,8 @@ test("compiler bridge uri and command helpers handle direct utility cases", asyn
   const encodedPath = path.join(repoRoot, "examples/modules/simple_import.au").replace(/ /g, "%20");
   assert.equal(uriToPath(`file://${encodedPath}`), path.join(repoRoot, "examples/modules/simple_import.au"));
   assert.equal(uriToPath("file:///C:/aura/examples/main.au", "win32"), "C:\\aura\\examples\\main.au");
-  assert.equal(
-    uriToPath("file://server/share/project/main.au", "win32"),
-    "\\\\server\\share\\project\\main.au"
-  );
+  // A URI with a host names a remote share, which the server never opens.
+  assert.equal(uriToPath("file://server/share/project/main.au", "win32"), null);
   assert.equal(uriToPath("not-a-file-uri"), null);
   assert.equal(binaryName("win32"), "aura.exe");
   assert.equal(binaryName("linux"), "aura");
@@ -750,7 +772,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
         "lines.on('line', (line) => {",
         "  const request = JSON.parse(line);",
         "  const result = request.method === 'analyze'",
-        "    ? { diagnostics: [], symbols: [], occurrences: [] }",
+        "    ? { diagnostics: [], symbols: [], occurrences: [], inactive_lines: [{ start: 2, end: 3 }] }",
         "    : [{ name: 'len', kind: 'method', detail: 'len() -> intsize' }];",
         `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${JSON.stringify(
           SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
@@ -763,7 +785,13 @@ test("compiler bridge reuses one persistent compiler process", async () => {
     process.env.AURA_LSP_AURA_PATH = fakeCompiler;
     setWorkspaceRoots([]);
 
-    const analysis = await analyzeWithCompiler("file:///workspace/main.au", "print(1)\n");
+    const analysis = await analyzeWithCompiler(
+      "file:///workspace/main.au", 'import build\nif build.freestanding:\n    print("😀")'
+    );
+    assert.deepEqual(compilerDiagnosticsToLsp(analysis)[0].range, {
+      start: { line: 2, character: 0 },
+      end: { line: 2, character: 15 }
+    });
     const completions = await completeWithCompiler(
       "file:///workspace/main.au",
       "value.\n",
@@ -1025,6 +1053,32 @@ test("persistent compiler service reports spawn and empty-stderr exit failures",
   });
   await assert.rejects(exited.request("analyze", {}), /status 7/);
   exited.dispose();
+});
+
+test("persistent compiler service handles stdin EPIPE and non-object JSON responses", async () => {
+  const stdinFailure = new CompilerService({
+    cmd: process.execPath,
+    args: ["-e", "process.stdin.resume()"],
+    cwd: repoRoot
+  });
+  const pendingStdin = stdinFailure.request("analyze", {});
+  stdinFailure.child.stdin.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+  await assert.rejects(pendingStdin, /EPIPE/);
+  assert.equal(stdinFailure.closed, true);
+  stdinFailure.dispose();
+
+  for (const payload of ["null\n", "42\n", "[]\n"]) {
+    const badShape = new CompilerService({
+      cmd: process.execPath,
+      args: ["-e", "process.stdin.resume()"],
+      cwd: repoRoot
+    });
+    const pending = badShape.request("analyze", {});
+    badShape.handleStdout(payload);
+    await assert.rejects(pending, /expected JSON object/);
+    assert.equal(badShape.closed, true);
+    badShape.dispose();
+  }
 });
 
 test("compiler bridge accepts non-file URIs when using the compiler subprocess helpers", async () => {
@@ -7225,7 +7279,7 @@ test("without aura on PATH the server uses an installed compiler or reports it m
   }
 });
 
-test("persistent compiler service sets AURA_OFFLINE=1 by default without overriding explicit env", async () => {
+test("persistent compiler service enforces AURA_OFFLINE=1 and passes --offline even when process.env.AURA_OFFLINE is 0", async () => {
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -7233,7 +7287,7 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
     "  const request = JSON.parse(line);",
     `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${JSON.stringify(
       SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
-    )}, result: { offline: process.env.AURA_OFFLINE } }) + '\\n');`,
+    )}, result: { offline: process.env.AURA_OFFLINE, argv: process.argv.slice(1) } }) + '\\n');`,
     "});"
   ].join("\n");
   const savedOffline = process.env.AURA_OFFLINE;
@@ -7246,7 +7300,10 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
       args: ["-e", script],
       cwd: repoRoot
     });
-    assert.deepEqual(await defaultService.request("analyze", {}), { offline: "1" });
+    assert.deepEqual(await defaultService.request("analyze", {}), {
+      offline: "1",
+      argv: ["lsp", "--offline"]
+    });
     defaultService.dispose();
 
     process.env.AURA_OFFLINE = "0";
@@ -7255,7 +7312,10 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
       args: ["-e", script],
       cwd: repoRoot
     });
-    assert.deepEqual(await overrideService.request("analyze", {}), { offline: "0" });
+    assert.deepEqual(await overrideService.request("analyze", {}), {
+      offline: "1",
+      argv: ["lsp", "--offline"]
+    });
     overrideService.dispose();
   } finally {
     if (defaultService) {
@@ -7319,5 +7379,153 @@ test("compiler bridge completes ordered collection methods and their signatures"
     const item = entries?.find((entry) => entry.name === method);
     assert.ok(item, `missing ${binding}.${method}`);
     assert.ok(item.detail.includes(signature), item.detail);
+  }
+});
+
+test("discarded suites become unnecessary hints over whole lines, including a Unicode EOF", () => {
+  const source = 'if build.hosted:\r\n    print(1)\r\nelse:\r\n    print("😀")';
+  const analysis = { inactive_lines: [{ start: 3, end: 4 }] };
+  assert.deepEqual(compilerDiagnosticsToLsp(analysis, pointUri, source), [{
+    range: { start: { line: 3, character: 0 }, end: { line: 3, character: 15 } },
+    severity: 4,
+    tags: [1],
+    source: "aura-compiler",
+    message: "Inactive for this build configuration"
+  }]);
+  assert.deepEqual(compilerDiagnosticsToLsp(analysis)[0].range.end, { line: 4, character: 0 });
+});
+
+test("freestanding editor checks are opt-in and preserve module definitions", async () => {
+  setWorkspaceRoots([repoRoot]);
+  const uri = pointUri;
+  const lines = [
+    "mut ticks: uint64 = 0",
+    'export "C" def get() -> uint64:',
+    "    return ticks",
+    'export "C" def next_tick(ticks: uint64) -> uint64:',
+    "    return ticks"
+  ];
+  const source = lines.join("\n");
+  const previous = process.env.AURA_LSP_FREESTANDING;
+  try {
+    delete process.env.AURA_LSP_FREESTANDING;
+    const hosted = await analyzeWithCompiler(uri, source);
+    assert.ok(hosted.diagnostics.some((diagnostic) => diagnostic.code === "AU3030"));
+    process.env.AURA_LSP_FREESTANDING = "1";
+    const bare = await analyzeWithCompiler(uri, source);
+    assert.deepEqual(bare.diagnostics, []);
+    const global = findOccurrence(bare, 2, lines[2].indexOf("ticks"));
+    const local = findOccurrence(bare, 4, lines[4].indexOf("ticks"));
+    assert.match(global.hover, /module binding ticks: uint64/);
+    assert.equal(global.definition.line, 0);
+    assert.equal(local.definition.line, 3);
+    const completions = await completeWithCompiler(uri, source, 2, 4, null);
+    assert.ok(completions.some((item) => item.name === "ticks" && item.kind === "variable"));
+    const unsupported = await analyzeWithCompiler(uri, 'export "C" def entry() -> None:\n    print("text")\n');
+    assert.ok(unsupported.diagnostics.some((diagnostic) => diagnostic.code === "AU2052"));
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AURA_LSP_FREESTANDING;
+    } else {
+      process.env.AURA_LSP_FREESTANDING = previous;
+    }
+  }
+});
+
+test("compiler bridge resolves delegated members, decorated methods, and property writes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-class-items-lsp-"));
+  const lines = [
+    "trait Named:",
+    "    def name(self) -> str",
+    "class Engine:",
+    "    pass",
+    "impl Named for Engine:",
+    "    def name(self) -> str:",
+    '        return "engine"',
+    "type Answer = Callable[def() -> int64]",
+    "def traced(f: own Answer) -> Answer:",
+    "    return f",
+    "class Car:",
+    "    engine: Engine",
+    "    stored: int64",
+    "    @property",
+    "    def count(self) -> int64:",
+    "        return self.stored",
+    "    @count.setter",
+    "    def count(mut self, value: int64):",
+    "        self.stored = value",
+    "    @traced",
+    "    def answer() -> int64:",
+    "        return 42",
+    "    def __drop__(mut self):",
+    "        pass",
+    "impl Named for Car by engine",
+    "def main():",
+    "    mut car = Car(engine=Engine(), stored=0)",
+    "    car.count += 2",
+    "    print(car.count)",
+    "    print(car.name())",
+    "    print(Car.answer())",
+    "",
+  ];
+  const source = lines.join("\n");
+  const uri = pathToFileURL(path.join(root, "main.au")).href;
+  try {
+    setWorkspaceRoots([repoRoot, root]);
+    const analysis = await analyzeWithCompiler(uri, source);
+    assert.deepEqual(analysis?.diagnostics, []);
+    for (const [line, word, definitionLine, hover] of [
+      [16, "count", 14, /property count: int64/],
+      [19, "traced", 8, /traced/],
+      [22, "__drop__", 22, /method __drop__\(mut self\)/],
+      [24, "engine", 11, /field engine/],
+      [27, "count", 17, /@count\.setter/],
+      [28, "count", 14, /property count: int64/],
+      [29, "name", 1, /name\(self\)/],
+      [30, "answer", 20, /@traced\nmethod answer/],
+    ]) {
+      const column = lines[line].lastIndexOf(word);
+      assert.match(compilerHoverAtPosition(analysis, line, column)?.value || "", hover);
+      const location = compilerDefinitionAtPosition(uri, analysis, line, column);
+      assert.deepEqual(location?.range.start, {
+        line: definitionLine, character: lines[definitionLine].indexOf(word),
+      });
+    }
+    const items = await completeWithCompiler(uri, source, 29, lines[29].indexOf(".") + 1, ".");
+    assert.ok(items.some((item) => item.name === "name"));
+    assert.deepEqual(items.filter((item) => item.name === "count").map((item) => item.kind), ["property"]);
+    assert.ok(items.every((item) => !item.name.includes("$") && !item.name.startsWith("__aura_") && item.name !== "__drop__"));
+    const traitFile = path.join(root, "named.au");
+    fs.writeFileSync(traitFile, "public trait Named:\n    def name(self) -> str\n");
+    const imported = ["from named import Named", "", ...lines.slice(2)].join("\n");
+    const importedAnalysis = await analyzeWithCompiler(uri, imported);
+    assert.deepEqual(importedAnalysis?.diagnostics, []);
+    const forwarded = compilerDefinitionAtPosition(uri, importedAnalysis, 29, lines[29].indexOf("name"));
+    assert.equal(forwarded?.uri, pathToFileURL(fs.realpathSync(traitFile)).href);
+    assert.deepEqual(forwarded.range.start, { line: 1, character: 8 });
+    const indexed = [
+      ...lines.slice(0, 25),
+      "def index(label: str) -> int64:",
+      "    print(label)",
+      "    return 0",
+      "def update(cars: mut list[Car]):",
+      '    cars[index("🌍")].count += 2',
+      "    cars[",
+      '        index("é")',
+      "    ].count = 3",
+      "",
+    ];
+    const indexedAnalysis = await analyzeWithCompiler(uri, indexed.join("\n"));
+    assert.deepEqual(indexedAnalysis?.diagnostics, []);
+    for (const line of [29, 32]) {
+      const character = indexed[line].indexOf("count");
+      const hover = compilerHoverAtPosition(indexedAnalysis, line, character);
+      assert.deepEqual(hover?.range, { start: { line, character }, end: { line, character: character + 5 } });
+      assert.equal(compilerDefinitionAtPosition(uri, indexedAnalysis, line, character)?.range.start.line, 17);
+    }
+    const invalid = await analyzeWithCompiler(uri, source.replace("Car by engine", "Car by absent"));
+    assert.ok(invalid.diagnostics.some((diagnostic) => diagnostic.code === "AU2060"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

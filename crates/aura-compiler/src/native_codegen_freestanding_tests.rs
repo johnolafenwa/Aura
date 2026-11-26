@@ -281,6 +281,7 @@ fn hosted_constructs_in_helpers_are_reported() {
         (
             r#"
 def seed() -> int64:
+    print("loading")
     return 41
 START: int64 = seed() + 1
 export "C" def get() -> int64:
@@ -304,17 +305,17 @@ export "C" def run(a: int64) -> int64:
         ),
         (
             r#"
-def total(values: list[int64]) -> int64:
+def total(values: list[int64 | None]) -> int64:
     mut sum: int64 = 0
     for value in values:
-        sum = sum + value
+        sum = sum + 1
     return sum
 export "C" def run(a: int64) -> int64:
-    return total([a, a])
+    return total([a, None]) + a
 "#,
             &[
                 "`run` builds a collection",
-                "`total` takes `values` of type `list[int64]`",
+                "`total` takes `values` of type `list[int64 | None]`",
                 "reads an element of a collection",
             ],
         ),
@@ -335,11 +336,11 @@ export "C" def run(a: int64) -> int64:
         ),
         (
             r#"
-def parse(a: int64) -> Result[int64, str]:
+def parse(a: int64) -> Result[int64, list[int64 | None]]:
     if a > 0:
         return Ok(a)
-    return Err("no")
-def inner(a: int64) -> Result[int64, str]:
+    return Err([a, None])
+def inner(a: int64) -> Result[int64, list[int64 | None]]:
     value = try parse(a)
     return Ok(value + 1)
 export "C" def run(a: int64) -> int64:
@@ -351,7 +352,7 @@ export "C" def run(a: int64) -> int64:
 "#,
             &[
                 "`inner` uses `try`",
-                "`parse` returns `Result[int64, str]`",
+                "`parse` returns `Result[int64, list[int64 | None]]`",
                 "`run` matches on an enum value",
             ],
         ),
@@ -395,8 +396,8 @@ export "C" def run(a: int64) -> int64:
             &["calls `sys::args`"],
         ),
         (
-            "export \"C\" def run(a: int64) -> int64:\n    return len(f\"{a}\")\n",
-            &["builds text", "calls `len`"],
+            "export \"C\" def run(a: int64) -> int64:\n    return len(f\"{a:>4}\")\n",
+            &["builds text"],
         ),
     ] {
         for expected in expected {
@@ -464,13 +465,18 @@ export "C" def bump(cell: uint64) -> uint64:
 fn every_mem_function_is_a_host_builtin_the_emitter_compiles_inline() {
     let namespace = crate::builtin_modules::builtin_module_namespace(&["mem".to_string()])
         .expect("`mem` is a builtin module");
-    assert_eq!(namespace.all_functions.len(), 27);
+    assert_eq!(namespace.all_functions.len(), 71);
     for name in namespace.all_functions.keys() {
         let qualified = format!("mem::{name}");
         assert!(
             crate::runtime_ops::HostBuiltin::from_name(&qualified).is_some(),
             "`{qualified}` has a runtime entry"
         );
+        // A heap function is a call of a C symbol (ADR-0128).
+        if super::freestanding_heap::heap_operation(&qualified).is_some() {
+            assert_eq!(super::freestanding::memory_operation(&qualified), None);
+            continue;
+        }
         let (access, _) = super::freestanding::memory_operation(&qualified)
             .unwrap_or_else(|| panic!("`{qualified}` is a memory operation"));
         let returns_none = !access.has_result();
@@ -667,19 +673,18 @@ fn a_program_with_no_export_is_refused() {
 fn values_that_need_the_runtime_are_reported_by_construct() {
     let prelude = "export \"C\" def entry(count: int64) -> int64:\n";
     for (body, expected) in [
-        ("    text = \"hello\"\n    return count\n", "holds `text` of type `str`"),
         (
-            "    mut values: list[int64] = []\n    values.append(count)\n    return count\n",
+            "    mut values: list[int64 | None] = []\n    values.append(None)\n    return count\n",
             "builds a collection",
         ),
         (
-            "    mut values: list[int64] = [count]\n    return values[0]\n",
+            "    values: list[int64] = [count]\n    part = values[0:1]\n    return count\n",
             "reads or changes a collection",
         ),
         ("    print(count)\n    return count\n", "calls `print`"),
         ("    return 2 ** count\n", "uses `**`"),
         (
-            "    pair = (count, count)\n    return pair[0]\n",
+            "    pair = (count, {1.5: count})\n    return pair[0]\n",
             "uses a tuple",
         ),
         (
@@ -687,8 +692,8 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
             "function value",
         ),
         (
-            "    wide: int128 = 5\n    return count\n",
-            "holds `wide` of type `int128`",
+            "    wide: Duration = Duration.ms(5)\n    return count\n",
+            "holds `wide` of type `Duration`",
         ),
     ] {
         assert_problem(&format!("{prelude}{body}"), expected);
@@ -706,12 +711,13 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
 #[test]
 fn problems_name_the_function_and_the_line() {
     let source = r#"
-def describe(code: int64) -> str:
-    return f"code {code}"
+def describe(code: int64) -> list[int64 | None]:
+    return [code, None]
 
 enum Shape:
     Circle(radius: float64)
     Square(side: float64)
+    Named(name: list[int64 | None])
 
 def area(shape: Shape) -> float64:
     match shape:
@@ -719,9 +725,11 @@ def area(shape: Shape) -> float64:
             return radius * radius
         case Shape.Square(side):
             return side * side
+        case Shape.Named(_):
+            return 0.0
 
 export "C" def entry(count: int64) -> int64:
-    print(describe(count))
+    print(describe(count).len())
     return area(Shape.Square(side=2.0)) as int64
 "#;
     let found = check_freestanding(&lower(source));
@@ -733,12 +741,12 @@ export "C" def entry(count: int64) -> int64:
             .span
             .map(|span| span.line)
     };
-    assert_eq!(at("`describe` builds text"), Some(3));
-    assert_eq!(at("`describe` returns `str`"), Some(2));
-    assert_eq!(at("`area` takes `shape` of type `Shape`"), Some(9));
-    assert_eq!(at("`area` matches on an enum value"), Some(10));
-    assert_eq!(at("`entry` calls `print`"), Some(17));
-    assert_eq!(at("`entry` uses an enum value"), Some(18));
+    assert_eq!(at("`describe` builds a collection"), Some(3));
+    assert_eq!(at("`describe` returns `list[int64 | None]`"), Some(2));
+    assert_eq!(at("`area` takes `shape` of type `Shape`"), Some(10));
+    assert_eq!(at("`area` matches on an enum value"), Some(11));
+    assert_eq!(at("`entry` calls `print`"), Some(20));
+    assert_eq!(at("`entry` uses an enum value"), Some(21));
     // One report for each construct and position.
     let mut seen = found
         .iter()
@@ -752,20 +760,40 @@ export "C" def entry(count: int64) -> int64:
 #[test]
 fn a_foreign_call_with_a_runtime_value_is_reported() {
     let source = r#"
-extern "C" def length(text: cstr) -> uint64
+extern "C" def length(data: list[uint8]) -> uint64
 extern "C" def name() -> cstr
 
-def pass_on(text: str) -> uint64:
-    return length(text)
+def pass_on(data: list[uint8]) -> uint64:
+    return length(data)
 
 export "C" def entry() -> uint64:
-    return length("literal") + pass_on("held") + length(name())
+    return pass_on([1]) + name().len() as uint64
 "#;
     assert_problem(
         source,
-        "passes `text` of type `str` to the foreign function `length`",
+        "passes `data` of type `list[uint8]` to the foreign function `length`",
     );
     assert_problem(source, "takes a `str` from the foreign function `name`");
+}
+
+#[test]
+fn a_foreign_call_takes_text_as_an_address_and_a_length() {
+    let source = r#"
+extern "C" def length(text: cstr) -> uint64
+extern "C" def sized(text: str) -> uint64
+
+def pass_on(text: str) -> uint64:
+    return length(text) + sized(text)
+
+export "C" def entry() -> uint64:
+    return length("literal") + sized("literal") + pass_on("held")
+"#;
+    assert!(problems(source).is_empty(), "{:?}", problems(source));
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(undefined.contains(&"length".to_string()), "{undefined:?}");
+        assert!(undefined.contains(&"sized".to_string()), "{undefined:?}");
+    }
 }
 
 #[test]
@@ -807,20 +835,27 @@ fn a_trap_names_its_file_relative_to_the_program() {
     std::fs::write(&program, "").expect("the file should be written");
     std::fs::write(&module, "").expect("the file should be written");
     let program = program.to_string_lossy().into_owned();
-    assert_eq!(freestanding::trap_path(&program, &program), "main.au");
     assert_eq!(
-        freestanding::trap_path(&module.to_string_lossy(), &program),
+        freestanding::trap_path(&program, &program, Some("main")),
+        "main.au"
+    );
+    assert_eq!(
+        freestanding::trap_path(&module.to_string_lossy(), &program, Some("drivers.uart")),
         "drivers/uart.au"
     );
-    // A file outside the program's directory keeps the path it has.
+    // A file outside the program's directory never embeds an absolute host path.
     assert_eq!(
-        freestanding::trap_path("/elsewhere/lib.au", &program),
-        "/elsewhere/lib.au"
+        freestanding::trap_path("/elsewhere/lib.au", &program, None),
+        "lib.au"
+    );
+    assert_eq!(
+        freestanding::trap_path("/elsewhere/lib.au", &program, Some("ext_pkg.lib")),
+        "ext_pkg/lib.au"
     );
     std::fs::remove_dir_all(&directory).expect("the directory should be removed");
     // A bare file name stands for a file in the working directory.
     assert_eq!(
-        freestanding::trap_path("kernel.au", "kernel.au"),
+        freestanding::trap_path("kernel.au", "kernel.au", Some("kernel")),
         "kernel.au"
     );
 }
@@ -868,4 +903,630 @@ fn an_emitter_fault_is_not_a_subset_report() {
         refusal.message,
         "`f` does x, which a freestanding build cannot compile"
     );
+}
+
+#[test]
+fn freestanding_write_loan_extern_call_passes_object_check() {
+    let source = r#"
+extern "C" def read_sensor() -> uint64
+
+export "C" def sample() -> uint64:
+    mut value: uint64 = 0
+    view mut slot = value
+    slot = read_sensor()
+    return value
+"#;
+    let mut module = lower(source);
+    // Ensure a direct WriteLoan -> CallTarget::Extern instruction is tested even
+    // if lowering introduces an intermediate temporary.
+    let has_direct_write_loan_extern = module
+        .functions
+        .iter()
+        .flat_map(|f| &f.blocks)
+        .flat_map(|b| &b.instructions)
+        .any(|instruction| {
+            matches!(
+                instruction,
+                crate::mir::Instruction::WriteLoan {
+                    value: crate::mir::Rvalue::Call {
+                        callee: crate::mir::CallTarget::Extern(_),
+                        ..
+                    },
+                    ..
+                }
+            )
+        });
+    if !has_direct_write_loan_extern {
+        let entry = module
+            .functions
+            .iter_mut()
+            .find(|f| f.name == "sample")
+            .expect("sample function should exist");
+        let mut moved = false;
+        for block in &mut entry.blocks {
+            for idx in 0..block.instructions.len().saturating_sub(1) {
+                let is_extern_assign = matches!(
+                    &block.instructions[idx],
+                    crate::mir::Instruction::Assign {
+                        value: crate::mir::Rvalue::Call {
+                            callee: crate::mir::CallTarget::Extern(_),
+                            ..
+                        },
+                        ..
+                    }
+                );
+                if is_extern_assign {
+                    if let (
+                        crate::mir::Instruction::Assign { target, value },
+                        crate::mir::Instruction::WriteLoan {
+                            loan,
+                            value:
+                                crate::mir::Rvalue::Use(
+                                    crate::mir::Operand::MovePlace(src)
+                                    | crate::mir::Operand::Place(src),
+                                ),
+                        },
+                    ) = (&block.instructions[idx], &block.instructions[idx + 1])
+                    {
+                        if target == src {
+                            let new_inst = crate::mir::Instruction::WriteLoan {
+                                loan: loan.clone(),
+                                value: value.clone(),
+                            };
+                            block.instructions[idx] = new_inst;
+                            block.instructions.remove(idx + 1);
+                            moved = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if moved {
+                break;
+            }
+        }
+        assert!(moved, "expected a WriteLoan writing the extern call result");
+    }
+
+    let bytes = emit_freestanding_object(&module, "kernel.au", source, FreestandingTarget::X86_64)
+        .expect("freestanding object with WriteLoan extern call should pass check_object");
+    let (global, _, undefined) = symbols(&bytes);
+    assert_eq!(global, ["sample"]);
+    assert_eq!(undefined, ["read_sensor"]);
+}
+
+#[test]
+fn freestanding_rejects_interior_nul_cstr_literal() {
+    let source = r#"
+extern "C" def log_line(text: cstr) -> None
+
+export "C" def entry() -> None:
+    log_line("hi\0there")
+"#;
+    assert_problem(source, "interior NUL");
+}
+
+#[test]
+fn freestanding_dependency_trap_path_omits_host_filesystem_prefix() {
+    let marker = format!("aura-host-prefix-{}", std::process::id());
+    let root = std::env::temp_dir().join(&marker);
+    let _ = std::fs::remove_dir_all(&root);
+    let dep_dir = root.join("external_dep_checkout");
+    let app_dir = root.join("app_pkg");
+    std::fs::create_dir_all(dep_dir.join("src")).expect("dep src dir");
+    std::fs::create_dir_all(app_dir.join("src")).expect("app src dir");
+
+    std::fs::write(
+        dep_dir.join("Aura.toml"),
+        "[package]\nname = \"helper_dep\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("dep manifest");
+    std::fs::write(
+        dep_dir.join("src/lib.au"),
+        "public def checked_div(a: int32, b: int32) -> int32:\n    return a // b\n",
+    )
+    .expect("dep source");
+    std::fs::write(
+        app_dir.join("Aura.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\nhelper_dep = { path = \"../external_dep_checkout\" }\n",
+    )
+    .expect("app manifest");
+    let app_main_source = "import helper_dep.lib\n\nexport \"C\" def entry(a: int32, b: int32) -> int32:\n    return helper_dep.lib.checked_div(a, b)\n";
+    let app_main = app_dir.join("src/main.au");
+    std::fs::write(&app_main, app_main_source).expect("app source");
+
+    let program = crate::check_path(&app_main).expect("app with path dependency should check");
+    let mir = crate::mir::lower_with_source_locations(&program);
+    let bytes = emit_freestanding_object(
+        &mir,
+        &app_main.to_string_lossy(),
+        app_main_source,
+        FreestandingTarget::X86_64,
+    )
+    .expect("freestanding object should emit");
+    let _ = std::fs::remove_dir_all(&root);
+
+    let file = object::File::parse(&*bytes).expect("object should parse");
+    let rodata = file
+        .sections()
+        .filter(|section| section.name().is_ok_and(|name| name.starts_with(".rodata")))
+        .flat_map(|section| section.data().expect("section data").to_vec())
+        .collect::<Vec<_>>();
+    assert!(
+        !rodata
+            .windows(marker.len())
+            .any(|window| window == marker.as_bytes()),
+        "freestanding .rodata must not embed build-host path prefix `{marker}`"
+    );
+    let expected = b"helper_dep/src/lib.au";
+    assert!(
+        rodata
+            .windows(expected.len())
+            .any(|window| window == expected),
+        "freestanding .rodata should contain package-relative dependency path `helper_dep/src/lib.au`"
+    );
+}
+
+#[test]
+fn a_trap_names_a_package_file_relative_to_its_package_root() {
+    let workspace =
+        std::env::temp_dir().join(format!("aura-freestanding-pkg-{}", std::process::id()));
+    let app = workspace.join("app");
+    let dependency = workspace.join("deps").join("uartpkg");
+    for directory in [app.join("src"), app.join("support"), dependency.join("src")] {
+        std::fs::create_dir_all(&directory).expect("the directory should be made");
+    }
+    std::fs::write(app.join("Aura.toml"), "").expect("the manifest should be written");
+    std::fs::write(dependency.join("Aura.toml"), "").expect("the manifest should be written");
+    let program = app.join("src").join("main.au");
+    let sibling = app.join("support").join("io.au");
+    let library = dependency.join("src").join("lib.au");
+    for file in [&program, &sibling, &library] {
+        std::fs::write(file, "").expect("the file should be written");
+    }
+    let program = program.to_string_lossy().into_owned();
+    let library = library.to_string_lossy().into_owned();
+
+    // A file of the program's own package, outside the program's directory,
+    // is named relative to the package root.
+    assert_eq!(
+        freestanding::trap_path(&sibling.to_string_lossy(), &program, Some("support.io")),
+        "support/io.au"
+    );
+    // A dependency is named by its package, from the module name when there
+    // is one and from its root directory otherwise.
+    assert_eq!(
+        freestanding::trap_path(&library, &program, Some("uart.lib")),
+        "uart/src/lib.au"
+    );
+    assert_eq!(
+        freestanding::trap_path(&library, &program, None),
+        "uartpkg/src/lib.au"
+    );
+    assert_eq!(
+        freestanding::trap_path(&library, &program, Some("<prelude>")),
+        "uartpkg/src/lib.au"
+    );
+    std::fs::remove_dir_all(&workspace).expect("the directory should be removed");
+}
+
+#[path = "machine_attributes_tests.rs"]
+mod machine_attributes_tests;
+
+#[test]
+fn kernel_float_operations_and_addresses_use_the_kernel_abi() {
+    let source = include_str!("../tests/fixtures/check-pass/kernel_soft_float.au");
+    let kernel = FreestandingTarget::X86_64Kernel;
+    assert_eq!(kernel.name(), FreestandingTarget::X86_64.name());
+    assert_eq!(kernel.arch(), FreestandingTarget::X86_64.arch());
+    let bytes = object(source, kernel);
+    let (_, _, undefined) = symbols(&bytes);
+    assert!(undefined.contains(&"__adddf3".to_owned()), "{undefined:?}");
+    let file = object::File::parse(&*bytes).expect("object should parse");
+    // The trap hook takes the address of its file name. Kernel-model code
+    // sign-extends an absolute 32-bit relocation into the upper two GiB.
+    assert!(file
+        .sections()
+        .any(|section| section.relocations().any(|(_, relocation)| {
+            relocation.flags()
+                == object::RelocationFlags::Elf {
+                    r_type: object::elf::R_X86_64_32S,
+                }
+        })));
+}
+
+#[test]
+fn frozen_tables_are_read_only_objects_for_each_freestanding_target() {
+    let source = r#"
+def squares() -> list[int64]:
+    return [17 * 17, 23 * 23, 31 * 31]
+TABLE = squares()
+export "C" def lookup(index: int64) -> int64:
+    return TABLE[index]
+"#;
+    let words = [289_i64, 529, 961]
+        .into_iter()
+        .flat_map(i64::to_le_bytes)
+        .collect::<Vec<_>>();
+    for target in TARGETS {
+        let bytes = object(source, target);
+        let file = object::File::parse(bytes.as_slice()).unwrap();
+        assert!(file.sections().any(|section| {
+            section.kind() == object::SectionKind::ReadOnlyData
+                && section
+                    .data()
+                    .unwrap()
+                    .windows(words.len())
+                    .any(|window| window == words)
+        }));
+        let (globals, _, undefined) = symbols(&bytes);
+        assert_eq!(globals, ["lookup"]);
+        assert_eq!(undefined, ["aura_trap"]);
+    }
+}
+
+#[test]
+fn systems_integer_operations_emit_self_contained_objects() {
+    for source in [
+        include_str!("../tests/fixtures/systems-integers/atomic_orders.au"),
+        include_str!("../tests/fixtures/systems-integers/wide_arithmetic.au"),
+        include_str!("../tests/fixtures/systems-integers/wide_vectors.au"),
+        "export \"C\" def count(n: uint64) -> int64:\n    return n.rotate_left(3).count_ones()\n",
+    ] {
+        for target in TARGETS {
+            let (_, _, undefined) = symbols(&object(source, target));
+            assert!(undefined.iter().all(|s| s == "aura_trap"), "{undefined:?}");
+        }
+    }
+}
+
+#[test]
+fn load_rejects_release_order_during_checking() {
+    let source = include_str!("../tests/fixtures/systems-integers/invalid_order.au");
+    let module = crate::parse_source(source).expect("valid syntax");
+    let errors = crate::check_module_with_builtin_imports(module).expect_err("invalid order");
+    assert_eq!(errors.code, "AU2087", "{errors:?}");
+}
+
+#[test]
+fn rotation_count_type_diagnostic() {
+    let source = include_str!("../tests/fixtures/check-fail/rotation_count_type.au");
+    let error = crate::check_source(source).expect_err("invalid count");
+    assert_eq!(error.code, "AU2088");
+}
+
+#[test]
+fn integer_bit_methods_run_on_the_interpreter() {
+    let source = include_str!("../tests/fixtures/run-pass/integer_bit_methods.au");
+    let want = include_str!("../tests/fixtures/run-pass/integer_bit_methods.stdout");
+    let run = crate::run_source(source).expect("bit operations execute");
+    assert_eq!(run.stdout, want);
+}
+
+#[test]
+fn atomic_order_diagnostics_cover_aliases_and_dynamic_orders() {
+    for (import, stmt) in [
+        ("import mem", "mem.fence(\"relaxed\")"),
+        (
+            "from mem import atomic_load_uint16 as load",
+            "load(address, order)",
+        ),
+        (
+            "import mem",
+            "mem.atomic_store_uint16(address, 1, \"acquire\")",
+        ),
+        (
+            "import mem",
+            "mem.atomic_compare_exchange_uint8(address, 0, 1, \"relaxed\", \"acquire\")",
+        ),
+        ("import mem", "f = mem.atomic_add_uint8"),
+    ] {
+        let source =
+            format!("{import}\n\ndef check(address: uint64, order: str) -> None:\n    {stmt}\n");
+        let parsed = crate::parse_source(&source).expect("ordering test source parses");
+        let error = crate::check_module_with_builtin_imports(parsed).expect_err("invalid ordering");
+        assert_eq!(error.code, "AU2087", "{stmt}: {error}");
+    }
+}
+
+#[test]
+fn constant_scale_guard_requires_matching_checked_operations() {
+    let source = "export \"C\" def scale(x: uint64) -> uint64:\n    return 3 * x + 1\n";
+    let module = lower(source);
+    let function = module.functions.iter().find(|f| f.name == "scale").unwrap();
+    let pattern = function
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.windows(4))
+        .find(|ops| super::freestanding_scale::guard_limit(ops).is_some())
+        .unwrap();
+    assert_eq!(
+        super::freestanding_scale::guard_limit(pattern),
+        Some((u64::MAX - 1) / 3)
+    );
+    let mut ops = pattern.to_vec();
+    if let Instruction::Assign {
+        value: Rvalue::Use(Operand::Int(multiplier)),
+        ..
+    } = &mut ops[0]
+    {
+        *multiplier = 0;
+    }
+    assert_eq!(super::freestanding_scale::guard_limit(&ops), None);
+    assert!(!object(source, FreestandingTarget::X86_64).is_empty());
+}
+
+#[test]
+fn fixed_arrays_use_inline_storage_on_every_target() {
+    let source = r#"
+def sample(index: int64) -> uint16:
+    mut row: fixed[uint16, 3] = [4, 2, 7]
+    row[0] = 9
+    return row[index]
+
+export "C" def get(index: int64) -> uint16:
+    return sample(index)
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert_eq!(undefined, [TRAP_HOOK]);
+    }
+}
+
+#[test]
+fn fixed_array_constant_access_needs_no_trap_hook() {
+    let source = r#"
+export "C" def get(word: uint16) -> uint16:
+    row: fixed[uint16, 3] = [word] * 3
+    return row[2]
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(undefined.is_empty(), "{undefined:?}");
+    }
+}
+
+#[test]
+fn c_layout_queries_are_target_constants_in_freestanding_objects() {
+    let source = "import mem\nextern \"C\" packed align(8) class Header:\n    flag: uint8 bits(3)\n    count: uint32\n\nSIZE = mem.size_of(Header)\n\nexport \"C\" def layout() -> uint64:\n    return SIZE + mem.align_of(Header) + mem.offset_of(Header, count)\n";
+    for target in TARGETS {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert!(global.iter().any(|symbol| symbol == "layout"));
+        assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+    }
+}
+
+#[test]
+fn freestanding_union_member_write_keeps_runtime_out_of_every_object() {
+    let source = r#"
+extern "C" union Word:
+    whole: uint32
+    low: uint8
+
+export "C" def replace_low(original: uint32, low: uint8) -> uint32:
+    mut w = Word.from_whole(original)
+    w.low = low
+    return w.whole
+"#;
+    let mut module = crate::parse_source(source).unwrap();
+    module.use_freestanding_c_layout();
+    let program = crate::check_module_with_builtin_imports(module).unwrap();
+    let mir = crate::mir::lower_with_source_locations(&program);
+    for target in TARGETS {
+        let bytes = emit_freestanding_object(&mir, "kernel.au", source, target).unwrap();
+        let (globals, _, undefined) = symbols(&bytes);
+        assert!(globals.iter().any(|s| s == "replace_low"));
+        assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+    }
+}
+
+#[test]
+fn packed_mut_parameter_uses_target_c_layout_on_every_freestanding_target() {
+    let source = r#"
+extern "C" packed align(16) class Header:
+    kind: uint8
+    serial: uint32
+    code: uint16 bits(3)
+
+extern "C" def advance(h: mut Header) -> None
+
+export "C" def reset(code: uint16) -> uint32:
+    mut h = Header(kind=4, serial=1234, code=code)
+    advance(h)
+    h.code = 1
+    return h.serial + (h.code as uint32)
+"#;
+    for target in TARGETS {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert!(global.iter().any(|name| name == "reset"));
+        assert!(undefined.iter().any(|name| name == "advance"));
+        assert!(undefined
+            .iter()
+            .all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
+    }
+}
+
+#[test]
+fn fixed_arrays_of_controlled_records_keep_the_target_stride() {
+    let source = r#"
+extern "C" packed class Row:
+    tag: uint8
+    word: uint32
+
+extern "C" align(256) class Line:
+    word: uint32
+
+extern "C" class Packet:
+    rows: fixed[Row, 2]
+    lines: fixed[Line, 2]
+
+extern "C" def touch(p: mut Packet) -> None
+
+def lane(lines: fixed[Line, 2] | None) -> uint32:
+    if lines is not None:
+        return lines[1].word
+    return 0
+
+export "C" def exercise() -> uint32:
+    mut p = Packet(rows=[Row(tag=1, word=3), Row(tag=2, word=4)], lines=[Line(word=5), Line(word=6)])
+    touch(p)
+    return p.rows[1].word + lane(p.lines)
+"#;
+    for target in TARGETS {
+        let (exports, _, imports) = symbols(&object(source, target));
+        assert!(exports.iter().any(|s| s == "exercise"));
+        assert!(imports.iter().any(|s| s == "touch"));
+        assert!(imports
+            .iter()
+            .all(|s| ["touch", TRAP_HOOK].contains(&s.as_str())));
+    }
+}
+
+#[test]
+fn typed_pointer_objects_use_target_memory_operations() {
+    for source in [
+        include_str!("../tests/fixtures/typed-pointers/scalars.au"),
+        include_str!("../tests/fixtures/typed-pointers/aggregate.au"),
+        include_str!("../tests/fixtures/typed-pointers/links.au"),
+        include_str!("../tests/fixtures/typed-pointers/widths.au"),
+        include_str!("../tests/fixtures/typed-pointers/nested.au"),
+        include_str!("../tests/fixtures/typed-pointers/wide.au"),
+        include_str!("../tests/fixtures/typed-pointers/fixed.au"),
+    ] {
+        for target in TARGETS {
+            let (_, _, undefined) = symbols(&object(source, target));
+            assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+        }
+    }
+}
+
+#[test]
+fn hosted_pointer_objects_preserve_wide_accesses_and_parameter_storage() {
+    for (source, expected) in [
+        (
+            include_str!("../tests/fixtures/typed-pointers/borrowed_owner.au"),
+            &["aura_direct_instance_set_field_owned"][..],
+        ),
+        (
+            include_str!("../tests/fixtures/typed-pointers/wide.au"),
+            &[
+                "aura_direct_pointer_wide_read",
+                "aura_direct_pointer_wide_write",
+            ][..],
+        ),
+        (
+            include_str!("../tests/fixtures/typed-pointers/pointer_field.au"),
+            &[][..],
+        ),
+        (
+            include_str!("../tests/fixtures/typed-pointers/array_records.au"),
+            &[][..],
+        ),
+    ] {
+        let parsed = crate::parse_source(source).unwrap();
+        let program = crate::check_module_with_builtin_imports(parsed).unwrap();
+        let module = crate::mir::lower(&program);
+        let bytes = crate::native_codegen::emit_host_object(&module).unwrap();
+        let (_, _, imports) = symbols(&bytes);
+        for symbol in expected {
+            assert!(
+                imports
+                    .iter()
+                    .any(|name| name.trim_start_matches('_') == *symbol),
+                "{imports:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_pointer_cast_requires_ffi_without_a_mem_import() {
+    let source = include_str!("../tests/fixtures/typed-pointers/permission.au");
+    let failure = crate::check_source(source).expect_err("source-only pointers need a manifest");
+    assert!(failure.message.contains("allow_ffi = true"), "{failure:?}");
+}
+
+#[test]
+fn fixed_arrays_of_wide_words_stay_inline() {
+    let source = r#"
+export "C" def sample(i: int64, high: uint64) -> uint64:
+    word = (high as uint128) << 64
+    mut row: fixed[uint128, 2] = [word, 0]
+    row[1] = row[0]
+    return (row[i] >> 64) as uint64
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert_eq!(undefined, [TRAP_HOOK]);
+    }
+}
+
+#[test]
+fn fixed_array_updates_do_not_copy_the_entire_ring() {
+    let kernels = include_str!("../../../benchmarks/freestanding/kernels.au");
+    let bytes = object(kernels, FreestandingTarget::X86_64);
+    let file = object::File::parse(bytes.as_slice()).unwrap();
+    let ring = file
+        .symbols()
+        .find(|sym| sym.name() == Ok("aura_ring_mix"))
+        .unwrap();
+    // The loop needs one indexed load and store. Copying every lane
+    // into and out of scratch storage produced 814 bytes on x86-64.
+    assert!(ring.size() < 400, "ring_mix grew to {} bytes", ring.size());
+}
+
+#[test]
+fn fixed_array_union_members_store_every_word_and_partial_tail() {
+    let source = r#"
+def last(row: fixed[uint16, 9] | None) -> uint16:
+    if row is not None:
+        return row[8]
+    return 0
+
+export "C" def sample(value: uint16) -> uint16:
+    row: fixed[uint16, 9] = [value] * 9
+    return last(row)
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(undefined.is_empty(), "{undefined:?}");
+    }
+}
+
+#[test]
+fn hosted_ordered_atomics_emit_without_generic_order_wrappers() {
+    let source = include_str!("../tests/fixtures/systems-integers/atomic_orders.au");
+    let mir = lower(&format!("{source}\n\ndef main() -> int32:\n    return 0\n"));
+    let kept = super::reachability::prune_unreachable_functions(&mir);
+    assert!(kept
+        .functions
+        .iter()
+        .all(|f| f.name != "mem::atomic_store_uint8"));
+    emit_host_object(&mir).expect("every memory order is available at the call site");
+
+    let named = lower("import mem\n\ndef main() -> None:\n    print(\"mem::fence\")\n");
+    emit_host_object(&named).expect("a string naming the generic wrapper can compile");
+}
+
+#[test]
+fn wide_integer_comparisons_and_narrow_casts_are_self_contained() {
+    let source = r#"
+export "C" def check(low: uint64, divisor: int64) -> uint16:
+    numerator = low as uint128
+    signed = low as int128
+    quotient = signed // (divisor as int128)
+    if quotient >= 0 and quotient <= signed:
+        exact = quotient as float64
+        if (exact as int128) == quotient:
+            small = numerator as int16
+            return (small as int128) as uint16
+    return 0
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(
+            undefined.iter().all(|name| name == "aura_trap"),
+            "{target:?}: {undefined:?}"
+        );
+    }
 }

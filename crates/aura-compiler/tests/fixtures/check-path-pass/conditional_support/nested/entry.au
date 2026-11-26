@@ -1,0 +1,8 @@
+import build
+from conditional_support.features import available
+if available and build.hosted:
+    const selected = 23
+else:
+    import nonexistent
+def main():
+    print(selected)

@@ -1,0 +1,5 @@
+error[AU2064]: setter for `count` must take one value of the getter's result type
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_setter_signature.au:10:5
+   |
+10 |     def count(mut self, value: bool):
+   |     ^

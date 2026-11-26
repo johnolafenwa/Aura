@@ -1,0 +1,5 @@
+error[AU2063]: a class cannot store a view field
+ --> crates/aura-compiler/tests/fixtures/parse-fail/trait_delegation_view_0.au:2:5
+  |
+2 |     view engine: Engine
+  |     ^

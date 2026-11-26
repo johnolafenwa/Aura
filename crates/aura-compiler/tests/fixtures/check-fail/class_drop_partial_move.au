@@ -1,0 +1,8 @@
+class Ticket:
+    label: str
+
+    def __drop__(mut self):
+        print("drop " + self.label)
+
+def steal(t: own Ticket) -> str:
+    return t.label

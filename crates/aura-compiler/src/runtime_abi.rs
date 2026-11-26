@@ -111,9 +111,11 @@ runtime_functions! {
     BoxI64 => ("aura_direct_box_i64", [I64], Some(I64)),
     BoxU64 => ("aura_direct_box_u64", [I64], Some(I64)),
     BoxUintLiteral => ("aura_direct_box_uint_literal", [I64, I64], Some(I64)),
+    BoxF32 => ("aura_direct_box_f32", [F64], Some(I64)),
     BoxF64 => ("aura_direct_box_f64", [F64], Some(I64)),
     BoxBool => ("aura_direct_box_bool", [I64], Some(I64)),
     FunctionValue => ("aura_direct_function_value", [I64, I64, I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
+    FrozenConstant => ("aura_direct_frozen_constant", [I64, I64, I64, I64, I64], Some(I64)),
     ModuleConstant => ("aura_direct_module_constant", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     ClosureValue => ("aura_direct_closure_value", [I64, I64, I64, I64, I64], Some(I64)),
     ClosureValueDeferred => ("aura_direct_closure_value_deferred", [I64, I64, I64, I64, I64], Some(I64)),
@@ -301,6 +303,9 @@ runtime_functions! {
     MapGetInt64 => ("aura_direct_map_get_int64", [I64, I64], Some(I64)),
     MapGetInt64Payload => ("aura_direct_map_get_int64_payload", [I64, I64], Some(I64)),
     MapGetLent => ("aura_direct_map_get_lent", [I64, I64], Some(I64)),
+    MapGetWord => ("aura_direct_map_get_word", [I64, I64, I64], Some(I64)),
+    MapGetStrWord => ("aura_direct_map_get_str_word", [I64, I64, I64, I64], Some(I64)),
+    MapGetInt64Word => ("aura_direct_map_get_int64_word", [I64, I64, I64], Some(I64)),
     MapGetScalarLent => ("aura_direct_map_get_scalar_lent", [I64, I64], Some(I64)),
     JsonTapeOpen => ("aura_direct_json_tape_open", [I64, I64, I64, I64], None),
     JsonTapeClose => ("aura_direct_json_tape_close", [], None),
@@ -357,6 +362,12 @@ runtime_functions! {
     MapClearInPlace => ("aura_direct_map_clear_in_place", [I64], Some(I64)),
     MapExtendInPlace => ("aura_direct_map_extend_in_place", [I64, I64], Some(I64)),
     MapIndex => ("aura_direct_map_index", [I64, I64, I64, I64], Some(I64)),
+    MapIndexInt64 => ("aura_direct_map_index_int64", [I64, I64, I64, I64], Some(I64)),
+    MapIndexI64 => ("aura_direct_map_index_i64", [I64, I64, I64, I64], Some(I64)),
+    MapIndexU64 => ("aura_direct_map_index_u64", [I64, I64, I64, I64], Some(I64)),
+    MapIndexF64 => ("aura_direct_map_index_f64", [I64, I64, I64, I64], Some(F64)),
+    MapIndexBool => ("aura_direct_map_index_bool", [I64, I64, I64, I64], Some(I64)),
+    MapIndexInt64Pair => ("aura_direct_map_index_int64_pair", [I64, I64, I64, I64], Some(I64)),
     MapSetIndexInPlace => ("aura_direct_map_set_index_in_place", [I64, I64, I64, I64, I64], Some(I64)),
     MapSetIndexInt64 => ("aura_direct_map_set_index_int64", [I64, I64, I64], None),
     MapSetIndexInt64Key => ("aura_direct_map_set_index_int64_key", [I64, I64, I64], None),
@@ -385,6 +396,7 @@ runtime_functions! {
     UnboxInt64 => ("aura_direct_unbox_int64", [I64], Some(I64)),
     JsonAsScalar => ("aura_direct_json_as_scalar", [I64, I64, I64], Some(I64)),
     IntegerToFloat => ("aura_direct_integer_to_float", [I64], Some(F64)),
+    IntegerBits => ("aura_direct_integer_bits", [I64, I64, I64], Some(I64)),
     IntegerWidthBinary => ("aura_direct_integer_width_binary", [I64, I64, I64, I64, I64, I64], Some(I64)),
     UnboxU64 => ("aura_direct_unbox_u64", [I64], Some(I64)),
     UnboxF64 => ("aura_direct_unbox_f64", [I64], Some(F64)),
@@ -465,6 +477,12 @@ runtime_functions! {
     FfiElements => ("aura_direct_ffi_elements", [I64, I64, I64], Some(I64)),
     FfiElementsMut => ("aura_direct_ffi_elements_mut", [I64, I64, I64], None),
     FfiCheckFlags => ("aura_direct_ffi_check_flags", [I64, I64, I64], None),
+    FfiSanitizeFlags => ("aura_direct_ffi_sanitize_flags", [I64], Some(I64)),
+    PointerWideRead => ("aura_direct_pointer_wide_read", [I64, I64, I64], Some(I64)),
+    PointerWideWrite => ("aura_direct_pointer_wide_write", [I64, I64, I64], None),
+    FixedBox => ("aura_direct_fixed_box", [I64, I64, I64], Some(I64)),
+    FixedUnbox => ("aura_direct_fixed_unbox", [I64, I64, I64, I64], None),
+    FixedBounds => ("aura_direct_fixed_bounds", [I64, I64, I64, I64], None),
     FfiPackStruct => ("aura_direct_ffi_pack_struct", [I64, I64, I64, I64], None),
     FfiUnpackStruct => ("aura_direct_ffi_unpack_struct", [I64, I64, I64, I64, I64], Some(I64)),
     FfiUnpackStructInto => ("aura_direct_ffi_unpack_struct_into", [I64, I64, I64, I64, I64, I64], None),
@@ -673,10 +691,11 @@ runtime_functions! {
 }
 
 impl RuntimeFn {
-    /// Whether every call from one task returns the same value without
-    /// touching memory the caller sees, so a code generator may merge the
-    /// calls. The frame stack keeps one address for a task's lifetime.
-    pub(crate) fn is_task_invariant(self) -> bool {
+    /// Whether calls to this helper only read runtime state without writing
+    /// memory visible to callers, cannot unwind, and return. Calls may be
+    /// merged when nothing between them writes memory, but not across runtime
+    /// calls such as recovery boundaries that switch the active frame stack.
+    pub(crate) fn is_read_only(self) -> bool {
         matches!(self, RuntimeFn::FrameStack)
     }
 }

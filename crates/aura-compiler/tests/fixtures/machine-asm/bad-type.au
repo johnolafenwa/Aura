@@ -1,0 +1,2 @@
+export "C" def entry(value: float64) -> None:
+    asm("nop", input("reg", value))

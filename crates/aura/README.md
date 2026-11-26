@@ -24,6 +24,14 @@ That produces the standalone binary at:
 target/release/aura
 ```
 
+## Set Build Flags
+
+Pass `--cfg name[=value]` to `check`, `run`, `build`, or `test`. Each option overrides the matching default in the entry package's `[build.cfg]` table. The program reads these values through `build.cfg`.
+
+```sh
+printf 'import build\nprint(build.cfg["board"])\n' | ./target/release/aura run --cfg board=pico --stdin main.au
+```
+
 ## Use The Binary Without Cargo
 
 After the release build completes, run the binary directly:

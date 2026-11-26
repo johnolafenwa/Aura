@@ -1,0 +1,4 @@
+const answer: int32 = square(6)
+
+def square(x: int32) -> int32:
+    return x * x

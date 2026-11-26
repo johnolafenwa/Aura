@@ -419,6 +419,7 @@ impl Specializer<'_> {
             for (position, arg) in args.into_iter().enumerate() {
                 let name = format!("held {}:{} {position}", span.line, span.column);
                 assigns.push(Stmt::Assign(crate::ast::AssignStmt {
+                    member_span: None,
                     mutable: true,
                     target: AssignTarget::Name(name.clone()),
                     annotation: None,

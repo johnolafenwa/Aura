@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { createPositionMapper } = require("./positions");
+const { maskAssemblyTemplates } = require("./machine_syntax");
 const { documentSymbols } = require("./recovery");
 
 const SEMANTIC_TOKEN_TYPES = [
@@ -47,6 +48,10 @@ const TOKEN_TYPE_BY_HOVER_WORD = {
 
 const SKIPPED_DIRECTORIES = new Set([".git", "node_modules", "target", "dist", "out"]);
 const WORKSPACE_FILE_LIMIT = 2000;
+const WORKSPACE_DIR_LIMIT = 10_000;
+const WORKSPACE_MAX_DEPTH = 32;
+const WORKSPACE_MAX_FILE_BYTES = 1024 * 1024;
+const WORKSPACE_MAX_TOTAL_BYTES = 16 * 1024 * 1024;
 
 function definitionKey(definition) {
   return definition
@@ -64,11 +69,11 @@ function isDefinitionSite(occurrence) {
   );
 }
 
-// The first line of a hover's code block, such as `binding total: int64`.
+// The signature in a hover code block follows any decorator lines.
 function hoverSignature(hover) {
   const text = String(hover);
   const body = text.startsWith("```aura\n") ? text.slice("```aura\n".length) : text;
-  return body.split("\n")[0];
+  return body.replace(/^(?:@[^\n]*\n)+/, "").split("\n")[0];
 }
 
 function occurrenceAt(analysis, positions, line, character) {
@@ -101,7 +106,7 @@ function documentHighlights(analysis, source, line, character) {
 }
 
 function semanticTokenType(occurrence, textBefore) {
-  const signature = hoverSignature(occurrence.hover).replace(/^module constant /, "constant ");
+  const signature = hoverSignature(occurrence.hover).replace(/^module (constant|binding) /, "$1 ");
   const word = signature.split(" ")[0];
   if (Object.prototype.hasOwnProperty.call(TOKEN_TYPE_BY_HOVER_WORD, word)) {
     return TOKEN_TYPE_BY_HOVER_WORD[word];
@@ -246,12 +251,19 @@ function codeActions(uri, source, diagnostics) {
 }
 
 // The `.au` files under the workspace roots, skipping build and dependency
-// folders, up to a fixed count.
-function workspaceAuraFiles(roots, limit = WORKSPACE_FILE_LIMIT) {
+// folders, up to fixed file, directory, and depth caps.
+function workspaceAuraFiles(
+  roots,
+  limit = WORKSPACE_FILE_LIMIT,
+  { maxDirs = WORKSPACE_DIR_LIMIT, maxDepth = WORKSPACE_MAX_DEPTH } = {}
+) {
   const files = [];
-  const pending = [...(roots || [])];
-  while (pending.length > 0 && files.length < limit) {
-    const directory = pending.shift();
+  const pending = (roots || []).map((directory) => ({ directory, depth: 0 }));
+  let head = 0;
+  let visitedDirs = 0;
+  while (head < pending.length && files.length < limit && visitedDirs < maxDirs) {
+    const { directory, depth } = pending[head++];
+    visitedDirs += 1;
     let entries;
     try {
       entries = fs.readdirSync(directory, { withFileTypes: true });
@@ -261,8 +273,12 @@ function workspaceAuraFiles(roots, limit = WORKSPACE_FILE_LIMIT) {
     for (const entry of entries) {
       const fullPath = path.join(directory, entry.name);
       if (entry.isDirectory()) {
-        if (!SKIPPED_DIRECTORIES.has(entry.name) && !entry.name.startsWith(".")) {
-          pending.push(fullPath);
+        if (
+          depth < maxDepth &&
+          !SKIPPED_DIRECTORIES.has(entry.name) &&
+          !entry.name.startsWith(".")
+        ) {
+          pending.push({ directory: fullPath, depth: depth + 1 });
         }
       } else if (entry.isFile() && entry.name.endsWith(".au") && files.length < limit) {
         files.push(fullPath);
@@ -273,11 +289,21 @@ function workspaceAuraFiles(roots, limit = WORKSPACE_FILE_LIMIT) {
 }
 
 // Open documents win over the files on disk.
-function workspaceSources(roots, openDocuments) {
+function workspaceSources(
+  roots,
+  openDocuments,
+  { maxFileBytes = WORKSPACE_MAX_FILE_BYTES, maxTotalBytes = WORKSPACE_MAX_TOTAL_BYTES } = {}
+) {
   const sources = new Map();
+  let totalBytes = 0;
   for (const filePath of workspaceAuraFiles(roots)) {
     try {
+      const { size } = fs.statSync(filePath);
+      if (size > maxFileBytes || totalBytes + size > maxTotalBytes) {
+        continue;
+      }
       sources.set(pathToFileURL(filePath).toString(), fs.readFileSync(filePath, "utf8"));
+      totalBytes += size;
     } catch {
       // A file removed while scanning has nothing to offer.
     }
@@ -301,12 +327,18 @@ function fuzzyMatches(name, query) {
   return true;
 }
 
-const SYMBOL_KIND = { class: 5, method: 6, enum: 10, trait: 11, function: 12 };
+const SYMBOL_KIND = { class: 5, method: 6, enum: 10, trait: 11, function: 12, variable: 13, constant: 14 };
 
 function workspaceSymbols(query, sources) {
   const results = [];
   for (const [uri, text] of sources) {
-    const visit = (symbol, container) => {
+    const stack = [];
+    const topLevel = documentSymbols(text);
+    for (let index = topLevel.length - 1; index >= 0; index -= 1) {
+      stack.push({ symbol: topLevel[index], container: null });
+    }
+    while (stack.length > 0) {
+      const { symbol, container } = stack.pop();
       if (fuzzyMatches(symbol.name, query)) {
         const range = {
           start: { line: symbol.line, character: symbol.startCharacter },
@@ -319,12 +351,9 @@ function workspaceSymbols(query, sources) {
           ...(container ? { containerName: container } : {})
         });
       }
-      for (const child of symbol.children) {
-        visit(child, symbol.name);
+      for (let index = symbol.children.length - 1; index >= 0; index -= 1) {
+        stack.push({ symbol: symbol.children[index], container: symbol.name });
       }
-    };
-    for (const symbol of documentSymbols(text)) {
-      visit(symbol, null);
     }
   }
   return results;
@@ -344,7 +373,7 @@ function implementations(name, sources) {
   const forType = new RegExp(`^\\s*impl\\b.*\\bfor\\s+${word}\\b`);
   const locations = [];
   for (const [uri, text] of sources) {
-    text.split("\n").forEach((lineText, line) => {
+    maskAssemblyTemplates(text).split("\n").forEach((lineText, line) => {
       if (ofTrait.test(lineText) || forType.test(lineText)) {
         const start = lineText.length - lineText.trimStart().length;
         locations.push({
@@ -358,7 +387,7 @@ function implementations(name, sources) {
 }
 
 function wordAt(source, line, character) {
-  const lineText = String(source || "").split("\n")[line] || "";
+  const lineText = maskAssemblyTemplates(String(source || "")).split("\n")[line] || "";
   for (const match of lineText.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
     if (character >= match.index && character <= match.index + match[0].length) {
       return match[0];

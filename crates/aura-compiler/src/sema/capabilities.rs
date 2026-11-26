@@ -408,7 +408,11 @@ impl<'a> FunctionChecker<'a> {
         };
         (BuiltinMember::resolve(name, member).is_some()
             && self.rng_clone_safety(ty) == RngCloneSafety::Safe
-            && self.nonrepeatable_task_result_in(ty).is_none())
+            && self.nonrepeatable_task_result_in(ty).is_none()
+            && self.noncloneable_closure_in_type(ty).is_none()
+            && self.opaque_handle_in_type(ty).is_none()
+            && self.host_resource_in_type(ty).is_none()
+            && self.trait_object_in_type(ty).is_none())
         .then_some(member)
     }
 
@@ -647,6 +651,7 @@ impl<'a> FunctionChecker<'a> {
         if self.is_copy_type(member_ty) {
             return Ok(());
         }
+        self.check_drop_field_move(object, object_ty, locals, expr.span)?;
         // Moving a non-Copy field out of a list element or dictionary entry
         // would move it out of the collection's storage: the element is
         // treated as moved, which is `AU3005` (ADR-0061, contextual reads).
@@ -841,11 +846,17 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Group(inner) => self.is_mutable_place(inner, locals),
             ExprKind::Member { object, field } => {
+                if self.imported_state(object, field).is_some() {
+                    return Ok(true);
+                }
                 self.resolve_member_target_type(object, field, expr.span, locals)?;
                 self.is_mutable_place(object, locals)
             }
             ExprKind::Index { object, index } => {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
+                if object_ty.as_fixed_array().is_some() {
+                    return self.is_mutable_place(object, locals);
+                }
                 // A list element or dictionary entry is a mutable place when
                 // its collection is (ADR-0061, 2026-09-21 section, A1).
                 if matches!(&object_ty, Type::Named(name, args)
@@ -923,6 +934,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        self.reject_state_loan(object, locals)?;
         self.reject_property_place(object, "mutated", locals)?;
         if let Some(place) = self.borrow_call_place(object) {
             self.ensure_place_mutation_allowed(&place, span, locals)?;

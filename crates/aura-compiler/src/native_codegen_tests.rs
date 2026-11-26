@@ -660,6 +660,8 @@ def main() -> int32:
         unions: Vec::new(),
         enums: Vec::new(),
         constants: vec![crate::mir::MirConstant {
+            frozen: None,
+            state: None,
             key: "<test>::answer".to_string(),
             initializer: initializer.name.clone(),
             ty: Type::named("int64"),
@@ -3515,6 +3517,7 @@ fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mi
 fn direct_ffi_codegen_calls_the_foreign_symbol_itself() {
     let call = Rvalue::Call {
         callee: CallTarget::Extern(MirExternCall {
+            module_name: String::new(),
             name: String::new(),
             symbol: "getpid".to_string(),
             abi: "C".to_string(),
@@ -3598,6 +3601,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "read_count".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "read".to_string(),
                                 abi: "C".to_string(),
@@ -3643,6 +3647,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "handle".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "malloc".to_string(),
                                 abi: "C".to_string(),
@@ -3671,6 +3676,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "released".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "free".to_string(),
                                 abi: "C".to_string(),
@@ -3699,6 +3705,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "narrow".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "htons".to_string(),
                                 abi: "C".to_string(),
@@ -3762,6 +3769,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let invalid_abi = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "Rust".to_string(),
@@ -3782,6 +3790,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let wrong_arity = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "C".to_string(),
@@ -3811,6 +3820,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let unexpected_writeback = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "C".to_string(),
@@ -3881,6 +3891,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                         target: "%t0".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "read".to_string(),
                                 abi: "C".to_string(),
@@ -10383,6 +10394,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     assert!(stray_pop_cleanup_error.contains("does not know cleanup registration for `ghost`"));
 
     let pair_class = crate::mir::MirClass {
+        c_layout: None,
         name: "Pair".to_string(),
         type_params: Vec::new(),
         fields: vec![
@@ -10817,8 +10829,8 @@ fn direct_try_moves_noncopy_ok_payloads_through_the_destructive_runtime_path() {
 def produce() -> Result[str, str]:
     return Result.Ok("owned payload")
 
-def forward() -> Result[str, str]:
-    result = produce()
+def forward(results: mut list[Result[str, str]]) -> Result[str, str]:
+    result = results.pop()
     value = try result
     return Result.Ok(value)
 
@@ -10982,6 +10994,7 @@ fn native_codegen_thunk_helpers_cover_roundtrip_paths() {
         assert!(opaque_missing.contains("task-start thunk expected an opaque value"));
 
         let pair_ty = DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Pair".to_string(),
             fields: vec![
                 PlainClassField {
@@ -11018,6 +11031,7 @@ fn native_codegen_release_helpers_cover_cleanup_error_paths() {
         let raw_bool = builder.iconst(types::I64, 1);
         let opaque_string = DirectType::Opaque(Type::named("str"));
         let plain_pair = DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Pair".to_string(),
             fields: vec![
                 PlainClassField {
@@ -11350,6 +11364,7 @@ fn infer_operand_types_track_plain_classes() {
     variable_types.insert(
         "point".to_string(),
         DirectType::PlainClass(super::PlainClassType {
+            c_layout: None,
             class_name: "Point".to_string(),
             fields: vec![
                 super::PlainClassField {
@@ -11367,6 +11382,7 @@ fn infer_operand_types_track_plain_classes() {
         (
             "Point".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Point".to_string(),
                 type_params: Vec::new(),
                 fields: Vec::new(),
@@ -11381,6 +11397,7 @@ fn infer_operand_types_track_plain_classes() {
         (
             "Node".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Node".to_string(),
                 type_params: Vec::new(),
                 fields: Vec::new(),
@@ -11561,6 +11578,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
     classes.insert(
         "Point".to_string(),
         crate::mir::MirClass {
+            c_layout: None,
             name: "Point".to_string(),
             type_params: Vec::new(),
             fields: vec![
@@ -11615,6 +11633,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
     assert!(ScalarKind::Float64.is_float());
 
     let point_ty = DirectType::PlainClass(PlainClassType {
+        c_layout: None,
         class_name: "Point".to_string(),
         fields: vec![
             PlainClassField {
@@ -11644,6 +11663,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
 #[test]
 fn cleanup_place_type_resolves_receivers_params_locals_and_temporaries() {
     let resource_class = crate::mir::MirClass {
+        c_layout: None,
         name: "Resource".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -11654,6 +11674,7 @@ fn cleanup_place_type_resolves_receivers_params_locals_and_temporaries() {
         copy: false,
     };
     let holder_class = crate::mir::MirClass {
+        c_layout: None,
         name: "Holder".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -11749,6 +11770,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         (
             "Entry".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Entry".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -11762,6 +11784,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         (
             "Box".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -12054,6 +12077,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
     );
     assert_eq!(
         direct_type_to_type(&DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Point".to_string(),
             fields: vec![PlainClassField {
                 name: "x".to_string(),
@@ -12097,6 +12121,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
         vec![types::I64]
     );
     let flat_class = DirectType::PlainClass(PlainClassType {
+        c_layout: None,
         class_name: "Pair".to_string(),
         fields: vec![
             PlainClassField {
@@ -12193,6 +12218,7 @@ fn native_codegen_direct_types_keep_recursive_and_generic_classes_opaque() {
         (
             "Node".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Node".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -12206,6 +12232,7 @@ fn native_codegen_direct_types_keep_recursive_and_generic_classes_opaque() {
         (
             "Box".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -12242,6 +12269,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
         (
             "Pair".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Pair".to_string(),
                 type_params: Vec::new(),
                 fields: vec![
@@ -12261,6 +12289,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
         (
             "Wrapper".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Wrapper".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -12691,6 +12720,7 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
         constants: Vec::new(),
         functions: vec![main, close],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Resource".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("value", Type::named("int64"))],
@@ -12760,6 +12790,7 @@ fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors()
         constants: Vec::new(),
         functions: vec![plain_function.clone()],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Plain".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("value", Type::named("int32"))],
@@ -12802,6 +12833,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         constants: Vec::new(),
         functions: vec![plain_close_function.clone(), resource_close],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Resource".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("closed", Type::named("bool"))],
@@ -12847,6 +12879,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         constants: Vec::new(),
         functions: vec![opaque_close_function.clone(), managed_close],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Managed".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("handle", Type::named("str"))],
@@ -13383,6 +13416,7 @@ fn native_codegen_retain_and_release_helpers_cover_every_callable_bearing_shape(
         )));
         let text = DirectType::Opaque(Type::named("str"));
         let pair = DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Pair".to_string(),
             fields: vec![
                 PlainClassField {
@@ -16658,7 +16692,12 @@ def main():
 #[test]
 fn native_module_constant_reads_find_their_frozen_value_untagged() {
     let source = r#"
+def configured_names() -> list[str]:
+    print("loading names")
+    return ["alpha", "beta"]
+
 NAMES: list[str] = ["alpha", "beta"]
+DYNAMIC_NAMES = configured_names()
 LIMITS: dict[str, int64] = {"alpha": 1}
 
 def count() -> int64:
@@ -16829,6 +16868,38 @@ def main():
             "a record pop must not reference `{forbidden}`: {referenced:?}"
         );
     }
+}
+
+#[test]
+fn direct_record_list_swaps_exchange_the_records_in_place() {
+    let source = r#"
+copy class Entry:
+    dist: int64
+    node: int64
+
+copy class Pixel:
+    red: uint8
+    count: uint16
+
+def main():
+    mut heap: list[Entry] = [Entry(dist=3, node=1), Entry(dist=1, node=2)]
+    heap.swap(0, -1)
+    mut pixels: list[Pixel] = [Pixel(red=1, count=2), Pixel(red=3, count=4)]
+    pixels.swap(1, 0)
+    print(heap[0].dist + (pixels[0].count as int64))
+"#;
+    let mir = lower_source_to_mir(source).expect("record swap source should lower");
+    let object = emit_host_object(&mir).expect("record swap source should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    // A shared list or an index out of range still takes the call.
+    assert!(
+        referenced.contains("aura_direct_vec_swap_in_place"),
+        "a record swap keeps the call for a shared list: {referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_collection_operation"),
+        "a record swap must not take the general operation: {referenced:?}"
+    );
 }
 
 const TEXT_SLICE_SOURCE: &str = r#"
@@ -17531,6 +17602,90 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_ffi_codegen_sanitizes_all_flag_lists_before_trapping() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" def writes_two(first: mut ptr[bool], second: mut ptr[bool]) -> None
+
+def main() -> int32:
+    mut a: list[bool] = [false]
+    mut b: list[bool] = [false]
+    writes_two(a, b)
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("multi-flag-list call should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "writes_two",
+        "aura_direct_ffi_sanitize_flags",
+        "aura_direct_ffi_bad_bool",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn direct_ffi_codegen_commits_handle_writeback_before_flag_and_scalar_checks() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" opaque class Store drop st_close
+extern "C" def st_close(store: own Store) -> None
+extern "C" def replace_and_check(
+    flags: mut ptr[bool],
+    ok: mut bool,
+    out: mut Store | None
+) -> None
+
+def main() -> int32:
+    mut flags: list[bool] = [false]
+    mut ok: bool = false
+    mut slot: Store | None = None
+    replace_and_check(flags, ok, slot)
+    return 0
+"#,
+    );
+    let object_bytes =
+        emit_unoptimized_object(&module).expect("handle + flag writeback call should emit");
+    let file = object::File::parse(&*object_bytes).expect("parse object");
+    let mut call_offsets: HashMap<String, u64> = HashMap::new();
+    for section in file.sections() {
+        for (offset, reloc) in section.relocations() {
+            if let RelocationTarget::Symbol(sym_idx) = reloc.target() {
+                if let Ok(sym) = file.symbol_by_index(sym_idx) {
+                    if let Ok(name) = sym.name() {
+                        let clean = name.trim_start_matches('_').to_string();
+                        call_offsets.entry(clean).or_insert(offset);
+                    }
+                }
+            }
+        }
+    }
+    let stored = *call_offsets
+        .get("aura_direct_ffi_stored_handle")
+        .expect("missing aura_direct_ffi_stored_handle");
+    let check_flags = *call_offsets
+        .get("aura_direct_ffi_check_flags")
+        .expect("missing aura_direct_ffi_check_flags");
+    let bad_bool = *call_offsets
+        .get("aura_direct_ffi_bad_bool")
+        .expect("missing aura_direct_ffi_bad_bool");
+    assert!(
+        stored < check_flags,
+        "handle writeback ({stored}) must precede flag validation ({check_flags})"
+    );
+    assert!(
+        stored < bad_bool,
+        "handle writeback ({stored}) must precede bool scalar validation ({bad_bool})"
+    );
+}
+
+#[test]
 fn direct_ffi_codegen_lowers_every_boundary_type_to_c_arguments() {
     let module = lower_ffi_source_to_mir(
         r#"
@@ -18009,6 +18164,48 @@ def main() -> int32:
         );
     }
 
+    // A separate function calling an extern symbol without any callback
+    // parameter must still check for callback failures registered elsewhere.
+    let split = lower_ffi_source_to_mir(
+        r#"
+extern "C" def reg(cb: def(x: int32) -> int32) -> None
+extern "C" def fire() -> int32
+
+def handler(x: int32) -> int32:
+    return x + 1
+
+def setup() -> None:
+    reg(handler)
+
+def trigger() -> int32:
+    return fire()
+
+def main() -> int32:
+    setup()
+    return trigger()
+"#,
+    );
+    let split_obj = emit_unoptimized_object(&split).expect("split callback module should emit");
+    let file = object::File::parse(&*split_obj).expect("parse object");
+    let mut callback_checks = 0usize;
+    for section in file.sections() {
+        for (_, reloc) in section.relocations() {
+            if let RelocationTarget::Symbol(sym_idx) = reloc.target() {
+                if let Ok(sym) = file.symbol_by_index(sym_idx) {
+                    if sym.name().is_ok_and(|name| {
+                        name.trim_start_matches('_') == "aura_direct_ffi_callback_check"
+                    }) {
+                        callback_checks += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        callback_checks >= 2,
+        "both `reg` and `fire` must emit aura_direct_ffi_callback_check, found {callback_checks}"
+    );
+
     // C text reaches a callback as a pointer, which the body copies into
     // a `str` and frees when the function returns.
     let text = lower_ffi_source_to_mir(
@@ -18470,6 +18667,113 @@ fn a_leaf_with_a_mutable_receiver_gets_a_frameless_second_body() {
     emit_host_object(&mir).expect("the leaf methods should emit optimized");
 }
 
+const FRAMELESS_CALLER_SOURCE: &str = r#"
+copy class Vec2:
+    x: float64
+    y: float64
+
+    def dot(self, other: Vec2) -> float64:
+        return self.x * other.x + self.y * other.y
+
+    def scale(self, k: float64) -> Vec2:
+        return Vec2(x=self.x * k, y=self.y * k)
+
+    def normalized(self) -> Vec2:
+        return self.scale(1.0 / sqrt(self.dot(self)))
+
+class Scene:
+    light: Vec2
+    count: int64
+
+    def lit(self, point: Vec2, k: float64) -> float64:
+        return point.scale(k).dot(point)
+
+    def brightness(self) -> float64:
+        return self.light.dot(self.light)
+
+def twice(a: float64) -> float64:
+    return a * 2.0
+
+def next(a: int64) -> int64:
+    return a + 1
+
+def ratio(a: float64, b: float64) -> float64:
+    return twice(a) / twice(b)
+
+def stepped(a: int64) -> int64:
+    return next(a) * 2
+
+def summed(n: int64) -> float64:
+    mut total = 0.0
+    mut i = 0
+    while i < n:
+        total = total + twice(total + 1.0)
+        i = i + 1
+    return total
+
+def nested(a: float64, b: float64) -> float64:
+    return ratio(a, b) + 1.0
+
+def main() -> None:
+    v = Vec2(x=3.0, y=4.0).normalized()
+    scene = Scene(light=v, count=1)
+    print(scene.lit(v, 2.0) + scene.brightness())
+    print(nested(1.0, 2.0))
+    print(stepped(1))
+    print(summed(3))
+"#;
+
+#[test]
+fn a_function_that_only_calls_total_leaves_keeps_no_frame() {
+    let mir = lower_source_to_mir(FRAMELESS_CALLER_SOURCE).expect("the callers should lower");
+    let classes = mir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect::<HashMap<_, _>>();
+    let function = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("`{name}` should lower"))
+    };
+    let total = super::total_leaves(&mir, &classes);
+    // Float arithmetic, a field read, and a construction cannot stop the
+    // program. A checked sum can, and so can a function that calls.
+    for name in ["Vec2.dot", "Vec2.scale", "twice"] {
+        assert!(total.contains(name), "{name}: {total:?}");
+    }
+    for name in [
+        "next",
+        "ratio",
+        "Vec2.normalized",
+        "Scene.brightness",
+        "main",
+    ] {
+        assert!(!total.contains(name), "{name}: {total:?}");
+    }
+    // A caller of total leaves is no leaf, and keeps no frame either. Its
+    // own division and its loop are a leaf's.
+    for name in ["Vec2.normalized", "Scene.lit", "ratio", "summed"] {
+        assert!(!super::frameless_leaf(function(name), &classes), "{name}");
+        assert!(
+            super::frameless_caller(function(name), &classes, &total),
+            "{name}"
+        );
+    }
+    // A callee that may stop the program pushes its own record, so its
+    // caller's must be below it.
+    for name in ["stepped", "nested", "main"] {
+        assert!(
+            !super::frameless_caller(function(name), &classes, &total),
+            "{name}"
+        );
+    }
+    crate::native_backend::without_optimization(|| emit_host_object(&mir))
+        .expect("the callers should emit unoptimized");
+    emit_host_object(&mir).expect("the callers should emit");
+}
+
 #[test]
 fn a_large_leaf_is_left_to_the_optimizer() {
     let mut source = String::from("def spread(n: int64) -> int64:\n    mut total = n\n");
@@ -18641,6 +18945,7 @@ fn numbers_pass_small_values_in_registers_and_box_at_nested_union_boundaries() {
     let classes = HashMap::from([(
         "numbers.BigInt".into(),
         crate::mir::MirClass {
+            c_layout: None,
             name: "numbers.BigInt".into(),
             type_params: vec![],
             fields: vec![class_field("storage", storage)],
@@ -18749,4 +19054,309 @@ def main():
         .unwrap();
     let shapes = super::shapes::ProgramShapes::new(&module, std::iter::empty());
     assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
+}
+
+#[test]
+fn typed_enum_handle_payload_copies_into_a_fresh_box() {
+    let source = r#"
+enum Holder:
+    QueueBox(Queue[int64])
+    Empty
+
+def extract(h: Holder) -> Queue[int64]:
+    match h:
+        case Holder.QueueBox(q):
+            return q
+        case Holder.Empty:
+            return Queue[int64](capacity=1)
+
+def main():
+    q = Queue[int64](capacity=1)
+    h = Holder.QueueBox(q)
+    out = extract(h)
+    _ = out.put(1)
+"#;
+    let mir = lower_source_to_mir(source).expect("the enum extraction should lower");
+    let object = emit_unoptimized_object(&mir).expect("the enum extraction should emit");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_instance_copy_field"),
+        "extracting a handle payload from a typed enum must copy into a fresh box instead of retaining the container's ElementBox: {referenced:?}"
+    );
+}
+
+#[test]
+fn array_holder_count_loads_atomically_on_direct_and_loop_writes() {
+    let source = r#"
+def single_write(xs: mut Array[int64], i: int64, v: int64) -> None:
+    xs[i] = v
+
+def loop_write(xs: mut Array[int64], n: int64) -> None:
+    for i in range(n):
+        xs[i] = i
+
+def main() -> None:
+    mut xs = Array[int64].zeros([4])
+    single_write(xs, 0, 7)
+    loop_write(xs, 4)
+"#;
+    let mir = lower_source_to_mir(source).expect("array writes should lower");
+    let validated = super::validated_for_emission(&mir).expect("MIR validates");
+    let ir = super::NativeCodegen::with_validated_loans(&validated, "<test>", source)
+        .expect("codegen initializes")
+        .emit_ir()
+        .expect("LLVM IR emits");
+
+    // Extract the IR definitions of single_write and loop_write and assert each
+    // performs an atomic i64 load of `ArrayOwner.holders`.
+    for fn_name in ["aura_fn_single_write", "aura_fn_loop_write"] {
+        let needle = format!("@{fn_name}(");
+        let def_start = ir
+            .match_indices(&needle)
+            .find_map(|(pos, _)| {
+                let line_start = ir[..pos].rfind('\n').map_or(0, |i| i + 1);
+                ir[line_start..pos]
+                    .starts_with("define ")
+                    .then_some(line_start)
+            })
+            .unwrap_or_else(|| panic!("missing definition for `{fn_name}` in IR"));
+        let rest = &ir[def_start..];
+        let end = rest.find("\n}\n").unwrap_or(rest.len());
+        let body = &rest[..end];
+        let atomic_loads = body.matches("load atomic i64").count();
+        assert!(
+            atomic_loads >= 1,
+            "expected atomic i64 load for ArrayOwner.holders in `{fn_name}`:\n{body}"
+        );
+        if fn_name == "aura_fn_loop_write" {
+            // Loop snapshot preheader + fallback element-write path both check `ArrayOwner.holders`.
+            assert!(
+                atomic_loads >= 2,
+                "expected atomic i64 loads in both loop snapshot preheader and direct write path in `{fn_name}` (got {atomic_loads}):\n{body}"
+            );
+        }
+    }
+}
+
+#[test]
+fn compiled_constant_data_has_no_initializer_call_at_entry() {
+    let source = "def make() -> list[int64]:\n    return [11, 19]\nconst values = make()\ndef main():\n    print(values[0])\n";
+    let mir = lower_source_to_mir(source).expect("constant should lower");
+    let bytes = emit_host_object(&mir).expect("constant should emit");
+    let initializer = mir
+        .constants
+        .iter()
+        .find(|value| value.key.ends_with("::values"))
+        .unwrap();
+    let symbol = mangle_symbol(&initializer.initializer);
+    let object = object::File::parse(&*bytes).unwrap();
+    assert!(object
+        .symbols()
+        .all(|entry| !entry.name().unwrap_or("").ends_with(&symbol)));
+    assert!(!object_referenced_symbols(&bytes)
+        .iter()
+        .any(|symbol| symbol.ends_with("aura_direct_module_constant")));
+}
+
+#[test]
+fn exhaustive_match_returning_a_record_emits_a_typed_function() {
+    let mir = lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/conditional_trait_dependency.au"
+    ))
+    .expect("the exhaustive match should lower");
+    let select = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "select_layout")
+        .expect("select_layout should be present");
+    assert!(select
+        .blocks
+        .iter()
+        .all(|block| !matches!(block.terminator, Terminator::Return(Operand::Unit))));
+    emit_host_object(&mir).expect("the record-returning function should emit");
+}
+
+#[test]
+fn exhaustive_match_returning_a_record_with_postconditions_emits() {
+    let source = r#"
+class Pair:
+    value: int64
+
+enum Side:
+    Left
+    Right
+
+def choose(side: Side) -> Pair:
+    ensures result.value > 0
+    match side:
+        case Side.Left:
+            return Pair(value=11)
+        case Side.Right:
+            return Pair(value=22)
+
+def main():
+    print(choose(Side.Left).value)
+"#;
+    let mir = lower_source_to_mir(source).expect("the contracted function should lower");
+    emit_host_object(&mir).expect("the contracted record return should emit");
+}
+
+#[test]
+fn fixed_array_native_storage_covers_nested_and_wide_lanes() {
+    for source in [
+        include_str!("../tests/fixtures/run-pass/fixed_arrays.au"),
+        include_str!("../tests/fixtures/run-pass/nested_fixed_arrays.au"),
+        include_str!("../tests/fixtures/run-pass/wide_fixed_arrays.au"),
+    ] {
+        let module = lower_source_to_mir(source).unwrap();
+        let object = emit_unoptimized_object(&module).unwrap();
+        assert!(!object.is_empty());
+    }
+}
+
+#[test]
+fn hosted_bit_methods_lower_at_every_word_width_and_on_wide_values() {
+    let source = r#"
+def word_bits(a: int8, b: uint16, c: int32, d: uint64, n: int64) -> int64:
+    x = a.swap_bytes().rotate_left(n).leading_zeros()
+    y = b.rotate_right(n).swap_bytes().trailing_zeros()
+    return x + y + c.rotate_right(n).count_ones() + d.swap_bytes().count_ones()
+
+def wide_bits(a: int128, b: uint128, n: int64) -> int64:
+    return a.rotate_right(n).count_ones() + b.rotate_left(n).leading_zeros()
+
+def main() -> None:
+    print(word_bits(-1, 1, 2, 3, 2))
+    print(wide_bits(-1, 1, 3))
+"#;
+    let module = lower_source_to_mir(source).expect("bit methods should lower to MIR");
+    let references = object_referenced_symbols(&emit_unoptimized_object(&module).unwrap());
+    assert!(references
+        .iter()
+        .any(|name| name.contains("aura_direct_integer_bits")));
+}
+
+#[test]
+fn mixed_width_mir_comparisons_only_box_the_full_unsigned_and_signed_pair() {
+    // A saved MIR comparison can have operands of different integer widths.
+    // The source checker normally gives both operands the same kind.
+    let comparisons = [
+        ("eq", "=="),
+        ("ne", "!="),
+        ("lt", "<"),
+        ("le", "<="),
+        ("gt", ">"),
+        ("ge", ">="),
+    ];
+    for (left_type, right_type, boxed) in [
+        ("int16", "uint8", false),
+        ("uint64", "uint16", false),
+        ("int64", "uint64", true),
+    ] {
+        let mut source = "def main() -> None:\n    pass\n".to_string();
+        for (name, op) in comparisons {
+            source.push_str(&format!(
+                "\ndef cmp_{name}(a: {left_type}, b: {left_type}) -> bool:\n    return a {op} b\n"
+            ));
+        }
+        let mut module = lower_source_to_mir(&source).unwrap();
+        for function in module
+            .functions
+            .iter_mut()
+            .filter(|f| f.name.starts_with("cmp_"))
+        {
+            function.params[1].ty = Type::named(right_type);
+            for local in &mut function.local_types {
+                if local.name == "b" {
+                    local.ty = Type::named(right_type);
+                }
+            }
+        }
+        let object = emit_unoptimized_object(&module).unwrap();
+        for (name, _) in comparisons {
+            let refs = object_function_referenced_symbols(&object, &format!("aura_fn_cmp_{name}"));
+            let calls_boxed_comparison = refs
+                .iter()
+                .any(|symbol| symbol.trim_start_matches('_') == "aura_direct_compare_values");
+            assert_eq!(
+                calls_boxed_comparison, boxed,
+                "{left_type} {name} {right_type}: {refs:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn direct_ffi_codegen_reinterprets_a_large_struct_through_a_zeroed_slot() {
+    // Both layouts are wider than the slot size the stores are unrolled
+    // for, so the slot is zeroed by a loop.
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" class Big:
+    data: array[uint64, 40]
+
+extern "C" class Other:
+    words: array[uint32, 82]
+
+extern "C" def widen(big: Big) -> Other symbol "aura.reinterpret"
+extern "C" def narrow(other: Other) -> Big symbol "aura.reinterpret"
+
+def run(big: Big) -> uint64:
+    other = widen(big)
+    print(other.words[81])
+    return narrow(other).data[39]
+
+def main() -> int32:
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("a large reinterpret should emit");
+    let referenced = object_referenced_symbols(&object);
+    assert!(!referenced
+        .iter()
+        .any(|name| name.trim_start_matches('_') == crate::ffi::REINTERPRET_SYMBOL));
+}
+
+#[test]
+fn union_array_writeback_emits_dynamic_and_literal_reads_with_buffer_release() {
+    let module = lower_ffi_source_to_mir(include_str!(
+        "../../aura/tests/fixtures/systems_layout/layout.au"
+    ));
+    let object = emit_unoptimized_object(&module).expect("union array writeback should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "fill_events",
+        "aura_direct_ffi_unpack_structs",
+        "aura_direct_ffi_release_structs",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "{symbol}: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn class_drop_hook_leaves_unrelated_function_instructions_alone() {
+    let source = r#"
+class Resource:
+    value: int64
+    def __drop__(mut self):
+        print(self.value)
+
+def arithmetic(k: int64) -> int64:
+    return 2 * k + 1
+
+def main():
+    r = Resource(7)
+    print(arithmetic(3))
+"#;
+    let module = lower_source_to_mir(source).unwrap();
+    let object = emit_unoptimized_object(&module).unwrap();
+    let refs = object_function_referenced_symbols(&object, &super::mangle_symbol("arithmetic"));
+    assert!(refs
+        .iter()
+        .all(|name| !name.contains("class_drop") && !name.contains("stamp_owner")));
 }

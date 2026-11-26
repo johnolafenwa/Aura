@@ -59,8 +59,8 @@ struct Body<'a> {
     /// The `mut` parameters, `self` included.
     params: Vec<&'a str>,
     effects: Vec<Effect<'a>>,
-    /// The place each loan borrows from.
-    loans: BTreeMap<&'a str, &'a str>,
+    /// The places each loan may borrow from.
+    loans: BTreeMap<&'a str, BTreeSet<&'a str>>,
 }
 
 impl<'a> Body<'a> {
@@ -75,7 +75,7 @@ impl<'a> Body<'a> {
             params.push("self");
         }
         let mut effects = Vec::new();
-        let mut loans = BTreeMap::new();
+        let mut loans: BTreeMap<&'a str, BTreeSet<&'a str>> = BTreeMap::new();
         // A function with no `mut` parameter has nothing to report.
         let blocks = if params.is_empty() {
             &[][..]
@@ -87,14 +87,23 @@ impl<'a> Body<'a> {
                 match instruction {
                     Instruction::BeginLoan { loan, source, .. }
                     | Instruction::BeginElementLoan { loan, source, .. } => {
-                        loans.insert(loan.as_str(), source.as_str());
+                        loans
+                            .entry(loan.as_str())
+                            .or_default()
+                            .insert(source.as_str());
                     }
                     Instruction::BeginReturnedLoan { loan, origin, .. } => {
-                        loans.insert(loan.as_str(), origin.as_str());
+                        loans
+                            .entry(loan.as_str())
+                            .or_default()
+                            .insert(origin.as_str());
                     }
                     Instruction::Reborrow { loan, parent, .. }
                     | Instruction::ReborrowElement { loan, parent, .. } => {
-                        loans.insert(loan.as_str(), parent.as_str());
+                        loans
+                            .entry(loan.as_str())
+                            .or_default()
+                            .insert(parent.as_str());
                     }
                     Instruction::Assign { target, value } => {
                         effects.push(Effect::Write(target.clone()));
@@ -125,10 +134,11 @@ impl<'a> Body<'a> {
     }
 
     /// Adds a write of `place`, or of `path` inside it, to `frame`. A
-    /// write through a loan is a write of the place the loan borrows.
+    /// write through a loan is a write of every place the loan may borrow.
     fn record(&self, place: &str, path: &str, frame: &mut BTreeMap<String, Written>) {
-        let (mut place, mut path) = (place, path);
-        for _ in 0..=self.loans.len() {
+        let mut visited = BTreeSet::new();
+        let mut work = vec![(place, path)];
+        while let Some((place, path)) = work.pop() {
             let root = root_of(place);
             if let Some(written) = frame.get_mut(root) {
                 let fields = field_path(place[root.len()..].split('.').chain(path.split('.')));
@@ -138,12 +148,15 @@ impl<'a> Body<'a> {
                     }
                     _ => *written = None,
                 }
-                return;
+                continue;
             }
-            let Some(source) = self.loans.get(root) else {
-                return;
-            };
-            (place, path) = (source, "");
+            if let Some(sources) = self.loans.get(root) {
+                if visited.insert(root) {
+                    for &source in sources {
+                        work.push((source, ""));
+                    }
+                }
+            }
         }
     }
 }

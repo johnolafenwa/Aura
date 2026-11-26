@@ -664,17 +664,13 @@ fn optimized_ir(module: &LlvmModule) -> String {
 }
 
 #[test]
-fn task_invariant_imports_let_llvm_merge_their_calls() {
+fn read_only_imports_merge_without_intervening_writes() {
     let mut module = module();
     let getter = signature(CallConv::C, &[], &[types::I64]);
-    let effect = signature(CallConv::C, &[types::I64], &[]);
     let stack = module
         .declare_function("aura_direct_frame_stack", Linkage::Import, &getter)
         .expect("the import should declare");
-    module.mark_task_invariant(stack);
-    let opaque = module
-        .declare_function("opaque_effect", Linkage::Import, &effect)
-        .expect("the import should declare");
+    module.mark_read_only(stack);
     let sig = signature(CallConv::C, &[], &[types::I64]);
     define(
         &mut module,
@@ -685,9 +681,7 @@ fn task_invariant_imports_let_llvm_merge_their_calls() {
             let entry = builder.create_block();
             builder.switch_to_block(entry);
             let stack = builder.import_function(stack);
-            let opaque = builder.import_function(opaque);
             let first = builder.call(stack, &[]).results[0];
-            builder.call(opaque, &[first]);
             let second = builder.call(stack, &[]).results[0];
             let sum = builder.iadd(first, second);
             builder.return_(&[sum]);
@@ -700,16 +694,75 @@ fn task_invariant_imports_let_llvm_merge_their_calls() {
         "{ir}"
     );
     assert!(
-        ir.contains("memory(none)") && ir.contains("nounwind") && ir.contains("willreturn"),
+        ir.contains("memory(read)") && ir.contains("nounwind") && ir.contains("willreturn"),
         "{ir}"
     );
+    assert!(!ir.contains("memory(none)"), "{ir}");
     let optimized = optimized_ir(&module);
     assert_eq!(
         optimized
             .matches("call i64 @aura_direct_frame_stack()")
             .count(),
         1,
-        "a call between them does not keep both: {optimized}"
+        "back-to-back read-only calls should merge: {optimized}"
+    );
+}
+
+#[test]
+fn frame_stack_import_is_not_merged_across_recovery_boundary() {
+    let mut module = module();
+    let getter = signature(CallConv::C, &[], &[types::I64]);
+    let recover_begin_sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    let stack = module
+        .declare_function(
+            crate::runtime_abi::RuntimeFn::FrameStack.symbol(),
+            Linkage::Import,
+            &getter,
+        )
+        .expect("the import should declare");
+    if crate::runtime_abi::RuntimeFn::FrameStack.is_read_only() {
+        module.mark_read_only(stack);
+    }
+    let recover_begin = module
+        .declare_function(
+            crate::runtime_abi::RuntimeFn::RecoverBegin.symbol(),
+            Linkage::Import,
+            &recover_begin_sig,
+        )
+        .expect("the import should declare");
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(
+        &mut module,
+        "across_recover",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let params = builder.block_params(entry).to_vec();
+            let stack = builder.import_function(stack);
+            let recover_begin = builder.import_function(recover_begin);
+            let before = builder.call(stack, &[]).results[0];
+            builder.call(recover_begin, &[params[0], params[1]]);
+            let after = builder.call(stack, &[]).results[0];
+            let sum = builder.iadd(before, after);
+            builder.return_(&[sum]);
+        },
+    );
+
+    let ir = ir(&module);
+    assert!(
+        ir.contains("memory(read)") && !ir.contains("memory(none)"),
+        "aura_direct_frame_stack must be marked memory(read), not memory(none): {ir}"
+    );
+    let optimized = optimized_ir(&module);
+    assert_eq!(
+        optimized
+            .matches("call i64 @aura_direct_frame_stack()")
+            .count(),
+        2,
+        "aura_direct_frame_stack must not be merged across aura_direct_recover_begin: {optimized}"
     );
 }
 
@@ -1904,4 +1957,200 @@ fn hosted_targets_name_their_triple_and_architecture() {
     // No test sets a hosted target, so objects are for the build machine.
     assert_eq!(crate::native_backend::hosted_target(), None);
     assert_eq!(crate::native_backend::target_arch(), std::env::consts::ARCH);
+}
+
+#[test]
+fn freestanding_x86_64_functions_carry_noredzone_and_avoid_red_zone_spills() {
+    use crate::native_backend::FreestandingTarget;
+    use inkwell::targets::FileType;
+
+    let mut module =
+        LlvmModule::for_freestanding(FreestandingTarget::X86_64).expect("x86_64 freestanding");
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(&mut module, "leaf_slot", Linkage::Export, &sig, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let value = builder.block_params(entry)[0];
+        let other = builder.block_params(entry)[1];
+        let slot = builder.create_sized_stack_slot(64, 3);
+        let ptr = builder.stack_addr(types::I64, slot, 0);
+        builder.memory_access(
+            crate::native_backend::MemoryAccess::VolatileWrite,
+            types::I64,
+            &[ptr, value],
+        );
+        let ptr2 = builder.stack_addr(types::I64, slot, 32);
+        builder.memory_access(
+            crate::native_backend::MemoryAccess::VolatileWrite,
+            types::I64,
+            &[ptr2, other],
+        );
+        let loaded = builder
+            .memory_access(
+                crate::native_backend::MemoryAccess::VolatileRead,
+                types::I64,
+                &[ptr],
+            )
+            .expect("volatile read returns a value");
+        builder.return_(&[loaded]);
+    });
+
+    let machine = super::freestanding_target_machine(FreestandingTarget::X86_64)
+        .expect("x86_64 freestanding machine");
+    let context = Context::create();
+    let lowered = module
+        .lower(&context, &machine)
+        .expect("freestanding module should lower");
+    let ir_text = lowered.print_to_string().to_string();
+    assert!(
+        ir_text.contains("noredzone"),
+        "every x86_64 freestanding function must carry LLVM `noredzone`: {ir_text}"
+    );
+    let asm_buffer = machine
+        .write_to_memory_buffer(&lowered, FileType::Assembly)
+        .expect("x86_64 freestanding assembly should emit");
+    let asm = std::str::from_utf8(asm_buffer.as_slice()).expect("assembly should be UTF-8");
+    assert!(
+        !asm.contains("-(%rsp)")
+            && !asm.lines().any(|line| {
+                line.contains("(%rsp)")
+                    && line.split("(%rsp)").next().is_some_and(|prefix| {
+                        prefix
+                            .rsplit(|ch: char| ch.is_whitespace() || ch == ',')
+                            .next()
+                            .is_some_and(|offset| offset.starts_with('-'))
+                    })
+            }),
+        "x86_64 freestanding leaf function must not access negative offsets below %rsp:\n{asm}"
+    );
+    assert!(
+        asm.contains("subq") && asm.contains("%rsp"),
+        "x86_64 freestanding leaf function with stack slots must adjust %rsp:\n{asm}"
+    );
+}
+
+#[test]
+fn ordered_subword_operations_keep_their_llvm_order_and_width() {
+    use crate::native_backend::MemoryAccess::Ordered;
+    use aura_core::atomic_order::AtomicOperation::*;
+    use std::sync::atomic::Ordering::*;
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(&mut module, "ordered", Linkage::Export, &sig, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        let words = builder.block_params(entry);
+        let (cell, word) = (words[0], words[1]);
+        builder.memory_access(Ordered(Store, Release, Relaxed), types::I8, &[cell, word]);
+        builder.memory_access(Ordered(Add, Relaxed, Relaxed), types::I16, &[cell, word]);
+        let previous = builder
+            .memory_access(
+                Ordered(CompareExchange, AcqRel, Acquire),
+                types::I8,
+                &[cell, word, word],
+            )
+            .unwrap();
+        builder.memory_access(Ordered(Load, Acquire, Acquire), types::I16, &[cell]);
+        builder.memory_access(Ordered(Fence, SeqCst, SeqCst), types::I64, &[]);
+        builder.return_(&[previous]);
+    });
+    let ir = ir(&module);
+    for text in [
+        "store atomic i8",
+        "release, align 1",
+        "i16 %",
+        "monotonic",
+        "cmpxchg",
+        "acq_rel acquire",
+        "load atomic i16",
+        "acquire, align 2",
+        "fence seq_cst",
+    ] {
+        assert!(ir.contains(text), "missing {text} in {ir}");
+    }
+}
+
+#[test]
+fn fixed_array_arguments_use_the_callers_address() {
+    let mut module = module();
+    let inline = ScalarType::Inline {
+        bytes: 12,
+        align: 4,
+    };
+    let inspect = define(
+        &mut module,
+        "inspect",
+        Linkage::Local,
+        &signature(CallConv::Aura, &[inline], &[types::I64]),
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let param = builder.block_params(entry)[0];
+            let var = Var(0);
+            builder.declare_var(var, inline);
+            builder.def_var(var, param);
+            builder.bind_array_parameter(var, 0);
+            let address = builder.var_addr(var);
+            builder.return_(&[address]);
+        },
+    );
+    define(
+        &mut module,
+        "caller",
+        Linkage::Export,
+        &signature(CallConv::C, &[], &[types::I64]),
+        move |builder| {
+            let entry = builder.create_block();
+            builder.switch_to_block(entry);
+            let var = Var(0);
+            builder.declare_var(var, inline);
+            let zero = builder.iconst(inline, 0);
+            builder.def_var(var, zero);
+            let address = builder.var_addr(var);
+            let value = builder.use_var(var);
+            let value = builder.borrow_array_argument(value, address);
+            let function = builder.import_function(inspect);
+            let got = builder.call(function, &[value]).results[0];
+            builder.return_(&[got]);
+        },
+    );
+    let text = ir(&module);
+    assert!(text.contains("@inspect(ptr %0)"), "{text}");
+    assert!(text.contains("ptrtoint ptr %0 to i64"), "{text}");
+}
+
+#[test]
+fn llvm_rejects_invalid_load_and_store_orderings_from_the_backend_boundary() {
+    use crate::native_backend::MemoryAccess::Ordered;
+    use aura_core::atomic_order::AtomicOperation::{Load, Store};
+    use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+    for (op, order, reason) in [
+        (Load, Release, "release ordering is not valid on load"),
+        (Store, Acquire, "acquire ordering is not valid on store"),
+    ] {
+        let mut module = module();
+        let sig = signature(CallConv::C, &[types::I64, types::I64], &[]);
+        define(&mut module, "bad_order", Linkage::Export, &sig, move |b| {
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            let words = b.block_params(entry);
+            b.memory_access(
+                Ordered(op, order, Relaxed),
+                types::I16,
+                &words[..op.arity()],
+            );
+            b.return_(&[]);
+        });
+        let machine = host_target_machine().unwrap();
+        let context = Context::create();
+        let error = module
+            .lower(&context, &machine)
+            .expect_err("invalid atomic order");
+        assert!(error.contains(reason), "{error}");
+    }
 }

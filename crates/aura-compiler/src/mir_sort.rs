@@ -402,6 +402,7 @@ impl Lowerer<'_> {
             target: result.clone(),
             value: Rvalue::Call {
                 callee: CallTarget::TraitMember {
+                    trait_args: Vec::new(),
                     object: place(left),
                     trait_name: trait_name.to_string(),
                     field: field.to_string(),

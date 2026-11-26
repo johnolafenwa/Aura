@@ -37,7 +37,8 @@ use aura_core::ops::ReceiverKind;
 const CODE: &str = "AU2049";
 
 /// The hidden module alias generated code uses for the builtin `iter` module.
-const ITER_ALIAS: &str = "__aura_iter";
+/// The `#` prevents user code from spelling the alias.
+const ITER_ALIAS: &str = "__aura_iter#";
 
 /// The private alias of `Callable[own def() -> None]` that packs a
 /// generator's arguments.
@@ -117,7 +118,7 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) -> Result
             "the `iter` module cannot declare generator functions",
         ));
     }
-    let namespace = crate::builtin_sources::importable_builtin_namespace(&[
+    let namespace = crate::builtin_sources::internal_builtin_namespace(&[
         super::iterator_loops::ITER_MODULE.to_string(),
     ])
     .expect("the builtin `iter` module is importable");
@@ -222,6 +223,7 @@ fn rewrite(function: &mut FunctionDecl) -> Result<FunctionDecl> {
         span,
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: Vec::new(),
         spec: false,

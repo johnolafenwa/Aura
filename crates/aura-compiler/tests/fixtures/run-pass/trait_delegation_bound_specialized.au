@@ -1,0 +1,21 @@
+trait Scale[T]:
+    def scale(self, n: T) -> int64
+
+class Engine:
+    pass
+
+impl Scale[int64] for Engine:
+    def scale(self, n: int64) -> int64:
+        return n
+
+impl Scale[str] for Engine:
+    def scale(self, n: str) -> int64:
+        return len(n)
+
+class Car[E]:
+    engine: E
+
+impl[E: Scale[str]] Scale[str] for Car[E] by engine
+
+def main():
+    print(Car(engine=Engine()).scale("aura"))

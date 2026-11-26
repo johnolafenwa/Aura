@@ -24,8 +24,8 @@ use super::{ObligationKind, VerifyContext};
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Span;
 use crate::mir::{
-    ArithmeticTrap, AssertKind, BasicBlock, CallTarget, Instruction, MethodDispatch, MirArg,
-    MirFunction, MirReceiverKind, Operand, Rvalue, Terminator,
+    ArithmeticTrap, AssertKind, BasicBlock, CallTarget, CleanupCallee, Instruction, MethodDispatch,
+    MirArg, MirFunction, MirReceiverKind, Operand, Rvalue, Terminator,
 };
 use crate::runtime_ops::{
     ArrayOp, DictOp, FunctionOp, ListOp, RuntimeOp, ScalarOp, SetOp, SpanOp, StrOp, TaskOp,
@@ -33,18 +33,15 @@ use crate::runtime_ops::{
 };
 use crate::sema::Type;
 
-/// The inclusive range of an integer type.
+use aura_core::integer::{IntegerBounds, IntegerKind};
+use aura_core::integer_bits::BitMethod;
+
+/// The integer type whose range constrains an SMT integer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct IntTy {
-    pub(super) lo: i128,
-    pub(super) hi: i128,
-}
+pub(super) struct IntTy(pub(super) IntegerKind);
 
 impl IntTy {
-    pub(super) const INT64: IntTy = IntTy {
-        lo: i64::MIN as i128,
-        hi: i64::MAX as i128,
-    };
+    pub(super) const INT64: IntTy = IntTy(IntegerKind::Int64);
 
     pub(super) fn of(ty: &Type) -> Option<Self> {
         let Type::Named(name, args) = ty else {
@@ -53,25 +50,40 @@ impl IntTy {
         if !args.is_empty() {
             return None;
         }
-        let (lo, hi): (i128, i128) = match name.as_str() {
-            "int8" => (i8::MIN as i128, i8::MAX as i128),
-            "int16" => (i16::MIN as i128, i16::MAX as i128),
-            "int32" => (i32::MIN as i128, i32::MAX as i128),
-            "int64" => (i64::MIN as i128, i64::MAX as i128),
-            "uint8" => (0, u8::MAX as i128),
-            "uint16" => (0, u16::MAX as i128),
-            "uint32" => (0, u32::MAX as i128),
-            "uint64" => (0, u64::MAX as i128),
-            _ => return None,
-        };
-        Some(Self { lo, hi })
+        IntegerKind::from_runtime_type_name(name).map(Self)
+    }
+
+    pub(super) fn bounds(self) -> (i128, u128) {
+        match self.0.bounds() {
+            IntegerBounds::Signed { min, max } => (min, max as u128),
+            IntegerBounds::Unsigned { max } => (0, max),
+        }
+    }
+
+    pub(super) fn contains_literal(self, value: i128) -> bool {
+        let (lo, hi) = self.bounds();
+        value >= lo && (value < 0 || value as u128 <= hi)
     }
 
     pub(super) fn contains(self, term: &str) -> String {
+        let (lo, hi) = self.bounds();
+        format!("(and (<= {} {term}) (<= {term} {hi}))", lit(lo))
+    }
+
+    fn contains_float(self, float: FloatTy, term: &str, truncated: &str) -> String {
+        let (lo, hi) = self.bounds();
+        if self.0.bit_width() == 128 {
+            // The strict upper bound for uint128 is 2^128. Avoid rounding it
+            // on the compiler host or overflowing a Rust integer.
+            return format!(
+                "(and (not (fp.isNaN {term})) (not (fp.isInfinite {term})) {})",
+                self.contains(truncated)
+            );
+        }
         format!(
-            "(and (<= {} {term}) (<= {term} {}))",
-            lit(self.lo),
-            lit(self.hi)
+            "(and {} {})",
+            float.above(term, lo - 1),
+            float.below(term, hi as i128 + 1)
         )
     }
 }
@@ -295,9 +307,9 @@ pub(super) enum Val {
     /// A function value that names one function: a call through it is a
     /// call of that function.
     Func(String),
-    /// A `Task[T]` handle, with the value its task returns when it
-    /// finishes normally.
-    Task(Box<Val>),
+    /// A `Task[T]` handle, with the value its task returns and the
+    /// postcondition terms that hold only if it finishes normally (`Ready`).
+    Task(Box<Val>, Vec<String>),
     /// A closure made in the function being executed: the function it
     /// runs, and the value of each capture it holds.
     Closure(String, Vec<Val>),
@@ -372,9 +384,9 @@ enum Loan {
         index: String,
         projection: String,
     },
-    /// A loan the encoding does not follow. A write through it makes the
-    /// root local unknown.
-    Unknown(String),
+    /// A loan the encoding does not follow. A write through it makes each
+    /// root local in the set unknown.
+    Unknown(BTreeSet<String>),
     /// A loan of something inside an element of the collection at this
     /// place, which the encoding does not follow further. A write through
     /// it may change any element, and leaves the collection's own length
@@ -507,6 +519,10 @@ pub(super) struct Exec<'a> {
     /// Locals a closure of this function captures by reference. Any call
     /// may run the closure and change them.
     pub(super) captured: BTreeSet<String>,
+    /// Class cleanup methods (`__exit__` / `close`) registered by `PushCleanup`
+    /// for each managed place.
+    cleanup_callees: BTreeMap<String, BTreeSet<String>>,
+    pub(super) bit_terms: super::bits::BitTerms,
     /// The positions in a base list that a span index was checked to give.
     /// The base list's own check of such a position cannot fail.
     pub(super) span_positions: BTreeSet<String>,
@@ -528,6 +544,8 @@ pub(super) struct Exec<'a> {
     /// The module whose scope resolves unqualified names in the clause
     /// currently being evaluated.
     pub(super) spec_module: String,
+    /// Enclosing quantifier binders `(name, sort)` during specification evaluation.
+    pub(super) bound_vars: Vec<(String, &'static str)>,
     /// Active `(spec_decl_ptr, rendered_args)` calls to stop direct or
     /// mutual cycles immediately.
     pub(super) active_specs: Vec<(usize, Vec<String>)>,
@@ -600,6 +618,8 @@ impl<'a> Exec<'a> {
             labels,
             unsupported: None,
             captured: closure_captures(function),
+            cleanup_callees: collect_cleanup_callees(function),
+            bit_terms: Default::default(),
             span_positions: BTreeSet::new(),
             rounded: Vec::new(),
             entry_facts: 0,
@@ -608,6 +628,7 @@ impl<'a> Exec<'a> {
             position: (0, 0),
             proving: true,
             spec_module: function.module_name.clone(),
+            bound_vars: Vec::new(),
             active_specs: Vec::new(),
             spec_limit_hit: None,
             unmodeled_steps: Vec::new(),
@@ -640,6 +661,23 @@ impl<'a> Exec<'a> {
             .collect();
         let name = format!("{clean}!{}", self.counter);
         self.decls.push(format!("(declare-const {name} {sort})"));
+        if let Some(step) = self.origin {
+            self.unmodeled.insert(name.clone(), step);
+        }
+        name
+    }
+
+    pub(super) fn fresh_fun(&mut self, arg_sorts: &[&str], ret_sort: &str, hint: &str) -> String {
+        self.counter += 1;
+        let clean: String = hint
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .take(24)
+            .collect();
+        let name = format!("{clean}!{}", self.counter);
+        let domain = arg_sorts.join(" ");
+        self.decls
+            .push(format!("(declare-fun {name} ({domain}) {ret_sort})"));
         if let Some(step) = self.origin {
             self.unmodeled.insert(name.clone(), step);
         }
@@ -874,19 +912,51 @@ impl<'a> Exec<'a> {
 
     /// The length of a `dict` or `set` of `len` keys once `key` is added
     /// to `keys`.
-    fn len_after_add(&mut self, len: &str, keys: &str, key: &str) -> String {
+    fn len_after_add(&mut self, pc: &str, len: &str, keys: &str, key: &str) -> String {
         let after = self.define(
             "Int",
             "len",
             format!("(ite (select {keys} {key}) {len} (+ {len} 1))"),
         );
         // One more key than `int64` can count stops the program first.
-        self.fact(format!("(<= {after} {})", i64::MAX));
+        self.assume(pc, format!("(<= {after} {})", i64::MAX));
         after
     }
 
     pub(super) fn fresh(&mut self, ty: &Type, hint: &str) -> Val {
         self.fresh_at(ty, hint, 0)
+    }
+
+    /// A fresh uninterpreted value parameterized over the enclosing quantifier
+    /// binders, for scalar `spec def` cutoffs under a binder.
+    pub(super) fn fresh_under_binders(&mut self, ty: &Type, hint: &str) -> Option<Val> {
+        if matches!(ty, Type::Unit) {
+            return Some(Val::Unit);
+        }
+        let arg_sorts: Vec<&str> = self.bound_vars.iter().map(|(_, sort)| *sort).collect();
+        let args: String = self
+            .bound_vars
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let call = |exec: &mut Self, ret_sort: &str| {
+            let fun = exec.fresh_fun(&arg_sorts, ret_sort, hint);
+            format!("({fun} {args})")
+        };
+        if let Some(int) = IntTy::of(ty) {
+            return Some(Val::Int(call(self, "Int"), int));
+        }
+        if is_bool(ty) {
+            return Some(Val::Bool(call(self, "Bool")));
+        }
+        if is_str(ty) {
+            return Some(Val::Str(call(self, "String")));
+        }
+        if let Some(float) = FloatTy::of(ty) {
+            return Some(Val::Float(call(self, float.sort()), float));
+        }
+        None
     }
 
     fn fresh_at(&mut self, ty: &Type, hint: &str, depth: usize) -> Val {
@@ -933,6 +1003,14 @@ impl<'a> Exec<'a> {
                     len,
                     members,
                     elem: args[0].clone(),
+                }
+            }
+            ty if ty.as_fixed_array().is_some() => {
+                let (element, length) = ty.as_fixed_array().unwrap();
+                Val::List {
+                    len: length.to_string(),
+                    data: self.fresh_store(element, hint),
+                    elem: element.clone(),
                 }
             }
             Type::Named(name, args) if name == "list" && args.len() == 1 => {
@@ -1055,28 +1133,45 @@ impl<'a> Exec<'a> {
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
-        // A view of a whole place reads that place.
-        if let Some(Loan::Place(source)) = state.loans.get(&root) {
-            let source = join_path(source, &rest.join("."));
-            return self.read_place(state, &source);
-        }
-        // A view of a part a `str` method returned reads the part.
-        if let Some(Loan::Element { list, index, .. }) = state.loans.get(&root).cloned() {
-            let list = self.read_place(state, &list);
-            if self.is_part_list(&list) {
-                return self.element(&list, &index, &root);
+        // A view always reads through its loan target, never a shadowed `state.env` entry.
+        match state.loans.get(&root).cloned() {
+            Some(Loan::Place(source)) => {
+                let source = join_path(&source, &rest.join("."));
+                let value = self.read_place(state, &source);
+                return if value == Val::Opaque {
+                    self.fresh_local(path)
+                } else {
+                    value
+                };
             }
+            Some(Loan::Element {
+                list,
+                index,
+                projection,
+            }) => {
+                let list_value = self.read_place(state, &list);
+                let mut value = self.element(&list_value, &index, &root);
+                let full_projection = join_path(&projection, &rest.join("."));
+                for segment in full_projection
+                    .split('.')
+                    .filter(|segment| !segment.is_empty())
+                {
+                    value = project(&value, segment).unwrap_or(Val::Opaque);
+                }
+                return if value == Val::Opaque {
+                    self.fresh_local(path)
+                } else {
+                    value
+                };
+            }
+            Some(Loan::Inside(_) | Loan::Unknown(_)) => {
+                return self.fresh_local(path);
+            }
+            None => {}
         }
+        // Every loan returned above, so the root is a plain local here.
         if !state.env.contains_key(&root) {
-            let lent = match state.loans.get(&root).cloned() {
-                Some(Loan::Element {
-                    list,
-                    index,
-                    projection,
-                }) => self.lent_element(state, &list, &index, &projection),
-                _ => None,
-            };
-            let value = lent.unwrap_or_else(|| self.fresh_local(&root));
+            let value = self.fresh_local(&root);
             state.env.insert(root.clone(), value);
         }
         if rest.is_empty() {
@@ -1108,9 +1203,7 @@ impl<'a> Exec<'a> {
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
-        // A write through a view changes what it views: the place itself,
-        // or, where the encoding does not follow the view, anything in the
-        // local it came from.
+        // A write through a view updates its target without shadowing `state.env[loan]`.
         match state.loans.get(&root).cloned() {
             Some(Loan::Place(source)) => {
                 let source = join_path(&source, &rest.join("."));
@@ -1122,12 +1215,20 @@ impl<'a> Exec<'a> {
                 projection,
             }) if self.write_element(state, path, (&list, &index, &projection), &value) => {}
             Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
-                self.havoc_inside(state, &list)
+                self.havoc_inside(state, &list);
+                return;
             }
-            Some(Loan::Unknown(source)) => self.unmodeled(
-                "a write through a borrow the verifier does not follow",
-                |exec| exec.havoc_root(state, &source),
-            ),
+            Some(Loan::Unknown(roots)) => {
+                self.unmodeled(
+                    "a write through a borrow the verifier does not follow",
+                    |exec| {
+                        for source in &roots {
+                            exec.havoc_root(state, source);
+                        }
+                    },
+                );
+                return;
+            }
             None => {}
         }
         if rest.is_empty() {
@@ -1142,6 +1243,45 @@ impl<'a> Exec<'a> {
             state.env.insert(root, root_value);
         } else {
             self.havoc_root(state, &root);
+        }
+    }
+
+    fn write_element_loan(
+        &mut self,
+        state: &mut State,
+        list: &str,
+        index: &str,
+        projection: &str,
+        value: Val,
+    ) {
+        let current = self.read_place(state, list);
+        match current {
+            Val::List {
+                len,
+                data: Some(data),
+                elem,
+            } => {
+                let list_value = Val::List {
+                    len: len.clone(),
+                    data: Some(data.clone()),
+                    elem: elem.clone(),
+                };
+                // A write through a field of the element rewrites the whole element.
+                let element = if projection.is_empty() {
+                    Some(value)
+                } else {
+                    let mut element = self.element(&list_value, index, "element");
+                    let segments: Vec<&str> = projection.split('.').collect();
+                    set_in(&mut element, &segments, value).then_some(element)
+                };
+                let data = match element {
+                    Some(element) => self.put_or_fresh(&data, &elem, index, &element, "store"),
+                    None => self.fresh_store(&elem, "store"),
+                };
+                self.write_place(state, list, Val::List { len, data, elem });
+            }
+            Val::List { .. } | Val::Map { .. } => self.havoc_inside(state, list),
+            _ => self.havoc_place(state, list),
         }
     }
 
@@ -1220,6 +1360,8 @@ impl<'a> Exec<'a> {
             Val::Func(name) => self.oblige_unfollowed(name, pc),
             Val::Contracted(alias) => {
                 let span = self.span;
+                let erasing = self.erasing;
+                self.erasing = true;
                 self.oblige(
                     ObligationKind::Requires,
                     span,
@@ -1230,7 +1372,36 @@ impl<'a> Exec<'a> {
                             .into(),
                     ),
                 );
+                self.erasing = erasing;
             }
+            Val::Record(class, fields) => {
+                for (field, field_value) in fields {
+                    // Fields typed as a contracted callable alias are checked at every
+                    // store by `fit_callable` and carry their alias contract forward.
+                    if self.cx.field_contract(class, field).is_some() {
+                        continue;
+                    }
+                    self.oblige_escape(field_value, pc);
+                }
+            }
+            Val::Tuple(items) => {
+                for item in items {
+                    self.oblige_escape(item, pc);
+                }
+            }
+            Val::Enum(_, _, variants) => {
+                for payloads in variants {
+                    for item in payloads {
+                        self.oblige_escape(item, pc);
+                    }
+                }
+            }
+            Val::Union(_, members) => {
+                for member in members {
+                    self.oblige_escape(member, pc);
+                }
+            }
+            Val::Held(_, inner) => self.oblige_escape(inner, pc),
             _ => {}
         }
     }
@@ -1271,6 +1442,8 @@ impl<'a> Exec<'a> {
             _ => {
                 let span = self.span;
                 let pc = state.pc.clone();
+                let erasing = self.erasing;
+                self.erasing = true;
                 self.oblige(
                     ObligationKind::Requires,
                     span,
@@ -1281,6 +1454,7 @@ impl<'a> Exec<'a> {
                             .into(),
                     ),
                 );
+                self.erasing = erasing;
             }
         }
     }
@@ -1291,6 +1465,45 @@ impl<'a> Exec<'a> {
         let (parent, field) = path.rsplit_once('.')?;
         match self.place_type(parent)? {
             Type::Named(class, _) => self.cx.field_contract(&class, field),
+            _ => None,
+        }
+    }
+
+    /// The callable alias and field name a write through `loan` targets, when
+    /// `loan` points to a class field declared as a contracted callable alias.
+    fn loan_contract(&self, state: &State, loan: &str) -> Option<(String, String)> {
+        match state.loans.get(loan)? {
+            Loan::Place(place) => {
+                let alias = self.place_contract(place)?;
+                let field = place.rsplit('.').next().unwrap_or(place).to_string();
+                Some((alias, field))
+            }
+            Loan::Element {
+                list, projection, ..
+            } if !projection.is_empty() => {
+                let Type::Named(name, args) = self.place_type(list)? else {
+                    return None;
+                };
+                if name != "list" || args.len() != 1 {
+                    return None;
+                }
+                let segments: Vec<&str> = projection
+                    .split('.')
+                    .filter(|segment| !segment.is_empty())
+                    .collect();
+                let (&field, parent_segments) = segments.split_last()?;
+                let mut ty = args[0].clone();
+                for segment in parent_segments {
+                    ty = self.cx.project_type(&ty, segment)?;
+                }
+                match ty {
+                    Type::Named(class, _) => self
+                        .cx
+                        .field_contract(&class, field)
+                        .map(|alias| (alias, field.to_string())),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -1318,6 +1531,31 @@ impl<'a> Exec<'a> {
                     "a call through a function value checks `requires` when it runs".into(),
                 ),
             );
+        }
+        let has_param_invariant = self.guarded_invariant(name).is_some()
+            || self.cx.function(name).is_some_and(|func| {
+                func.params.iter().any(|param| {
+                    matches!(&param.ty, Type::Named(class, _) if self.cx.class_invariant(class).is_some_and(|(_, clauses)| !clauses.is_empty()))
+                })
+            });
+        if has_param_invariant {
+            let span = self.span;
+            let erasing = self.erasing;
+            self.erasing = true;
+            self.oblige(
+                ObligationKind::ClassInvariant,
+                span,
+                format!(
+                    "class invariants assumed by `{}` hold where it is called through a value",
+                    crate::mir::public_function_name(name)
+                ),
+                pc,
+                Goal::Unsupported(
+                    "a call through a function value does not check parameter class invariants when it runs"
+                        .into(),
+                ),
+            );
+            self.erasing = erasing;
         }
     }
 
@@ -1640,25 +1878,42 @@ impl<'a> Exec<'a> {
                 collect_writes(&blocks[block], &loan_roots, true, &mut lp.writes);
             }
             lp.writes.extend(self.captured.iter().cloned());
-            let mut defs: BTreeMap<&str, Vec<&Rvalue>> = BTreeMap::new();
-            for &block in &lp.body {
-                for instruction in &blocks[block].instructions {
-                    if let Instruction::Assign { target, value } = instruction {
-                        defs.entry(target.as_str()).or_default().push(value);
-                    }
-                }
-            }
             let mut steps: BTreeMap<String, Option<Step>> = BTreeMap::new();
             for &block in &lp.body {
-                for instruction in &blocks[block].instructions {
+                let mut block_defs: BTreeMap<&str, (usize, &Rvalue)> = BTreeMap::new();
+                for (pos, instruction) in blocks[block].instructions.iter().enumerate() {
                     if let Instruction::Assign { target, value } = instruction {
-                        if target.contains('.') {
-                            continue;
+                        if !target.contains('.') {
+                            let step = counter_step(target, value, pos, &block_defs, 0);
+                            let slot = steps.entry(target.clone()).or_insert(step);
+                            if *slot != step {
+                                *slot = None;
+                            }
                         }
-                        let step = counter_step(target, value, &defs, 0);
-                        let slot = steps.entry(target.clone()).or_insert(step);
-                        if *slot != step {
-                            *slot = None;
+                    }
+                    let mut written = BTreeSet::new();
+                    collect_instruction_writes(instruction, &loan_roots, true, &mut written);
+                    for name in &written {
+                        block_defs.remove(name.as_str());
+                    }
+                    if let Instruction::Assign { target, value } = instruction {
+                        if !target.contains('.')
+                            && !self.captured.contains(target)
+                            && !loan_roots.values().any(|roots| roots.contains(target))
+                        {
+                            // Keep the plain assignment only when the rvalue itself did not also
+                            // write back into `target`.
+                            let mut rvalue_written = BTreeSet::new();
+                            rvalue_writes(value, &mut |place| {
+                                let root = root_of(place);
+                                rvalue_written.insert(root.to_string());
+                                if let Some(sources) = loan_roots.get(root) {
+                                    rvalue_written.extend(sources.iter().cloned());
+                                }
+                            });
+                            if !rvalue_written.contains(target) {
+                                block_defs.insert(target.as_str(), (pos, value));
+                            }
                         }
                     }
                 }
@@ -1667,11 +1922,13 @@ impl<'a> Exec<'a> {
                 .into_iter()
                 .filter_map(|(name, step)| step.map(|step| (name, step)))
                 .filter(|(name, _)| {
-                    lp.writes.contains(name) && !loan_roots.values().any(|root| root == name)
+                    lp.writes.contains(name)
+                        && !self.captured.contains(name)
+                        && !loan_roots.values().any(|roots| roots.contains(name))
                 })
                 .collect();
-            // A local some other instruction writes is no counter.
-            let mut other = BTreeSet::new();
+            // A local some other instruction or closure writes is no counter.
+            let mut other = self.captured.clone();
             for &block in &lp.body {
                 let mut writes = BTreeSet::new();
                 collect_writes(&blocks[block], &loan_roots, false, &mut writes);
@@ -1928,16 +2185,47 @@ impl<'a> Exec<'a> {
             let merged = self.merge_vals(&pcs, &values, &key);
             env.insert(key, merged);
         }
-        let first = &states[0].loans;
-        let loans = first
-            .iter()
-            .filter(|(name, loan)| {
-                states
+        let mut loan_names: BTreeSet<String> = BTreeSet::new();
+        for state in &states {
+            loan_names.extend(state.loans.keys().cloned());
+        }
+        let mut loans = BTreeMap::new();
+        for name in loan_names {
+            let first = states[0].loans.get(&name);
+            if let Some(first_loan) = first {
+                if states
                     .iter()
-                    .all(|state| state.loans.get(*name) == Some(*loan))
-            })
-            .map(|(name, loan)| (name.clone(), loan.clone()))
-            .collect();
+                    .all(|state| state.loans.get(&name) == Some(first_loan))
+                {
+                    loans.insert(name, first_loan.clone());
+                    continue;
+                }
+            }
+            // If every branch borrows an element inside the exact same collection place,
+            // preserve that collection's length and keys on writes.
+            let same_inside = states
+                .iter()
+                .map(|state| match state.loans.get(&name) {
+                    Some(Loan::Element { list, .. } | Loan::Inside(list)) => Some(list.as_str()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<&str>>>()
+                .filter(|lists| lists.iter().all(|list| *list == lists[0]))
+                .map(|lists| lists[0].to_string());
+            if let Some(list) = same_inside {
+                loans.insert(name, Loan::Inside(list));
+                continue;
+            }
+            let mut roots = BTreeSet::new();
+            for state in &states {
+                if let Some(loan) = state.loans.get(&name) {
+                    roots.extend(loan_target_roots(&state.loans, loan));
+                }
+            }
+            if !roots.is_empty() {
+                loans.insert(name, Loan::Unknown(roots));
+            }
+        }
         State { pc, env, loans }
     }
 
@@ -2111,7 +2399,7 @@ impl<'a> Exec<'a> {
             Val::Closure(function, _) => {
                 Val::Closure(function.clone(), self.merge_children(pcs, values, hint))
             }
-            Val::Unit | Val::Opaque | Val::Func(_) | Val::Task(_) | Val::Contracted(_) => {
+            Val::Unit | Val::Opaque | Val::Func(_) | Val::Task(..) | Val::Contracted(_) => {
                 Val::Opaque
             }
         }
@@ -2240,7 +2528,7 @@ impl<'a> Exec<'a> {
                 // call proves it, and a loop's checks are proved apart.
                 let obligation = match kind {
                     AssertKind::Requires => None,
-                    AssertKind::Assert => Some(ObligationKind::Assert),
+                    AssertKind::Assert | AssertKind::CBitField => Some(ObligationKind::Assert),
                     AssertKind::Ensures => Some(ObligationKind::Ensures),
                     AssertKind::Invariant => Some(ObligationKind::LoopInvariant),
                     AssertKind::Decreases => Some(ObligationKind::Decreases),
@@ -2277,6 +2565,9 @@ impl<'a> Exec<'a> {
 
     fn instruction(&mut self, state: &mut State, instruction: &Instruction) {
         match instruction {
+            Instruction::InlineAsm { span, .. } => {
+                self.unsupported = Some(super::assembly_boundary(*span).message);
+            }
             Instruction::SourceLocation { line, column } => {
                 self.span = Span {
                     line: *line as usize,
@@ -2284,6 +2575,7 @@ impl<'a> Exec<'a> {
                 };
             }
             Instruction::Safepoint
+            | Instruction::ArmDrop { .. } | Instruction::EndOwner { .. }
             | Instruction::SourceName { .. }
             | Instruction::Retain { .. }
             | Instruction::Eval { .. }
@@ -2304,6 +2596,7 @@ impl<'a> Exec<'a> {
                 }
             }
             Instruction::BeginLoan { loan, source, .. } => {
+                state.env.remove(loan);
                 state
                     .loans
                     .insert(loan.clone(), Loan::Place(source.clone()));
@@ -2318,7 +2611,12 @@ impl<'a> Exec<'a> {
                 ..
             } => {
                 let collection = self.read_place(state, source);
-                let selector = self.operand(state, selector, Some(IntTy::INT64));
+                let selector_hint = match &collection {
+                    Val::Map { key, .. } => IntTy::of(key),
+                    _ => Some(IntTy::INT64),
+                };
+                let selector = self.operand(state, selector, selector_hint);
+                let pc = state.pc.clone();
                 let value = match (&collection, &selector) {
                     (Val::List { len, .. }, Val::Int(index, _)) => {
                         if *checked {
@@ -2332,17 +2630,73 @@ impl<'a> Exec<'a> {
                             projection: projection.clone(),
                         }
                     }
-                    (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(source.clone()),
-                    _ => Loan::Unknown(root_of(source).to_string()),
+                    (Val::Map { keys, .. }, selector) => {
+                        if *checked {
+                            if let Some(k) = key_term(selector) {
+                                let present = format!("(select {keys} {k})");
+                                self.oblige(
+                                    ObligationKind::KeyPresent,
+                                    *span,
+                                    "key is in the dict",
+                                    &pc,
+                                    Goal::Holds(present.clone()),
+                                );
+                                self.assume(&pc, present);
+                            } else {
+                                self.oblige(
+                                    ObligationKind::KeyPresent,
+                                    *span,
+                                    "key is in the dict",
+                                    &pc,
+                                    Goal::Unsupported("this dict key is not modeled yet".into()),
+                                );
+                            }
+                        }
+                        Loan::Inside(source.clone())
+                    }
+                    (Val::List { .. }, _) => {
+                        if *checked {
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                *span,
+                                "list index in range",
+                                &pc,
+                                Goal::Unsupported("this list index is not modeled yet".into()),
+                            );
+                        }
+                        Loan::Inside(source.clone())
+                    }
+                    _ => {
+                        if *checked {
+                            let is_dict = self
+                                .place_type(source)
+                                .is_some_and(|ty| matches!(ty, Type::Named(name, _) if name == "dict"));
+                            let (kind, message) = if is_dict {
+                                (ObligationKind::KeyPresent, "key is in the dict")
+                            } else {
+                                (ObligationKind::IndexInRange, "element index in range")
+                            };
+                            self.oblige(
+                                kind,
+                                *span,
+                                message,
+                                &pc,
+                                Goal::Unsupported(
+                                    "indexing this collection is not modeled yet".into(),
+                                ),
+                            );
+                        }
+                        Loan::Unknown(roots_of_place(&state.loans, source))
+                    }
                 };
                 // What an earlier loan under this name read is gone.
                 state.env.remove(loan);
                 state.loans.insert(loan.clone(), value);
             }
             Instruction::BeginReturnedLoan { loan, origin, .. } => {
-                state
-                    .loans
-                    .insert(loan.clone(), Loan::Unknown(root_of(origin).to_string()));
+                let roots = roots_of_place(&state.loans, origin);
+                state.env.remove(loan);
+                state.loans.insert(loan.clone(), Loan::Unknown(roots));
             }
             Instruction::Reborrow {
                 loan,
@@ -2362,10 +2716,11 @@ impl<'a> Exec<'a> {
                         index,
                         projection: join_path(&inner, projection),
                     },
-                    Some(Loan::Unknown(root)) => Loan::Unknown(root),
+                    Some(Loan::Unknown(roots)) => Loan::Unknown(roots),
                     Some(Loan::Inside(place)) => Loan::Inside(place),
-                    None => Loan::Unknown(root_of(parent).to_string()),
+                    None => Loan::Unknown(roots_of_place(&state.loans, parent)),
                 };
+                state.env.remove(loan);
                 state.loans.insert(loan.clone(), value);
             }
             Instruction::ReborrowElement {
@@ -2376,10 +2731,15 @@ impl<'a> Exec<'a> {
                 span,
                 ..
             } => {
+                let pc = state.pc.clone();
                 let value = match state.loans.get(parent).cloned() {
                     Some(Loan::Place(place)) => {
                         let collection = self.read_place(state, &place);
-                        let selector = self.operand(state, selector, Some(IntTy::INT64));
+                        let selector_hint = match &collection {
+                            Val::Map { key, .. } => IntTy::of(key),
+                            _ => Some(IntTy::INT64),
+                        };
+                        let selector = self.operand(state, selector, selector_hint);
                         match (&collection, &selector) {
                             (Val::List { len, .. }, Val::Int(index, _)) => {
                                 self.oblige_index(state, *span, len, index);
@@ -2389,23 +2749,117 @@ impl<'a> Exec<'a> {
                                     projection: projection.clone(),
                                 }
                             }
-                            (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(place),
-                            _ => Loan::Unknown(root_of(&place).to_string()),
+                            (Val::Map { keys, .. }, selector) => {
+                                if let Some(k) = key_term(selector) {
+                                    let present = format!("(select {keys} {k})");
+                                    self.oblige(
+                                        ObligationKind::KeyPresent,
+                                        *span,
+                                        "key is in the dict",
+                                        &pc,
+                                        Goal::Holds(present.clone()),
+                                    );
+                                    self.assume(&pc, present);
+                                } else {
+                                    self.oblige(
+                                        ObligationKind::KeyPresent,
+                                        *span,
+                                        "key is in the dict",
+                                        &pc,
+                                        Goal::Unsupported(
+                                            "this dict key is not modeled yet".into(),
+                                        ),
+                                    );
+                                }
+                                Loan::Inside(place)
+                            }
+                            (Val::List { .. }, _) => {
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    *span,
+                                    "list index in range",
+                                    &pc,
+                                    Goal::Unsupported("this list index is not modeled yet".into()),
+                                );
+                                Loan::Inside(place)
+                            }
+                            _ => {
+                                let is_dict = self.place_type(&place).is_some_and(
+                                    |ty| matches!(ty, Type::Named(name, _) if name == "dict"),
+                                );
+                                let (kind, message) = if is_dict {
+                                    (ObligationKind::KeyPresent, "key is in the dict")
+                                } else {
+                                    (ObligationKind::IndexInRange, "element index in range")
+                                };
+                                self.oblige(
+                                    kind,
+                                    *span,
+                                    message,
+                                    &pc,
+                                    Goal::Unsupported(
+                                        "indexing this collection is not modeled yet".into(),
+                                    ),
+                                );
+                                Loan::Unknown(roots_of_place(&state.loans, &place))
+                            }
                         }
                     }
                     // An element of an element is still inside the
                     // collection the first one came from.
                     Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            *span,
+                            "element index in range",
+                            &pc,
+                            Goal::Unsupported(
+                                "reborrowing an element through this loan is not modeled yet"
+                                    .into(),
+                            ),
+                        );
                         Loan::Inside(list)
                     }
-                    Some(Loan::Unknown(root)) => Loan::Unknown(root),
-                    None => Loan::Unknown(root_of(parent).to_string()),
+                    Some(Loan::Unknown(roots)) => {
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            *span,
+                            "element index in range",
+                            &pc,
+                            Goal::Unsupported(
+                                "reborrowing an element through this loan is not modeled yet"
+                                    .into(),
+                            ),
+                        );
+                        Loan::Unknown(roots)
+                    }
+                    None => {
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            *span,
+                            "element index in range",
+                            &pc,
+                            Goal::Unsupported(
+                                "reborrowing an element through this loan is not modeled yet"
+                                    .into(),
+                            ),
+                        );
+                        Loan::Unknown(roots_of_place(&state.loans, parent))
+                    }
                 };
+                state.env.remove(loan);
                 state.loans.insert(loan.clone(), value);
             }
             Instruction::ReadLoan { target, loan } => {
                 let value = match state.loans.get(loan).cloned() {
-                    Some(Loan::Place(place)) => self.read_place(state, &place),
+                    Some(Loan::Place(place)) => {
+                        let value = self.read_place(state, &place);
+                        if value == Val::Opaque {
+                            self.fresh_local(target)
+                        } else {
+                            value
+                        }
+                    }
                     Some(Loan::Element {
                         list,
                         index,
@@ -2431,45 +2885,35 @@ impl<'a> Exec<'a> {
             Instruction::WriteLoan { loan, value } => {
                 let hint = self.loan_int_ty(state, loan);
                 let value = self.rvalue(state, None, value, hint);
+                if let Some((alias, field)) = self.loan_contract(state, loan) {
+                    self.fit_callable(
+                        state,
+                        &value,
+                        &alias,
+                        &format!("the value stored in field `{field}`"),
+                    );
+                } else if matches!(
+                    state.loans.get(loan),
+                    Some(Loan::Element { .. } | Loan::Unknown(_) | Loan::Inside(_)) | None
+                ) {
+                    let pc = state.pc.clone();
+                    self.oblige_escape(&value, &pc);
+                }
                 match state.loans.get(loan).cloned() {
                     Some(Loan::Place(place)) => self.write_place(state, &place, value),
                     Some(Loan::Element {
                         list,
                         index,
                         projection,
-                    }) => {
-                        let current = self.read_place(state, &list);
-                        match current {
-                            Val::List { len, data, elem } => {
-                                let list_value = Val::List {
-                                    len: len.clone(),
-                                    data: data.clone(),
-                                    elem: elem.clone(),
-                                };
-                                // A write through a field of the element
-                                // rewrites the whole element.
-                                let element = if projection.is_empty() {
-                                    Some(value)
-                                } else {
-                                    let mut element = self.element(&list_value, &index, "element");
-                                    let segments: Vec<&str> = projection.split('.').collect();
-                                    set_in(&mut element, &segments, value).then_some(element)
-                                };
-                                let data = match (data, element) {
-                                    (Some(data), Some(element)) => {
-                                        self.put_or_fresh(&data, &elem, &index, &element, "store")
-                                    }
-                                    _ => self.fresh_store(&elem, "store"),
-                                };
-                                self.write_place(state, &list, Val::List { len, data, elem });
+                    }) => self.write_element_loan(state, &list, &index, &projection, value),
+                    Some(Loan::Unknown(roots)) => self.unmodeled(
+                        "a write through a borrow the verifier does not follow",
+                        |exec| {
+                            for root in &roots {
+                                exec.havoc_root(state, root);
                             }
-                            _ => self.havoc_place(state, &list),
-                        }
-                    }
-                    Some(Loan::Unknown(root)) => self
-                        .unmodeled("a write through a borrow the verifier does not follow", |exec| {
-                            exec.havoc_root(state, &root)
-                        }),
+                        },
+                    ),
                     Some(Loan::Inside(place)) => self.havoc_inside(state, &place),
                     None => self.havoc_root(state, root_of(loan)),
                 }
@@ -2490,31 +2934,82 @@ impl<'a> Exec<'a> {
             }
             Instruction::PopCleanup { place, run, .. } => {
                 if *run {
-                    self.unmodeled("the exit of a `with` block", |exec| {
-                        exec.havoc_root(state, root_of(place))
-                    });
+                    let callees: Vec<String> = self
+                        .cleanup_callees
+                        .get(place)
+                        .map(|set| set.iter().cloned().collect())
+                        .unwrap_or_default();
+                    if let [callee] = callees.as_slice() {
+                        if self.cx.function(callee).is_some() {
+                            let receiver = self.read_place(state, place);
+                            let _ = self.user_call(
+                                state,
+                                callee,
+                                Some((receiver, Some(place.clone()))),
+                                Vec::new(),
+                                None,
+                                None,
+                            );
+                        } else {
+                            let receiver = self.read_place(state, place);
+                            self.prove_arg_invariants(
+                                state,
+                                &[receiver],
+                                "the exit of a `with` block",
+                            );
+                            self.unmodeled("the exit of a `with` block", |exec| {
+                                exec.havoc_root(state, root_of(place))
+                            });
+                        }
+                    } else {
+                        let receiver = self.read_place(state, place);
+                        self.prove_arg_invariants(
+                            state,
+                            &[receiver],
+                            "the exit of a `with` block",
+                        );
+                        self.unmodeled("the exit of a `with` block", |exec| {
+                            exec.havoc_root(state, root_of(place))
+                        });
+                    }
+                    for root in self.captured.clone() {
+                        if !state.loans.contains_key(&root) {
+                            self.unmodeled(
+                                format!("a closure that may change `{root}`, which it captures"),
+                                |exec| exec.havoc_root(state, &root),
+                            );
+                        }
+                    }
                 }
             }
         }
     }
 
     fn loan_int_ty(&self, state: &State, loan: &str) -> Option<IntTy> {
-        match state.loans.get(loan)? {
-            Loan::Place(place) => self.place_type(place).as_ref().and_then(IntTy::of),
-            Loan::Element {
+        let from_loan = match state.loans.get(loan) {
+            Some(Loan::Place(place)) => self.place_type(place).as_ref().and_then(IntTy::of),
+            Some(Loan::Element {
                 list, projection, ..
-            } => match self.place_type(list)? {
-                Type::Named(name, args) if name == "list" && args.len() == 1 => {
+            }) => match self.place_type(list) {
+                Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
                     let mut ty = args[0].clone();
+                    let mut ok = true;
                     for segment in projection.split('.').filter(|segment| !segment.is_empty()) {
-                        ty = self.cx.project_type(&ty, segment)?;
+                        match self.cx.project_type(&ty, segment) {
+                            Some(next) => ty = next,
+                            None => {
+                                ok = false;
+                                break;
+                            }
+                        }
                     }
-                    IntTy::of(&ty)
+                    ok.then(|| IntTy::of(&ty)).flatten()
                 }
                 _ => None,
             },
             _ => None,
-        }
+        };
+        from_loan.or_else(|| self.place_type(loan).as_ref().and_then(IntTy::of))
     }
 
     /// A fresh value of the type of the place `target`.
@@ -2867,7 +3362,16 @@ impl<'a> Exec<'a> {
                 right,
                 span,
                 trap,
-            } => self.binary(state, *op, left, right, *span, *trap, target_type.as_ref()),
+            } => self.binary(
+                state,
+                *op,
+                left,
+                right,
+                *span,
+                *trap,
+                target_type.as_ref(),
+                hint,
+            ),
             Rvalue::Unary {
                 op,
                 value,
@@ -2882,7 +3386,11 @@ impl<'a> Exec<'a> {
                         float,
                     ),
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
-                        let ty = target_type.as_ref().and_then(IntTy::of).unwrap_or(ty);
+                        let ty = target_type
+                            .as_ref()
+                            .and_then(IntTy::of)
+                            .or(hint)
+                            .unwrap_or(ty);
                         // A negated literal stays a literal.
                         let result = match super::integers::literal(&term) {
                             Some(value) => lit(-value),
@@ -2894,7 +3402,10 @@ impl<'a> Exec<'a> {
                         Val::Int(result, ty)
                     }
                     (UnaryOp::BitNot, Val::Int(term, _))
-                        if target_type.as_ref().and_then(IntTy::of).is_some() =>
+                        if target_type
+                            .as_ref()
+                            .and_then(IntTy::of)
+                            .is_some_and(IntTy::modeled) =>
                     {
                         let ty = target_type
                             .as_ref()
@@ -2904,7 +3415,7 @@ impl<'a> Exec<'a> {
                         Val::Int(self.define("Int", "bits", flipped), ty)
                     }
                     _ => {
-                        if *trap == ArithmeticTrap::Runtime {
+                        if trap.checks_overflow() || *trap == ArithmeticTrap::Runtime {
                             self.oblige(
                                 ObligationKind::Overflow,
                                 *span,
@@ -2941,7 +3452,24 @@ impl<'a> Exec<'a> {
                             );
                             Val::Float(result, to)
                         }
-                        _ => fresh_target(self),
+                        _ => {
+                            let from_float = self
+                                .operand_type(value)
+                                .as_ref()
+                                .is_some_and(|from| FloatTy::of(from).is_some());
+                            if !from_float {
+                                self.oblige(
+                                    ObligationKind::Overflow,
+                                    *span,
+                                    "integer converts to a float exactly",
+                                    &state.pc.clone(),
+                                    Goal::Unsupported(
+                                        "this conversion operand is not modeled yet".into(),
+                                    ),
+                                );
+                            }
+                            fresh_target(self)
+                        }
                     };
                 }
                 if let (Val::Float(term, _), Some(int)) = (&operand, IntTy::of(ty)) {
@@ -2957,11 +3485,7 @@ impl<'a> Exec<'a> {
                         *span,
                         "float converts to an integer in range",
                         &state.pc.clone(),
-                        Goal::Holds(format!(
-                            "(and {} {})",
-                            float.above(term, int.lo - 1),
-                            float.below(term, int.hi + 1)
-                        )),
+                        Goal::Holds(int.contains_float(float, term, &truncated)),
                     );
                     let result = self.define("Int", "cast", format!("(to_int {truncated})"));
                     return Val::Int(result, int);
@@ -2990,13 +3514,22 @@ impl<'a> Exec<'a> {
                     _ => fresh_target(self),
                 }
             }
+            Rvalue::Call {
+                callee: CallTarget::Name(op),
+                args,
+                type_args,
+            } if crate::mir::fixed_arrays::is_operation(op) => {
+                self.fixed_call(state, op, args, type_args.get("array"))
+            }
             Rvalue::Call { callee, args, .. } => {
                 let result = self.call(state, target, callee, args);
                 for root in self.loose_captures() {
-                    self.unmodeled(
-                        format!("a closure that may change `{root}`, which it captures"),
-                        |exec| exec.havoc_root(state, &root),
-                    );
+                    if !state.loans.contains_key(&root) {
+                        self.unmodeled(
+                            format!("a closure that may change `{root}`, which it captures"),
+                            |exec| exec.havoc_root(state, &root),
+                        );
+                    }
                 }
                 result
             }
@@ -3039,7 +3572,8 @@ impl<'a> Exec<'a> {
                     let Some(k) = key_term(&value) else {
                         return fresh_target(self);
                     };
-                    len = self.len_after_add(&len, &members, &k);
+                    let pc = state.pc.clone();
+                    len = self.len_after_add(&pc, &len, &members, &k);
                     members = self.define(
                         &format!("(Array {sort} Bool)"),
                         "members",
@@ -3071,7 +3605,12 @@ impl<'a> Exec<'a> {
                     let Some(k) = key_term(&k) else {
                         return fresh_target(self);
                     };
-                    let stored = self.operand(state, &entry.value, IntTy::of(value_type));
+                    // A `float64` literal stored in a dict of `float32`
+                    // rounds to the value type, as a list element does.
+                    let stored = fit(
+                        self.operand(state, &entry.value, IntTy::of(value_type)),
+                        value_type,
+                    );
                     values = match (values, scalar_term(&stored), value_sort) {
                         (Some(array), Some(term), Some(value_sort)) => Some(self.define(
                             &format!("(Array {sort} {value_sort})"),
@@ -3080,7 +3619,8 @@ impl<'a> Exec<'a> {
                         )),
                         _ => None,
                     };
-                    len = self.len_after_add(&len, &keys, &k);
+                    let pc = state.pc.clone();
+                    len = self.len_after_add(&pc, &len, &keys, &k);
                     keys = self.define(
                         &format!("(Array {sort} Bool)"),
                         "keys",
@@ -3309,14 +3849,21 @@ impl<'a> Exec<'a> {
                     }
                     _ => None,
                 };
-                let result =
-                    self.user_call(state, &name, None, actuals, result_type.as_ref(), target);
+                let (result, ensures) = self.user_call_deferred(
+                    state,
+                    &name,
+                    None,
+                    actuals,
+                    result_type.as_ref(),
+                    target,
+                    false,
+                );
                 if *recover {
-                    // `control.recover` yields a `Result`, and whether the
-                    // call trapped is not known here.
+                    // `control.recover` catches traps, so the callee's
+                    // `ensures` cannot be assumed unconditionally.
                     return fresh_target(self);
                 }
-                Val::Task(Box::new(result))
+                Val::Task(Box::new(result), ensures)
             }
             Rvalue::Closure {
                 function, captures, ..
@@ -3337,12 +3884,14 @@ impl<'a> Exec<'a> {
         span: Span,
         trap: ArithmeticTrap,
         target_type: Option<&Type>,
+        expected_int: Option<IntTy>,
     ) -> Val {
         let left_ty = self.operand_int_ty(left);
         let right_ty = self.operand_int_ty(right);
-        let target_int = target_type.and_then(IntTy::of);
+        let target_int = target_type.and_then(IntTy::of).or(expected_int);
         let hint = left_ty.or(right_ty).or(target_int);
-        let sized = hint.is_some();
+        // A 128-bit type's bits and width are not modeled.
+        let sized = hint.is_some_and(IntTy::modeled);
         let lhs = self.operand(state, left, hint);
         let rhs = self.operand(state, right, hint);
         let fresh = |exec: &mut Self| match target_type {
@@ -3355,7 +3904,7 @@ impl<'a> Exec<'a> {
         let pc = state.pc.clone();
         match (&lhs, &rhs) {
             (Val::Int(a, aty), Val::Int(b, _)) => {
-                let ty = target_int.unwrap_or(*aty);
+                let ty = target_int.or(left_ty).or(right_ty).unwrap_or(*aty);
                 let compare = |op: &str| Val::Bool(format!("({op} {a} {b})"));
                 match op {
                     BinaryOp::Less => compare("<"),
@@ -3501,15 +4050,47 @@ impl<'a> Exec<'a> {
                         });
                     }
                 }
-                let numeric = |ty: Option<Type>| {
-                    ty.as_ref().is_some_and(|ty| {
+                let numeric = |ty: Option<&Type>| {
+                    ty.is_some_and(|ty| {
                         IntTy::of(ty).is_some()
                             || matches!(ty, Type::Named(name, args) if args.is_empty() && (name == "float64" || name == "float32"))
                     })
                 };
-                let left_numeric = numeric(self.operand_type(left));
+                let is_array_or_duration = |ty: Option<&Type>| {
+                    ty.is_some_and(|ty| {
+                        matches!(ty, Type::Named(name, _) if name == "Array" || name == "Duration")
+                    })
+                };
+                let is_str = |ty: Option<&Type>| {
+                    ty.is_some_and(
+                        |ty| matches!(ty, Type::Named(name, args) if args.is_empty() && name == "str"),
+                    )
+                };
+                let left_ty = self.operand_type(left);
+                let right_ty = self.operand_type(right);
                 let divides = matches!(op, BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod);
-                if left_numeric && (trap.checks_divisor() || trap == ArithmeticTrap::Runtime) {
+                let trapping_arith = matches!(
+                    op,
+                    BinaryOp::Add
+                        | BinaryOp::Sub
+                        | BinaryOp::Mul
+                        | BinaryOp::Div
+                        | BinaryOp::FloorDiv
+                        | BinaryOp::Mod
+                        | BinaryOp::Pow
+                        | BinaryOp::Shl
+                        | BinaryOp::Shr
+                );
+                let may_trap = (numeric(left_ty.as_ref())
+                    && (trap.checks_overflow()
+                        || trap.checks_divisor()
+                        || trap == ArithmeticTrap::Runtime))
+                    || (trapping_arith
+                        && (is_array_or_duration(left_ty.as_ref())
+                            || is_array_or_duration(right_ty.as_ref())
+                            || (op == BinaryOp::Mul
+                                && (is_str(left_ty.as_ref()) || is_str(right_ty.as_ref())))));
+                if may_trap {
                     let (kind, what) = if divides {
                         (ObligationKind::DivisionByZero, "divisor is not zero")
                     } else {
@@ -3520,7 +4101,7 @@ impl<'a> Exec<'a> {
                         span,
                         what,
                         &pc,
-                        Goal::Unsupported("floating-point operands are not modeled yet".into()),
+                        Goal::Unsupported("this binary operation is not modeled yet".into()),
                     );
                 }
                 fresh(self)
@@ -3743,6 +4324,7 @@ impl<'a> Exec<'a> {
                 trait_name,
                 field,
                 dispatch: Some(MethodDispatch::Candidates { candidates, .. }),
+                ..
             } if self
                 .trait_call_target(candidates, trait_name, field)
                 .is_some() =>
@@ -3793,9 +4375,48 @@ impl<'a> Exec<'a> {
                 Val::Contracted(alias) => {
                     let info = self.cx.alias_contract(&alias).expect("a contracted alias");
                     let mut pre = Vec::new();
-                    for (param, arg) in info.decl.params.iter().zip(args) {
-                        let value = self.operand(state, &arg.value, None);
-                        pre.push((param.name.clone(), value));
+                    let mut post = Vec::new();
+                    let mut positional = 0usize;
+                    for arg in args {
+                        let index = match &arg.name {
+                            Some(name) => info
+                                .decl
+                                .params
+                                .iter()
+                                .position(|param| &param.name == name),
+                            None => {
+                                let index = positional;
+                                positional += 1;
+                                (index < info.decl.params.len()).then_some(index)
+                            }
+                        };
+                        let Some(index) = index else {
+                            let _ = self.operand(state, &arg.value, None);
+                            if let Some(place) = &arg.writeback_place {
+                                self.havoc_place(state, place);
+                            }
+                            continue;
+                        };
+                        let param = &info.decl.params[index];
+                        let ty = info.signature.params.get(index);
+                        let value = self.operand(state, &arg.value, ty.and_then(IntTy::of));
+                        let value = match ty {
+                            Some(ty) => fit(value, ty),
+                            None => value,
+                        };
+                        pre.push((param.name.clone(), value.clone()));
+                        let after = match &arg.writeback_place {
+                            Some(place) => {
+                                let after = match ty {
+                                    Some(ty) => self.fresh(ty, &param.name),
+                                    None => self.fresh_local(place),
+                                };
+                                self.write_place(state, place, after.clone());
+                                after
+                            }
+                            None => value,
+                        };
+                        post.push((param.name.clone(), after));
                     }
                     let span = self.span;
                     self.contract_override = Some(&info.decl);
@@ -3804,7 +4425,7 @@ impl<'a> Exec<'a> {
                         Type::Unit => Val::Unit,
                         ty => self.fresh(ty, target.unwrap_or("result")),
                     };
-                    self.call_ensures(state, &alias, &pre, &pre, &result);
+                    self.call_ensures(state, &alias, &pre, &post, &result);
                     self.contract_override = None;
                     result
                 }
@@ -3819,13 +4440,25 @@ impl<'a> Exec<'a> {
                     }
                     self.user_call(state, &name, None, actuals, target_type.as_ref(), target)
                 }
-                _ => self.unmodeled("a call through a function value", |exec| {
-                    exec.havoc_writebacks(state, args);
-                    fresh_target(exec)
-                }),
+                _ => {
+                    let mut arg_vals = Vec::with_capacity(args.len());
+                    for arg in args {
+                        arg_vals.push(self.operand(state, &arg.value, None));
+                    }
+                    self.prove_arg_invariants(state, &arg_vals, "a call through a function value");
+                    self.unmodeled("a call through a function value", |exec| {
+                        exec.havoc_writebacks(state, args);
+                        fresh_target(exec)
+                    })
+                }
             },
-            CallTarget::Extern(call) if self.cx.extern_decl(&call.symbol).is_some() => {
-                let decl = self.cx.extern_decl(&call.symbol).expect("checked above");
+            CallTarget::Extern(call)
+                if self.cx.extern_decl(&call.module_name, &call.name).is_some() =>
+            {
+                let decl = self
+                    .cx
+                    .extern_decl(&call.module_name, &call.name)
+                    .expect("checked above");
                 // The call proves the `requires` and the result and `mut`
                 // arguments have the `ensures`.
                 let mut pre = Vec::new();
@@ -4024,6 +4657,25 @@ impl<'a> Exec<'a> {
         result_type: Option<&Type>,
         hint: Option<&str>,
     ) -> Val {
+        let (result, _) =
+            self.user_call_deferred(state, name, receiver, actuals, result_type, hint, true);
+        result
+    }
+
+    /// Runs the call side of a user function. When `assume_now` is true, its
+    /// `ensures` and inner invariants are assumed immediately; otherwise the
+    /// `ensures` terms are returned so a task or `recover` site can guard them.
+    #[allow(clippy::too_many_arguments)]
+    fn user_call_deferred(
+        &mut self,
+        state: &mut State,
+        name: &str,
+        receiver: Option<(Val, Option<String>)>,
+        actuals: Vec<(Option<String>, Val, Option<String>)>,
+        result_type: Option<&Type>,
+        hint: Option<&str>,
+        assume_now: bool,
+    ) -> (Val, Vec<String>) {
         let callee = self.cx.function(name).expect("checked callee");
         let mut pre: Vec<(String, Val)> = Vec::new();
         let mut post_places: Vec<(String, String)> = Vec::new();
@@ -4098,8 +4750,15 @@ impl<'a> Exec<'a> {
             }
             self.write_place(state, place, value);
         }
-        self.call_ensures(state, name, &pre, &post, &result);
-        result
+        let ensures = self.call_ensures_terms(name, &pre, &post, &result);
+        if assume_now {
+            let pc = state.pc.clone();
+            for fact in &ensures {
+                self.assume(&pc, fact.clone());
+            }
+            self.assume_inner_results(state, name, &pre, &post, &result);
+        }
+        (result, ensures)
     }
 
     /// The value the `mut` parameter `param` of `name` leaves in its
@@ -4161,6 +4820,82 @@ impl<'a> Exec<'a> {
         match op {
             RuntimeOp::List(list_op) => {
                 let Some(Val::List { len, data, elem }) = receiver else {
+                    match list_op {
+                        ListOp::Index | ListOp::IndexScalar(_) => {
+                            let span = span_of(self, 1);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "list index in range",
+                                &pc,
+                                Goal::Unsupported("this list is not modeled yet".into()),
+                            );
+                        }
+                        ListOp::SetIndex | ListOp::SetIndexScalar(_) => {
+                            let span = span_of(self, 2);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "list index in range",
+                                &pc,
+                                Goal::Unsupported("this list is not modeled yet".into()),
+                            );
+                        }
+                        ListOp::Set | ListOp::Pop | ListOp::Swap => {
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                self.span,
+                                "list index in range",
+                                &pc,
+                                Goal::Unsupported("this list is not modeled yet".into()),
+                            );
+                        }
+                        ListOp::Slice => {
+                            let span = span_of(self, 4);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "slice range in bounds",
+                                &pc,
+                                Goal::Unsupported("this list is not modeled yet".into()),
+                            );
+                        }
+                        ListOp::SliceStep => {
+                            let span = span_of(self, 5);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "slice range in bounds",
+                                &pc,
+                                Goal::Unsupported("stepped list slices are not modeled yet".into()),
+                            );
+                        }
+                        ListOp::Remove | ListOp::IndexOf => {
+                            self.oblige(
+                                ObligationKind::KeyPresent,
+                                self.span,
+                                "value is in the list",
+                                &pc,
+                                Goal::Unsupported("list element search is not modeled yet".into()),
+                            );
+                        }
+                        ListOp::Reserve => {
+                            let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                                Val::Int(additional, _) => {
+                                    Goal::Holds(format!("(<= 0 {additional})"))
+                                }
+                                _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                            };
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                self.span,
+                                "capacity is not negative",
+                                &pc,
+                                goal,
+                            );
+                        }
+                        _ => {}
+                    }
                     return None;
                 };
                 let elem_int = IntTy::of(&elem);
@@ -4172,6 +4907,16 @@ impl<'a> Exec<'a> {
                     | ListOp::IndexUnchecked
                     | ListOp::IndexScalarUnchecked(_) => {
                         let Val::Int(index, _) = arg(self, state, 0, Some(IntTy::INT64)) else {
+                            if matches!(list_op, ListOp::Index | ListOp::IndexScalar(_)) {
+                                let span = span_of(self, 1);
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    span,
+                                    "list index in range",
+                                    &pc,
+                                    Goal::Unsupported("this list index is not modeled yet".into()),
+                                );
+                            }
                             return None;
                         };
                         if matches!(list_op, ListOp::Index | ListOp::IndexScalar(_)) {
@@ -4211,14 +4956,35 @@ impl<'a> Exec<'a> {
                             vec![vec![element], Vec::new()],
                         ))
                     }
-                    ListOp::SetIndex | ListOp::SetIndexScalar(_) => {
+                    ListOp::SetIndex | ListOp::SetIndexScalar(_) | ListOp::Set => {
+                        let span = if list_op == ListOp::Set {
+                            self.span
+                        } else {
+                            span_of(self, 2)
+                        };
                         let Val::Int(index, _) = arg(self, state, 0, Some(IntTy::INT64)) else {
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "list index in range",
+                                &pc,
+                                Goal::Unsupported("this list index is not modeled yet".into()),
+                            );
                             return None;
                         };
                         let value = arg(self, state, 1, elem_int);
-                        let span = span_of(self, 2);
                         self.oblige_index(state, span, &len, &index);
                         let index = self.normalize_index(&len, &index);
+                        let previous = if list_op == ListOp::Set {
+                            let list = Val::List {
+                                len: len.clone(),
+                                data: data.clone(),
+                                elem: elem.clone(),
+                            };
+                            Some(self.element(&list, &index, target.unwrap_or("element")))
+                        } else {
+                            None
+                        };
                         let data = match data {
                             Some(data) => self.put_or_fresh(&data, &elem, &index, &value, "store"),
                             None => None,
@@ -4226,7 +4992,7 @@ impl<'a> Exec<'a> {
                         if let Some(place) = receiver_place {
                             self.write_place(state, place, Val::List { len, data, elem });
                         }
-                        Some(Val::Unit)
+                        Some(previous.unwrap_or(Val::Unit))
                     }
                     ListOp::Push | ListOp::PushScalar(_) => {
                         let value = arg(self, state, 0, elem_int);
@@ -4296,14 +5062,75 @@ impl<'a> Exec<'a> {
                         Some(Val::Unit)
                     }
                     ListOp::Swap => {
-                        let what = format!(
-                            "the order of the elements after `{}`",
-                            op.name().trim_start_matches("__")
-                        );
-                        let data = self.unmodeled(what, |exec| exec.fresh_store(&elem, "permuted"));
+                        let first = arg(self, state, 0, Some(IntTy::INT64));
+                        let second = arg(self, state, 1, Some(IntTy::INT64));
+                        match (first, second) {
+                            (Val::Int(i, _), Val::Int(j, _)) => {
+                                let span = self.span;
+                                self.oblige_index(state, span, &len, &i);
+                                self.oblige_index(state, span, &len, &j);
+                            }
+                            _ => {
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    self.span,
+                                    "list index in range",
+                                    &pc,
+                                    Goal::Unsupported("list swap index is not modeled yet".into()),
+                                );
+                            }
+                        }
+                        let data = self
+                            .unmodeled("the order of the elements after `swap`", |exec| {
+                                exec.fresh_store(&elem, "permuted")
+                            });
                         if let Some(place) = receiver_place {
                             self.write_place(state, place, Val::List { len, data, elem });
                         }
+                        Some(Val::Unit)
+                    }
+                    ListOp::Slice => {
+                        let list = Val::List { len, data, elem };
+                        let sliced = self.list_op(state, list_op, list, receiver_place, args);
+                        if sliced.is_none() {
+                            let span = span_of(self, 4);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "slice range in bounds",
+                                &pc,
+                                Goal::Unsupported("this slice bound is not modeled yet".into()),
+                            );
+                        }
+                        sliced
+                    }
+                    ListOp::SliceStep => {
+                        let span = span_of(self, 5);
+                        self.oblige_slice_step(state, span, &len, args);
+                        None
+                    }
+                    ListOp::Remove | ListOp::IndexOf => {
+                        self.oblige(
+                            ObligationKind::KeyPresent,
+                            self.span,
+                            "value is in the list",
+                            &pc,
+                            Goal::Unsupported("list element search is not modeled yet".into()),
+                        );
+                        None
+                    }
+                    ListOp::Reserve => {
+                        let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                            Val::Int(additional, _) => Goal::Holds(format!("(<= 0 {additional})")),
+                            _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                        };
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "capacity is not negative",
+                            &pc,
+                            goal,
+                        );
                         Some(Val::Unit)
                     }
                     _ => {
@@ -4314,6 +5141,46 @@ impl<'a> Exec<'a> {
             }
             RuntimeOp::Str(str_op) => {
                 let Some(Val::Str(text)) = receiver else {
+                    match str_op {
+                        StrOp::Slice => {
+                            let span = span_of(self, 4);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "slice range in bounds",
+                                &pc,
+                                Goal::Unsupported("this string is not modeled yet".into()),
+                            );
+                        }
+                        StrOp::SliceStep => {
+                            let span = span_of(self, 5);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "slice range in bounds",
+                                &pc,
+                                Goal::Unsupported(
+                                    "stepped string slices are not modeled yet".into(),
+                                ),
+                            );
+                        }
+                        StrOp::Repeat => {
+                            let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                                Val::Int(count, _) => Goal::Holds(format!("(<= 0 {count})")),
+                                _ => {
+                                    Goal::Unsupported("this repeat count is not modeled yet".into())
+                                }
+                            };
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                self.span,
+                                "repeat count is not negative",
+                                &pc,
+                                goal,
+                            );
+                        }
+                        _ => {}
+                    }
                     return None;
                 };
                 let other = |exec: &mut Self, state: &mut State| match arg(exec, state, 0, None) {
@@ -4343,7 +5210,40 @@ impl<'a> Exec<'a> {
                             .map(|index| arg(self, state, index, Some(IntTy::INT64)))
                             .collect();
                         let span = span_of(self, 4);
-                        self.text_call(state, span, str_op, &text, &values)
+                        let modeled = self.text_call(state, span, str_op, &text, &values);
+                        if modeled.is_none() {
+                            match str_op {
+                                StrOp::Slice => {
+                                    self.oblige(
+                                        ObligationKind::IndexInRange,
+                                        span,
+                                        "slice range in bounds",
+                                        &pc,
+                                        Goal::Unsupported(
+                                            "this slice bound is not modeled yet".into(),
+                                        ),
+                                    );
+                                }
+                                StrOp::SliceStep => {
+                                    let step_span = span_of(self, 5);
+                                    let len = format!("(str.len {text})");
+                                    self.oblige_slice_step(state, step_span, &len, args);
+                                }
+                                StrOp::Repeat => {
+                                    self.oblige(
+                                        ObligationKind::Overflow,
+                                        self.span,
+                                        "repeat count is not negative",
+                                        &pc,
+                                        Goal::Unsupported(
+                                            "this repeat count is not modeled yet".into(),
+                                        ),
+                                    );
+                                }
+                                _ => {}
+                            }
+                        }
+                        modeled
                     }
                 }
             }
@@ -4356,6 +5256,34 @@ impl<'a> Exec<'a> {
                     value,
                 }) = receiver
                 else {
+                    match dict_op {
+                        DictOp::Index => {
+                            let span = span_of(self, 1);
+                            self.oblige(
+                                ObligationKind::KeyPresent,
+                                span,
+                                "key is in the dict",
+                                &pc,
+                                Goal::Unsupported("keys of this dict are not modeled yet".into()),
+                            );
+                        }
+                        DictOp::Reserve => {
+                            let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                                Val::Int(additional, _) => {
+                                    Goal::Holds(format!("(<= 0 {additional})"))
+                                }
+                                _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                            };
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                self.span,
+                                "capacity is not negative",
+                                &pc,
+                                goal,
+                            );
+                        }
+                        _ => {}
+                    }
                     return None;
                 };
                 let sort = key_sort(&key).expect("a modeled dict has a modeled key");
@@ -4370,8 +5298,17 @@ impl<'a> Exec<'a> {
                         Some(Val::Bool(format!("(select {keys} {k})")))
                     }
                     DictOp::Index => {
-                        let k = key_arg(self, state)?;
                         let span = span_of(self, 1);
+                        let Some(k) = key_arg(self, state) else {
+                            self.oblige(
+                                ObligationKind::KeyPresent,
+                                span,
+                                "key is in the dict",
+                                &pc,
+                                Goal::Unsupported("this dict key is not modeled yet".into()),
+                            );
+                            return None;
+                        };
                         let present = format!("(select {keys} {k})");
                         self.oblige(
                             ObligationKind::KeyPresent,
@@ -4442,7 +5379,7 @@ impl<'a> Exec<'a> {
                     DictOp::SetIndex | DictOp::Set => {
                         let k = key_arg(self, state)?;
                         let stored = arg(self, state, 1, IntTy::of(&value));
-                        let new_len = self.len_after_add(&len, &keys, &k);
+                        let new_len = self.len_after_add(&pc, &len, &keys, &k);
                         let new_keys = self.define(
                             &format!("(Array {sort} Bool)"),
                             "keys",
@@ -4521,11 +5458,54 @@ impl<'a> Exec<'a> {
                         }
                         Some(Val::Unit)
                     }
+                    DictOp::Reserve => {
+                        let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                            Val::Int(additional, _) => Goal::Holds(format!("(<= 0 {additional})")),
+                            _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                        };
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "capacity is not negative",
+                            &pc,
+                            goal,
+                        );
+                        Some(Val::Unit)
+                    }
                     _ => None,
                 }
             }
             RuntimeOp::Set(set_op) => {
                 let Some(Val::Set { len, members, elem }) = receiver else {
+                    match set_op {
+                        SetOp::Remove => {
+                            self.oblige(
+                                ObligationKind::KeyPresent,
+                                self.span,
+                                "element is in the set",
+                                &pc,
+                                Goal::Unsupported(
+                                    "elements of this set are not modeled yet".into(),
+                                ),
+                            );
+                        }
+                        SetOp::Reserve => {
+                            let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                                Val::Int(additional, _) => {
+                                    Goal::Holds(format!("(<= 0 {additional})"))
+                                }
+                                _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                            };
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                self.span,
+                                "capacity is not negative",
+                                &pc,
+                                goal,
+                            );
+                        }
+                        _ => {}
+                    }
                     return None;
                 };
                 let sort = key_sort(&elem).expect("a modeled set has a modeled element");
@@ -4541,10 +5521,21 @@ impl<'a> Exec<'a> {
                         Some(Val::Bool(format!("(select {members} {k})")))
                     }
                     SetOp::Add | SetOp::AddInt64 | SetOp::Remove | SetOp::Discard => {
-                        let k = member(self, state)?;
+                        let Some(k) = member(self, state) else {
+                            if set_op == SetOp::Remove {
+                                self.oblige(
+                                    ObligationKind::KeyPresent,
+                                    self.span,
+                                    "element is in the set",
+                                    &pc,
+                                    Goal::Unsupported("this set element is not modeled yet".into()),
+                                );
+                            }
+                            return None;
+                        };
                         let present = format!("(select {members} {k})");
                         let (len, members) = if matches!(set_op, SetOp::Add | SetOp::AddInt64) {
-                            let len = self.len_after_add(&len, &members, &k);
+                            let len = self.len_after_add(&pc, &len, &members, &k);
                             let members = self.define(
                                 &array,
                                 "members",
@@ -4617,6 +5608,20 @@ impl<'a> Exec<'a> {
                         }
                         Some(Val::Unit)
                     }
+                    SetOp::Reserve => {
+                        let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                            Val::Int(additional, _) => Goal::Holds(format!("(<= 0 {additional})")),
+                            _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                        };
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "capacity is not negative",
+                            &pc,
+                            goal,
+                        );
+                        Some(Val::Unit)
+                    }
                     _ => None,
                 }
             }
@@ -4625,6 +5630,29 @@ impl<'a> Exec<'a> {
                     len: base, elem, ..
                 }) = receiver
                 else {
+                    match span_op {
+                        SpanOp::Start => {
+                            let span = span_of(self, 6);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "span range in bounds",
+                                &pc,
+                                Goal::Unsupported("this span is not modeled yet".into()),
+                            );
+                        }
+                        SpanOp::Index => {
+                            let span = span_of(self, 3);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "span index in range",
+                                &pc,
+                                Goal::Unsupported("this span is not modeled yet".into()),
+                            );
+                        }
+                        _ => {}
+                    }
                     return None;
                 };
                 // Every range operand is an `int64` word.
@@ -4635,12 +5663,34 @@ impl<'a> Exec<'a> {
                     SpanOp::Start | SpanOp::Stop => {
                         // `base[start:end]` inside the outer range, whose
                         // endpoints count from its end when negative.
-                        let outer_start = int(self, state, 0)?;
-                        let outer_len = int(self, state, 1)?;
-                        let start = int(self, state, 2)?;
-                        let has_start = int(self, state, 3)?;
-                        let end = int(self, state, 4)?;
-                        let has_end = int(self, state, 5)?;
+                        let (
+                            Some(outer_start),
+                            Some(outer_len),
+                            Some(start),
+                            Some(has_start),
+                            Some(end),
+                            Some(has_end),
+                        ) = (
+                            int(self, state, 0),
+                            int(self, state, 1),
+                            int(self, state, 2),
+                            int(self, state, 3),
+                            int(self, state, 4),
+                            int(self, state, 5),
+                        )
+                        else {
+                            if span_op == SpanOp::Start {
+                                let span = span_of(self, 6);
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    span,
+                                    "span range in bounds",
+                                    &pc,
+                                    Goal::Unsupported("this span bound is not modeled yet".into()),
+                                );
+                            }
+                            return None;
+                        };
                         self.assume(&pc, span_in_list(&outer_start, &outer_len, &base));
                         let low = self.define(
                             "Int",
@@ -4678,9 +5728,21 @@ impl<'a> Exec<'a> {
                         ))
                     }
                     SpanOp::Index => {
-                        let start = int(self, state, 0)?;
-                        let len = int(self, state, 1)?;
-                        let index = int(self, state, 2)?;
+                        let (Some(start), Some(len), Some(index)) = (
+                            int(self, state, 0),
+                            int(self, state, 1),
+                            int(self, state, 2),
+                        ) else {
+                            let span = span_of(self, 3);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "span index in range",
+                                &pc,
+                                Goal::Unsupported("this span index is not modeled yet".into()),
+                            );
+                            return None;
+                        };
                         self.assume(&pc, span_in_list(&start, &len, &base));
                         let in_range = format!("(and (<= (- {len}) {index}) (< {index} {len}))");
                         let span = span_of(self, 3);
@@ -4798,6 +5860,50 @@ impl<'a> Exec<'a> {
                     | ArrayOp::Assign
                     | ArrayOp::AssignWords
                     | ArrayOp::UpdateWords => (None, args.len()),
+                    ArrayOp::Min | ArrayOp::Max | ArrayOp::Mean | ArrayOp::FastMean => {
+                        let goal = match parts {
+                            Some((len, ..)) => Goal::Holds(format!("(> {len} 0)")),
+                            None => {
+                                Goal::Unsupported("this Array reduction is not modeled yet".into())
+                            }
+                        };
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            self.span,
+                            "array is not empty",
+                            &pc,
+                            goal,
+                        );
+                        return None;
+                    }
+                    ArrayOp::Dot
+                    | ArrayOp::Matmul
+                    | ArrayOp::Reshape
+                    | ArrayOp::Permute
+                    | ArrayOp::ReduceAxis
+                    | ArrayOp::MeanAxis
+                    | ArrayOp::Pairwise
+                    | ArrayOp::Choose
+                    | ArrayOp::CastInt32
+                    | ArrayOp::CastInt64
+                    | ArrayOp::CastFloat32
+                    | ArrayOp::CastFloat64
+                    | ArrayOp::UnaryInt64
+                    | ArrayOp::WrappingAdd
+                    | ArrayOp::WrappingSub
+                    | ArrayOp::WrappingMul
+                    | ArrayOp::SaturatingAdd
+                    | ArrayOp::SaturatingSub
+                    | ArrayOp::SaturatingMul => {
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "array operation preconditions hold",
+                            &pc,
+                            Goal::Unsupported("this Array operation is not modeled yet".into()),
+                        );
+                        return None;
+                    }
                     _ => return None,
                 };
                 // Every coordinate is an `int64` word.
@@ -4842,6 +5948,50 @@ impl<'a> Exec<'a> {
                 None
             }
             RuntimeOp::Function(
+                function @ (FunctionOp::DurationMilliseconds
+                | FunctionOp::DurationSeconds
+                | FunctionOp::DurationMinutes),
+            ) => {
+                let max = match function {
+                    FunctionOp::DurationMilliseconds => i64::MAX,
+                    FunctionOp::DurationSeconds => i64::MAX / 1_000,
+                    FunctionOp::DurationMinutes => i64::MAX / 60_000,
+                    _ => unreachable!("matched above"),
+                };
+                let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                    Val::Int(amount, _) => {
+                        Goal::Holds(format!("(and (<= 0 {amount}) (<= {amount} {max}))"))
+                    }
+                    _ => Goal::Unsupported("this duration operand is not modeled yet".into()),
+                };
+                self.oblige(
+                    ObligationKind::Overflow,
+                    self.span,
+                    "duration value in range",
+                    &pc,
+                    goal,
+                );
+                None
+            }
+            RuntimeOp::Function(
+                FunctionOp::ListWithCapacity
+                | FunctionOp::DictWithCapacity
+                | FunctionOp::SetWithCapacity,
+            ) => {
+                let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                    Val::Int(capacity, _) => Goal::Holds(format!("(<= 0 {capacity})")),
+                    _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                };
+                self.oblige(
+                    ObligationKind::Overflow,
+                    self.span,
+                    "capacity is not negative",
+                    &pc,
+                    goal,
+                );
+                None
+            }
+            RuntimeOp::Function(
                 function @ (FunctionOp::ArrayZeros
                 | FunctionOp::ArrayFull
                 | FunctionOp::ArrayFromList),
@@ -4867,8 +6017,10 @@ impl<'a> Exec<'a> {
                     .and_then(|target| self.place_type(target))
                     .as_ref()
                     .and_then(IntTy::of);
+                let arg_hint = target_int
+                    .or_else(|| args.iter().find_map(|arg| self.operand_int_ty(&arg.value)));
                 let values: Vec<Val> = (0..args.len())
-                    .map(|index| arg(self, state, index, target_int))
+                    .map(|index| arg(self, state, index, arg_hint))
                     .collect();
                 match (function, values.as_slice()) {
                     (FunctionOp::Abs, [Val::Float(term, float)]) => Some(Val::Float(
@@ -4886,7 +6038,24 @@ impl<'a> Exec<'a> {
                         self.oblige_range_at(&pc, span, &result, ty);
                         Some(Val::Int(result, ty))
                     }
-                    (FunctionOp::Min | FunctionOp::Max, [Val::Int(a, ty), Val::Int(b, _)]) => {
+                    (FunctionOp::Abs, _) => {
+                        let is_float = args
+                            .first()
+                            .and_then(|arg| self.operand_type(&arg.value))
+                            .as_ref()
+                            .is_some_and(|ty| FloatTy::of(ty).is_some());
+                        if !is_float {
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                self.span,
+                                "integer result in range",
+                                &pc,
+                                Goal::Unsupported("this `abs` operand is not modeled yet".into()),
+                            );
+                        }
+                        None
+                    }
+                    (FunctionOp::Min | FunctionOp::Max, [Val::Int(a, aty), Val::Int(b, bty)]) => {
                         let op = if function == FunctionOp::Min {
                             "<="
                         } else {
@@ -4894,19 +6063,28 @@ impl<'a> Exec<'a> {
                         };
                         let result =
                             self.define("Int", "minmax", format!("(ite ({op} {a} {b}) {a} {b})"));
-                        Some(Val::Int(result, target_int.unwrap_or(*ty)))
+                        let ty = target_int
+                            .or_else(|| self.operand_int_ty(&args[0].value))
+                            .or_else(|| self.operand_int_ty(&args[1].value))
+                            .unwrap_or(if matches!(args[0].value, Operand::Int(_)) {
+                                *bty
+                            } else {
+                                *aty
+                            });
+                        Some(Val::Int(result, ty))
                     }
                     _ => None,
                 }
             }
             RuntimeOp::Task(task_op) => {
-                let Some(Val::Task(value)) = receiver else {
+                let Some(Val::Task(value, ensures)) = receiver else {
                     return None;
                 };
                 let result_type = target.and_then(|target| self.place_type(target))?;
+                let post = conjoin(&ensures);
                 match task_op {
                     TaskOp::Result | TaskOp::ResultTimeout | TaskOp::Poll | TaskOp::PollTimeout => {
-                        // A `Ready` outcome carries the task's value.
+                        // A `Ready` outcome carries the task's value and postconditions.
                         let Val::Enum(name, tag, mut payloads) =
                             self.fresh(&result_type, target.unwrap_or("outcome"))
                         else {
@@ -4920,6 +6098,9 @@ impl<'a> Exec<'a> {
                             .enum_variants(&name, type_args)?
                             .iter()
                             .position(|(variant, _)| variant == "Ready")?;
+                        if post != "true" {
+                            self.assume(&pc, format!("(=> (= {tag} {ready}) {post})"));
+                        }
                         payloads[ready] = vec![*value];
                         Some(Val::Enum(name, tag, payloads))
                     }
@@ -4927,10 +6108,45 @@ impl<'a> Exec<'a> {
                         let default =
                             fit(arg(self, state, 0, IntTy::of(&result_type)), &result_type);
                         let ready = self.fresh_const("Bool", "ready");
+                        if post != "true" {
+                            self.assume(&pc, format!("(=> {ready} {post})"));
+                        }
                         let pcs = [ready.clone(), not(&ready)];
                         Some(self.merge_vals(&pcs, &[&value, &default], "outcome"))
                     }
                 }
+            }
+            RuntimeOp::Scalar(ScalarOp::Bits(method)) => {
+                let count = if matches!(method, BitMethod::RotateLeft | BitMethod::RotateRight) {
+                    let value = arg(self, state, 0, Some(IntTy::INT64));
+                    let Val::Int(count, _) = value else {
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "nonnegative rotation count",
+                            &pc,
+                            Goal::Unsupported("the rotation count is unknown".into()),
+                        );
+                        return None;
+                    };
+                    self.oblige(
+                        ObligationKind::Overflow,
+                        self.span,
+                        "nonnegative rotation count",
+                        &pc,
+                        Goal::Holds(format!("(>= {count} 0)")),
+                    );
+                    Some(count)
+                } else {
+                    None
+                };
+                let Some(Val::Int(value, ty)) = receiver else {
+                    return None;
+                };
+                Some(
+                    self.bit_terms
+                        .evaluate(method, &value, ty, count.as_deref()),
+                )
             }
             RuntimeOp::Host(_) if super::integers::math_function(op.name()).is_some() => {
                 let name = super::integers::math_function(op.name())?;
@@ -4946,7 +6162,8 @@ impl<'a> Exec<'a> {
                 let ty = target
                     .and_then(|target| self.place_type(target))
                     .as_ref()
-                    .and_then(IntTy::of)?;
+                    .and_then(IntTy::of)
+                    .filter(|ty| ty.modeled())?;
                 let rhs = arg(self, state, 0, Some(ty));
                 self.int_method(&pc, kind, ty, (receiver, rhs))
             }
@@ -4983,6 +6200,51 @@ impl<'a> Exec<'a> {
             RuntimeOp::Print(_) => Some(Val::Unit),
             _ => None,
         }
+    }
+
+    /// Checks the runtime bounds and non-zero step of `seq[start:end:step]`
+    /// on a list or string of length `len`.
+    fn oblige_slice_step(&mut self, state: &mut State, span: Span, len: &str, args: &[MirArg]) {
+        let pc = state.pc.clone();
+        let mut int = |index: usize| {
+            args.get(index)
+                .map(|arg| self.operand(state, &arg.value, Some(IntTy::INT64)))
+                .as_ref()
+                .and_then(scalar_term)
+                .map(str::to_string)
+        };
+        let (Some(start), Some(has_start), Some(end), Some(has_end), Some(step)) =
+            (int(0), int(1), int(2), int(3), int(4))
+        else {
+            self.oblige(
+                ObligationKind::IndexInRange,
+                span,
+                "slice range in bounds",
+                &pc,
+                Goal::Unsupported("this stepped slice bound is not modeled yet".into()),
+            );
+            return;
+        };
+        let norm_start = format!("(ite (< {start} 0) (+ {start} {len}) {start})");
+        let norm_end = format!("(ite (< {end} 0) (+ {end} {len}) {end})");
+        let pos_low = format!("(ite (= {has_start} 0) 0 {norm_start})");
+        let pos_high = format!("(ite (= {has_end} 0) {len} {norm_end})");
+        let pos_ok =
+            format!("(and (<= 0 {pos_low}) (<= {pos_low} {pos_high}) (<= {pos_high} {len}))");
+        let neg_first = format!("(ite (= {has_start} 0) (- {len} 1) {norm_start})");
+        let neg_last = format!("(ite (= {has_end} 0) (- 1) {norm_end})");
+        let neg_ok = format!(
+            "(or (and (= {neg_first} {neg_last}) (<= (- 1) {neg_first}) (<= {neg_first} {len})) (and (<= {neg_last} {neg_first}) (< {neg_first} {len}) (<= (- 1) {neg_last})))"
+        );
+        let in_range = format!("(and (not (= {step} 0)) (ite (> {step} 0) {pos_ok} {neg_ok}))");
+        self.oblige(
+            ObligationKind::IndexInRange,
+            span,
+            "slice range in bounds",
+            &pc,
+            Goal::Holds(in_range.clone()),
+        );
+        self.assume(&pc, in_range);
     }
 }
 
@@ -5405,9 +6667,61 @@ pub(super) fn terminator_targets(terminator: &Terminator) -> Vec<&str> {
     }
 }
 
-/// The locals a closure made in `function` captures by reference.
+/// Every root local reachable from `loan` in `loans`.
+fn loan_target_roots(loans: &BTreeMap<String, Loan>, loan: &Loan) -> BTreeSet<String> {
+    let mut visited = BTreeSet::new();
+    let mut roots = BTreeSet::new();
+    let mut work = vec![loan.clone()];
+    while let Some(current) = work.pop() {
+        match current {
+            Loan::Place(place) | Loan::Element { list: place, .. } | Loan::Inside(place) => {
+                let root = root_of(&place).to_string();
+                if let Some(next) = loans.get(&root) {
+                    if visited.insert(root) {
+                        work.push(next.clone());
+                    }
+                } else {
+                    roots.insert(root);
+                }
+            }
+            Loan::Unknown(names) => {
+                for name in names {
+                    let root = root_of(&name).to_string();
+                    if let Some(next) = loans.get(&root) {
+                        if visited.insert(root) {
+                            work.push(next.clone());
+                        }
+                    } else {
+                        roots.insert(root);
+                    }
+                }
+            }
+        }
+    }
+    roots
+}
+
+/// Every root local reached from `place`, following any active loans in `loans`.
+fn roots_of_place(loans: &BTreeMap<String, Loan>, place: &str) -> BTreeSet<String> {
+    let root = root_of(place);
+    match loans.get(root) {
+        Some(loan) => loan_target_roots(loans, loan),
+        None => BTreeSet::from([root.to_string()]),
+    }
+}
+
+/// The locals a closure made in `function` captures by reference, expanded
+/// through any loans they alias.
 pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
+    let roots = loan_roots(&function.blocks);
     let mut captured = BTreeSet::new();
+    let mut record = |place: &str| {
+        let root = root_of(place);
+        captured.insert(root.to_string());
+        if let Some(origins) = roots.get(root) {
+            captured.extend(origins.iter().cloned());
+        }
+    };
     for block in &function.blocks {
         for instruction in &block.instructions {
             let (Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. }) =
@@ -5423,43 +6737,75 @@ pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
                     continue;
                 }
                 if let Some(place) = &capture.source_place {
-                    captured.insert(root_of(place).to_string());
+                    record(place);
                 }
                 if let Operand::Place(place) | Operand::MovePlace(place) = &capture.value {
-                    captured.insert(root_of(place).to_string());
+                    record(place);
                 }
             }
         }
     }
-    // A captured view writes the local it is a view of.
+    captured.extend(super::closures::stateful_holders(function));
+    // A captured view writes every local it may be a view of.
     if !captured.is_empty() {
-        let loans = loan_roots(&function.blocks);
         let viewed: Vec<String> = captured
             .iter()
-            .filter_map(|root| loans.get(root).cloned())
+            .filter_map(|root| roots.get(root))
+            .flat_map(|origins| origins.iter().cloned())
             .collect();
         captured.extend(viewed);
     }
-    captured.extend(super::closures::stateful_holders(function));
     captured
 }
 
-/// The root local each loan of `blocks` reaches, following reborrows.
-pub(super) fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, String> {
-    let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
+/// Maps each managed place in `function` to any class cleanup method (`__exit__`
+/// or `close`) registered for it by `PushCleanup`.
+fn collect_cleanup_callees(function: &MirFunction) -> BTreeMap<String, BTreeSet<String>> {
+    let mut callees: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if let Instruction::PushCleanup {
+                place,
+                callee: Some(CleanupCallee::Method { function: method }),
+                ..
+            } = instruction
+            {
+                callees
+                    .entry(place.clone())
+                    .or_default()
+                    .insert(method.clone());
+            }
+        }
+    }
+    callees
+}
+
+/// The root locals each loan of `blocks` can reach, following all reborrows
+/// and multi-branch bindings.
+pub(super) fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, BTreeSet<String>> {
+    let mut parents: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for block in blocks {
         for instruction in &block.instructions {
             match instruction {
                 Instruction::BeginLoan { loan, source, .. }
                 | Instruction::BeginElementLoan { loan, source, .. } => {
-                    parents.insert(loan, root_of(source));
+                    parents
+                        .entry(loan.as_str())
+                        .or_default()
+                        .insert(root_of(source));
                 }
                 Instruction::BeginReturnedLoan { loan, origin, .. } => {
-                    parents.insert(loan, root_of(origin));
+                    parents
+                        .entry(loan.as_str())
+                        .or_default()
+                        .insert(root_of(origin));
                 }
                 Instruction::Reborrow { loan, parent, .. }
                 | Instruction::ReborrowElement { loan, parent, .. } => {
-                    parents.insert(loan, root_of(parent));
+                    parents
+                        .entry(loan.as_str())
+                        .or_default()
+                        .insert(root_of(parent));
                 }
                 _ => {}
             }
@@ -5467,28 +6813,39 @@ pub(super) fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, String> {
     }
     let mut roots = BTreeMap::new();
     for &loan in parents.keys() {
-        let mut current = loan;
-        let mut steps = 0;
-        while let Some(parent) = parents.get(current) {
-            current = parent;
-            steps += 1;
-            if steps > parents.len() {
-                break;
+        let mut seen = BTreeSet::from([loan]);
+        let mut work = vec![loan];
+        let mut target_roots = BTreeSet::new();
+        while let Some(current) = work.pop() {
+            if let Some(nexts) = parents.get(current) {
+                for &parent in nexts {
+                    if seen.insert(parent) {
+                        work.push(parent);
+                    }
+                }
+            } else {
+                target_roots.insert(current.to_string());
             }
         }
-        roots.insert(loan.to_string(), current.to_string());
+        if target_roots.is_empty() {
+            target_roots.insert(loan.to_string());
+        }
+        roots.insert(loan.to_string(), target_roots);
     }
     roots
 }
 
-/// The direction a write `target = value` steps `target`, when `value`
-/// is a value `target` had in the loop plus or minus a constant. `defs`
-/// holds every assignment the loop makes, by target, so a chain of
-/// temporaries such as `t = i; k = 1; s = t + k; i = s` counts.
+/// The direction a write `target = value` at instruction `pos` steps `target`,
+/// when `value` is a value `target` had earlier in the same block plus or minus
+/// a non-negative constant. `block_defs` maps each local to its most recent
+/// dominating same-block assignment, so a chain of temporaries such as
+/// `t = i; k = 1; s = t + k; i = s` counts only when every temporary was defined
+/// in the same block strictly before its use.
 fn counter_step(
     target: &str,
     value: &Rvalue,
-    defs: &BTreeMap<&str, Vec<&Rvalue>>,
+    max_pos: usize,
+    block_defs: &BTreeMap<&str, (usize, &Rvalue)>,
     depth: usize,
 ) -> Option<Step> {
     if depth > 8 {
@@ -5500,7 +6857,9 @@ fn counter_step(
             left,
             right,
             ..
-        } if reads_target(target, left, defs, 0) && is_constant(right, defs, 0) => {
+        } if reads_target(target, left, max_pos, block_defs, 0)
+            && is_constant(right, max_pos, block_defs, 0) =>
+        {
             Some(if *op == BinaryOp::Add {
                 Step::Up
             } else {
@@ -5508,27 +6867,23 @@ fn counter_step(
             })
         }
         Rvalue::Use(Operand::Place(temp) | Operand::MovePlace(temp)) if temp != target => {
-            let values = defs.get(temp.as_str())?;
-            let mut step = None;
-            for value in values {
-                let next = counter_step(target, value, defs, depth + 1)?;
-                if step.is_some() && step != Some(next) {
-                    return None;
-                }
-                step = Some(next);
+            let &(def_pos, def_value) = block_defs.get(temp.as_str())?;
+            if def_pos >= max_pos {
+                return None;
             }
-            step
+            counter_step(target, def_value, def_pos, block_defs, depth + 1)
         }
         _ => None,
     }
 }
 
-/// Whether `operand` holds a value `target` had: `target` itself, or a
-/// temporary every assignment of which copies one.
+/// Whether `operand` holds the value `target` had: `target` itself, or a
+/// temporary assigned from it earlier in the same block.
 fn reads_target(
     target: &str,
     operand: &Operand,
-    defs: &BTreeMap<&str, Vec<&Rvalue>>,
+    max_pos: usize,
+    block_defs: &BTreeMap<&str, (usize, &Rvalue)>,
     depth: usize,
 ) -> bool {
     let (Operand::Place(place) | Operand::MovePlace(place)) = operand else {
@@ -5540,26 +6895,37 @@ fn reads_target(
     if depth > 8 {
         return false;
     }
-    match defs.get(place.as_str()) {
-        Some(values) if !values.is_empty() => values.iter().all(|value| match value {
-            Rvalue::Use(operand) => reads_target(target, operand, defs, depth + 1),
-            _ => false,
-        }),
+    let Some(&(def_pos, value)) = block_defs.get(place.as_str()) else {
+        return false;
+    };
+    if def_pos >= max_pos {
+        return false;
+    }
+    match value {
+        Rvalue::Use(inner) => reads_target(target, inner, def_pos, block_defs, depth + 1),
         _ => false,
     }
 }
 
 /// Whether `operand` is a non-negative constant, directly or through
-/// temporaries the loop sets only to constants.
-fn is_constant(operand: &Operand, defs: &BTreeMap<&str, Vec<&Rvalue>>, depth: usize) -> bool {
+/// temporaries set to a non-negative constant earlier in the same block.
+fn is_constant(
+    operand: &Operand,
+    max_pos: usize,
+    block_defs: &BTreeMap<&str, (usize, &Rvalue)>,
+    depth: usize,
+) -> bool {
     match operand {
         Operand::Int(_) => true,
         Operand::Place(place) | Operand::MovePlace(place) if depth <= 8 => {
-            match defs.get(place.as_str()) {
-                Some(values) if !values.is_empty() => values.iter().all(|value| match value {
-                    Rvalue::Use(operand) => is_constant(operand, defs, depth + 1),
-                    _ => false,
-                }),
+            let Some(&(def_pos, value)) = block_defs.get(place.as_str()) else {
+                return false;
+            };
+            if def_pos >= max_pos {
+                return false;
+            }
+            match value {
+                Rvalue::Use(inner) => is_constant(inner, def_pos, block_defs, depth + 1),
                 _ => false,
             }
         }
@@ -5567,40 +6933,53 @@ fn is_constant(operand: &Operand, defs: &BTreeMap<&str, Vec<&Rvalue>>, depth: us
     }
 }
 
-/// Every root local `block` may write. With `root_assigns` false, a plain
-/// `Assign` to a root local does not count.
-fn collect_writes(
-    block: &BasicBlock,
-    loan_roots: &BTreeMap<String, String>,
+fn collect_instruction_writes(
+    instruction: &Instruction,
+    loan_roots: &BTreeMap<String, BTreeSet<String>>,
     root_assigns: bool,
     writes: &mut BTreeSet<String>,
 ) {
     let mut place = |place: &str| {
         let root = root_of(place);
         writes.insert(root.to_string());
-        if let Some(source) = loan_roots.get(root) {
-            writes.insert(source.clone());
+        if let Some(sources) = loan_roots.get(root) {
+            writes.extend(sources.iter().cloned());
         }
     };
-    for instruction in &block.instructions {
-        match instruction {
-            Instruction::Assign { target, value } => {
-                if root_assigns || target.contains('.') {
-                    place(target);
-                }
-                rvalue_writes(value, &mut place);
+    match instruction {
+        Instruction::Assign { target, value } => {
+            if root_assigns || target.contains('.') {
+                place(target);
             }
-            Instruction::WriteLoan { loan, value } => {
-                place(loan);
-                rvalue_writes(value, &mut place);
-            }
-            Instruction::ReadLoan { target, .. } => place(target),
-            Instruction::PopCleanup { place: p, .. } => place(p),
-            _ => {}
+            rvalue_writes(value, &mut place);
         }
+        Instruction::WriteLoan { loan, value } => {
+            place(loan);
+            rvalue_writes(value, &mut place);
+        }
+        Instruction::ReadLoan { target, .. } => place(target),
+        Instruction::PopCleanup { place: p, .. } => place(p),
+        _ => {}
+    }
+}
+
+/// Every root local `block` may write. With `root_assigns` false, a plain
+/// `Assign` to a root local does not count.
+fn collect_writes(
+    block: &BasicBlock,
+    loan_roots: &BTreeMap<String, BTreeSet<String>>,
+    root_assigns: bool,
+    writes: &mut BTreeSet<String>,
+) {
+    for instruction in &block.instructions {
+        collect_instruction_writes(instruction, loan_roots, root_assigns, writes);
     }
     if let Terminator::ForRange { binding, .. } = &block.terminator {
-        place(binding);
+        let root = root_of(binding);
+        writes.insert(root.to_string());
+        if let Some(sources) = loan_roots.get(root) {
+            writes.extend(sources.iter().cloned());
+        }
     }
 }
 
@@ -5706,3 +7085,6 @@ fn children(value: &Val) -> Vec<&Val> {
         _ => Vec::new(),
     }
 }
+
+#[path = "verify_fixed_arrays.rs"]
+mod fixed_arrays;

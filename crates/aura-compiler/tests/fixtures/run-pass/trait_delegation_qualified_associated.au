@@ -1,0 +1,16 @@
+import trait_delegation_support.items
+
+class Wrapper:
+    meter: trait_delegation_support.items.Meter[int64]
+
+impl trait_delegation_support.items.Scored for Wrapper by meter
+
+print(Wrapper.initial())
+print(Wrapper(meter=trait_delegation_support.items.Meter[int64](n=3)).score())
+
+class Holder[T]:
+    item: T
+
+impl trait_delegation_support.items.Scored for Holder[trait_delegation_support.items.Meter[int64]] by item
+
+print(Holder[trait_delegation_support.items.Meter[int64]].initial())

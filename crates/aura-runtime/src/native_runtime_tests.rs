@@ -310,6 +310,7 @@ fn recovered_stack_exhaustion_reports_the_frame_the_native_caller_already_entere
         panic!("a call with no stack reserve returned");
     }
 
+    let _guard = super::direct_task_claim_flag_test_guard();
     run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
             let result = call_recovered_thunk(exhaust, &[]);
@@ -2375,10 +2376,12 @@ fn direct_host_builtin_call(name: &str, arguments: &[*mut OpaqueValue]) -> *mut 
     for (index, argument) in arguments.iter().copied().enumerate() {
         super::aura_direct_arg_buffer_store(buffer, index as i64, argument as i64);
     }
-    host_builtin_entry(name)(buffer, arguments.len() as i64)
+    unsafe { host_builtin_entry(name)(buffer, arguments.len() as i64) }
 }
 
-fn host_builtin_entry(name: &str) -> extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue {
+fn host_builtin_entry(
+    name: &str,
+) -> unsafe extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue {
     super::HOST_BUILTIN_ENTRIES
         .iter()
         .find(|(entry, _)| *entry == name)
@@ -2392,7 +2395,7 @@ fn direct_json_owned_host_builtin_call(name: &str, argument: *mut OpaqueValue) -
     let clone_count = super::direct_value_clone_count();
     let buffer = super::aura_direct_arg_buffer_new(1);
     super::aura_direct_arg_buffer_store_owned(buffer, 0, argument as i64);
-    let result = host_builtin_entry(name)(buffer, 1);
+    let result = unsafe { host_builtin_entry(name)(buffer, 1) };
     assert_eq!(
         super::direct_value_clone_count(),
         clone_count,
@@ -2501,6 +2504,7 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
     for (name, _) in super::HOST_BUILTIN_SYMBOLS {
         assert!(
             crate::runtime_value::host_builtins::host_builtin_function(name).is_some()
+                || crate::runtime_value::host_builtins::unsafe_mem_builtin_function(name).is_some()
                 || crate::runtime_value::evaluate_bytes_host_builtin_ref(name, &Value::Unit)
                     .is_some()
                 || crate::text_methods::is_bytes_search_builtin(name)
@@ -2558,7 +2562,7 @@ fn every_host_builtin_entry_checks_its_argument_count() {
         let result = run_lightweight_root_task(move || {
             super::with_task_runtime_error_capture(|| {
                 let empty_args = super::aura_direct_arg_buffer_new(0);
-                let value = entry(empty_args, 0);
+                let value = unsafe { entry(empty_args, 0) };
                 unsafe { release_value(value) };
                 Ok(Value::Unit)
             })
@@ -2571,6 +2575,7 @@ fn every_host_builtin_entry_checks_its_argument_count() {
                 | "sys::monotonic_time_ms"
                 | "metrics::reset"
                 | "mem::fence"
+                | "mem::heap_free_bytes"
                 | "control::__retry_cancel_if_requested"
                 | "time::__aura_now"
                 | "time::__aura_monotonic"
@@ -2678,14 +2683,14 @@ fn every_image_host_entry_reaches_its_host_function() {
 }
 
 fn direct_host_builtin_call_entry(
-    entry: extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
+    entry: unsafe extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
     arguments: &[*mut OpaqueValue],
 ) -> *mut OpaqueValue {
     let buffer = super::aura_direct_arg_buffer_new(arguments.len() as i64);
     for (index, argument) in arguments.iter().copied().enumerate() {
         super::aura_direct_arg_buffer_store(buffer, index as i64, argument as i64);
     }
-    entry(buffer, arguments.len() as i64)
+    unsafe { entry(buffer, arguments.len() as i64) }
 }
 
 #[test]
@@ -12714,6 +12719,12 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     "count",
                 );
             }
+            "i64-overflow" => {
+                super::expect_i64_value(&Value::Int(IntegerValue::from_u64(u64::MAX)), "count");
+            }
+            "scalar-kind-overflow" => {
+                let _ = super::DirectScalarKind::Int8.value(300);
+            }
             "i32-value-type" => {
                 super::expect_i32_value(&Value::String("count".to_string().into()), "count");
             }
@@ -13383,6 +13394,35 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     0,
                     0,
                 );
+            }
+            "map-index-scalar-missing" => {
+                let map = super::aura_direct_map_empty();
+                expect_lookup_missing(super::aura_direct_map_set_in_place(
+                    map,
+                    string_value("name"),
+                    float_value(1.5),
+                ));
+                super::aura_direct_map_index_f64(map, string_value("missing"), 2, 7);
+            }
+            "map-index-scalar-missing-no-span" => {
+                super::aura_direct_map_index_int64(
+                    super::aura_direct_map_empty(),
+                    string_value("missing"),
+                    0,
+                    0,
+                );
+            }
+            "map-index-int64-pair-missing" => {
+                super::aura_direct_map_index_int64_pair(super::aura_direct_map_empty(), -3, 2, 7);
+            }
+            "map-index-scalar-type" => {
+                let map = super::aura_direct_map_empty();
+                expect_lookup_missing(super::aura_direct_map_set_in_place(
+                    map,
+                    string_value("name"),
+                    string_value("text"),
+                ));
+                super::aura_direct_map_index_f64(map, string_value("name"), 2, 7);
             }
             "vec-extend-type" => {
                 super::aura_direct_vec_extend_in_place(
@@ -14105,6 +14145,13 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     super::direct_list_layout().fingerprint().wrapping_add(1),
                 );
             }
+            "ownership-layout-mismatch" => {
+                super::aura_direct_check_ownership_layout(
+                    super::direct_ownership_layout()
+                        .fingerprint()
+                        .wrapping_add(1),
+                );
+            }
             "frame-stack-layout-mismatch" => {
                 super::aura_direct_check_frame_stack_layout(
                     super::direct_frame_stack_layout()
@@ -14296,6 +14343,11 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("bytes-element-range", "`bytes` expects `list[uint8]`"),
         ("bool-value-type", "`flag` expects `bool`, found `str`"),
         ("i32-overflow", "`count` expects `int32`"),
+        ("i64-overflow", "`count` expects `int64`"),
+        (
+            "scalar-kind-overflow",
+            "integer value `300` does not fit in `int8`",
+        ),
         ("i32-value-type", "`count` expects `int32`, found `str`"),
         (
             "headers-map-type",
@@ -14669,6 +14721,22 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "map-index-missing-no-span",
             "dict key `missing` was not present",
+        ),
+        (
+            "map-index-scalar-missing",
+            "dict key `missing` was not present",
+        ),
+        (
+            "map-index-scalar-missing-no-span",
+            "dict key `missing` was not present",
+        ),
+        (
+            "map-index-int64-pair-missing",
+            "dict key `-3` was not present",
+        ),
+        (
+            "map-index-scalar-type",
+            "direct backend expected `float64`, found `str`",
         ),
         (
             "vec-extend-type",
@@ -15181,6 +15249,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "frame-stack-layout-mismatch",
+            "this executable was built for a different Aura runtime",
+        ),
+        (
+            "ownership-layout-mismatch",
             "this executable was built for a different Aura runtime",
         ),
         (
@@ -15954,10 +16026,25 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         super::aura_direct_value_type_matches(
+            super::aura_direct_box_f32(3.5),
+            b"float32".as_ptr(),
+            "float32".len(),
+        ),
+        1
+    );
+    // A float boxed with its width does not answer for the other width.
+    assert_eq!(
+        super::aura_direct_value_type_matches(
             float_value(3.5),
             b"float32".as_ptr(),
             "float32".len(),
         ),
+        0
+    );
+    // An untagged float answers for either width.
+    let untagged = super::boxed_value(Value::Float(3.5));
+    assert_eq!(
+        super::aura_direct_value_type_matches(untagged, b"float32".as_ptr(), "float32".len()),
         1
     );
     assert_eq!(
@@ -26815,6 +26902,7 @@ fn list_view_reads_scalar_elements_in_place() {
     );
     super::aura_direct_check_list_layout(layout.fingerprint());
     super::aura_direct_check_frame_stack_layout(super::direct_frame_stack_layout().fingerprint());
+    super::aura_direct_check_ownership_layout(super::direct_ownership_layout().fingerprint());
     for value in [integers, wide, floats, flags] {
         unsafe { release_value(value) };
     }
@@ -26933,6 +27021,202 @@ fn pop_like_generated_code(list: *mut OpaqueValue) -> (i64, bool) {
         }
     }
     (super::aura_direct_vec_pop_scalar(list, 0), false)
+}
+
+#[test]
+fn a_shared_list_of_lists_takes_in_place_appends_in_for_two_readers_at_once() {
+    use super::DirectListAccess;
+    for _ in 0..64 {
+        // A list of two lists, each held in a box of the outer list.
+        let outer = super::aura_direct_vec_empty();
+        for _ in 0..2 {
+            super::aura_direct_vec_push_in_place(outer, super::aura_direct_vec_empty());
+        }
+        // Generated code appends to each inner list through its box: the
+        // first append by call, the rest in place, which only the box's
+        // list view records.
+        for index in 0..2 {
+            let lent = super::aura_direct_vec_lend(outer, index, 1, 1);
+            assert_eq!(lent as usize & 1, 1, "the outer list lends its boxes");
+            let inner = lent.wrapping_byte_sub(1);
+            assert!(!append_like_generated_code(
+                inner,
+                10,
+                DirectListAccess::Int64
+            ));
+            for bits in 11..14 {
+                assert!(append_like_generated_code(
+                    inner,
+                    bits,
+                    DirectListAccess::Int64
+                ));
+            }
+            assert_ne!(list_view_capacity(inner), 0);
+        }
+        // The outer list goes to two tasks, which read it at once.
+        unsafe { super::share_direct_value(outer) };
+        let address = outer as usize;
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(move || {
+                    let outer = address as *mut OpaqueValue;
+                    for index in 0..2 {
+                        let inner = super::aura_direct_vec_index(outer, index, 1, 1);
+                        assert_eq!(super::aura_direct_vec_len(inner), 4);
+                        assert_eq!(super::aura_direct_vec_index_scalar(inner, 3, 0), 13);
+                        unsafe { release_value(inner) };
+                    }
+                });
+            }
+        });
+        unsafe { release_value(outer) };
+    }
+}
+
+#[test]
+fn a_list_of_lists_takes_each_new_list_in_its_box_with_no_general_write() {
+    use super::DirectListAccess;
+    let list_of = |element: Type| Type::Named("list".to_string(), vec![element]);
+    let outer_cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let inner_cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let inner_type = super::canonical_runtime_type_name(&list_of(Type::named("int64")));
+    let outer_type = super::canonical_runtime_type_name(&list_of(list_of(Type::named("int64"))));
+    let new_inner =
+        || super::aura_direct_vec_empty_tagged(&inner_cell, inner_type.as_ptr(), inner_type.len());
+    let outer =
+        super::aura_direct_vec_empty_tagged(&outer_cell, outer_type.as_ptr(), outer_type.len());
+    let shape = |list: *mut OpaqueValue| unsafe { &*list }.shape_tag.load(Ordering::Relaxed);
+    let tagged = shape(outer);
+    assert!(!tagged.is_null());
+    // The first list gives the outer list its boxes through the general
+    // write, which clears the shape.
+    let first = new_inner();
+    super::aura_direct_vec_push_in_place(outer, first);
+    assert_eq!(list_view_access(outer), DirectListAccess::Boxes as u32);
+    assert!(shape(outer).is_null());
+    unsafe { &*outer }
+        .shape_tag
+        .store(tagged, Ordering::Relaxed);
+    // The rest join in their own boxes and leave the shape as it is.
+    let mut boxes = vec![first];
+    for _ in 0..20 {
+        let inner = new_inner();
+        super::aura_direct_vec_push_in_place(outer, inner);
+        boxes.push(inner);
+    }
+    assert_eq!(shape(outer), tagged);
+    assert_eq!(list_view_len(outer), 21);
+    assert!(list_view_capacity(outer) >= 21);
+    for (index, inner) in boxes.iter().enumerate() {
+        let lent = super::aura_direct_vec_lend(outer, index as i64, 1, 1);
+        assert_eq!(lent.wrapping_byte_sub(1), *inner);
+    }
+    assert_eq!(super::aura_direct_vec_len(outer), 21);
+    // A copy shares the boxes, so the next list takes the general write,
+    // and the copy keeps its length.
+    let copy = super::aura_direct_clone_value(outer);
+    super::aura_direct_vec_push_in_place(outer, new_inner());
+    assert_eq!(super::aura_direct_vec_len(copy), 21);
+    assert_eq!(super::aura_direct_vec_len(outer), 22);
+    // A list another thread may read takes its lock.
+    unsafe { super::share_direct_value(copy) };
+    super::aura_direct_vec_push_in_place(copy, new_inner());
+    assert_eq!(super::aura_direct_vec_len(copy), 22);
+    for value in [outer, copy] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn a_full_scalar_list_grows_from_what_generated_code_left() {
+    use super::DirectListAccess;
+    let header = |list: *mut OpaqueValue| unsafe { &*list };
+    let values = |list: *mut OpaqueValue| -> Vec<i64> {
+        (0..super::aura_direct_vec_len(list))
+            .map(|index| super::aura_direct_vec_index_scalar(list, index, 0))
+            .collect()
+    };
+    let list = super::aura_direct_vec_empty();
+    // The first append gives the list its form and its room.
+    assert!(!append_like_generated_code(
+        list,
+        0,
+        DirectListAccess::Int64
+    ));
+    let room = list_view_capacity(list);
+    for bits in 1..room as i64 {
+        assert!(append_like_generated_code(
+            list,
+            bits,
+            DirectListAccess::Int64
+        ));
+    }
+    // The list is full, so the call grows it after taking in the appends.
+    let shape = header(list).shape_tag.load(Ordering::Relaxed);
+    assert!(!append_like_generated_code(
+        list,
+        room as i64,
+        DirectListAccess::Int64
+    ));
+    assert_eq!(list_view_len(list), room + 1);
+    assert!(list_view_capacity(list) > room + 1);
+    assert_eq!(list_view_access(list), DirectListAccess::Int64 as u32);
+    assert_eq!(header(list).shape_tag.load(Ordering::Relaxed), shape);
+    // It left room, so the next append needs no call.
+    assert!(append_like_generated_code(
+        list,
+        99,
+        DirectListAccess::Int64
+    ));
+    let mut expected: Vec<i64> = (0..=room as i64).collect();
+    expected.push(99);
+    assert_eq!(values(list), expected);
+    // Elements popped in place are dropped before the next is added.
+    super::aura_direct_vec_push_scalar(list, 5, 0);
+    assert_eq!(pop_like_generated_code(list), (5, true));
+    assert_eq!(pop_like_generated_code(list), (99, true));
+    super::aura_direct_vec_push_scalar(list, 7, 0);
+    expected.pop();
+    expected.push(7);
+    assert_eq!(values(list), expected);
+    // A list that shares its storage takes the general path, which copies.
+    let copy = super::aura_direct_clone_value(list);
+    super::aura_direct_vec_push_scalar(list, 8, 0);
+    assert_eq!(values(copy), expected);
+    expected.push(8);
+    assert_eq!(values(list), expected);
+    // Every scalar kind grows the same way.
+    for (kind, bits) in [(1, 2.5f64.to_bits() as i64), (2, 1), (5, -7), (6, 200)] {
+        let other = super::aura_direct_vec_empty();
+        for _ in 0..40 {
+            super::aura_direct_vec_push_scalar(other, bits, kind);
+        }
+        assert_eq!(super::aura_direct_vec_len(other), 40);
+        assert_eq!(super::aura_direct_vec_index_scalar(other, 39, kind), bits);
+        unsafe { release_value(other) };
+    }
+    // A list made empty with its type takes its first storage with its
+    // first element: room for four, or for a small block of narrow ones.
+    for (name, kind, room) in [("int64", 0, 4), ("float32", 10, 4), ("uint8", 6, 16)] {
+        let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+        let descriptor = super::canonical_runtime_type_name(&Type::Named(
+            "list".to_string(),
+            vec![Type::named(name)],
+        ));
+        let typed =
+            super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+        assert_eq!(list_view_capacity(typed), 0);
+        super::aura_direct_vec_push_scalar(typed, 1, kind);
+        assert_eq!((list_view_len(typed), list_view_capacity(typed)), (1, room));
+        unsafe { release_value(typed) };
+    }
+    // A kind the list does not keep, and a value that is no list, take the
+    // general path.
+    super::aura_direct_vec_push_scalar(list, 1, 2);
+    assert_eq!(super::aura_direct_vec_len(list), expected.len() as i64 + 1);
+    for value in [list, copy] {
+        unsafe { release_value(value) };
+    }
 }
 
 #[test]
@@ -27846,6 +28130,148 @@ fn value_debug(value: *mut OpaqueValue) -> String {
 
 fn payload_debug(payload: *mut OpaqueValue) -> Option<String> {
     (!payload.is_null()).then(|| format!("{:?}", unsafe { take_value(payload) }))
+}
+
+#[test]
+fn direct_map_index_reads_scalars_without_a_box() {
+    let map = super::aura_direct_map_empty();
+    for (name, value) in [
+        ("int", int_value(-41)),
+        ("float", float_value(2.5)),
+        ("yes", bool_value(true)),
+        ("no", bool_value(false)),
+    ] {
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            map,
+            string_value(name),
+            value,
+        ));
+    }
+    let index = |read: &dyn Fn(*mut OpaqueValue) -> i64, name: &str| {
+        let key = string_value(name);
+        let found = read(key);
+        unsafe { release_value(key) };
+        found
+    };
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_int64(map, key, 1, 1),
+            "int"
+        ),
+        -41
+    );
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_i64(map, key, 1, 1),
+            "int"
+        ),
+        -41
+    );
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_bool(map, key, 1, 1),
+            "yes"
+        ),
+        1
+    );
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_bool(map, key, 1, 1),
+            "no"
+        ),
+        0
+    );
+    let key = string_value("float");
+    assert_eq!(super::aura_direct_map_index_f64(map, key, 1, 1), 2.5);
+    unsafe { release_value(key) };
+
+    let wide = super::aura_direct_map_empty();
+    super::aura_direct_map_set_index_int64_pair(wide, 7, i64::MIN);
+    super::aura_direct_map_set_index_int64_pair(wide, -7, 0);
+    assert_eq!(
+        super::aura_direct_map_index_int64_pair(wide, 7, 1, 1),
+        i64::MIN
+    );
+    assert_eq!(super::aura_direct_map_index_int64_pair(wide, -7, 1, 1), 0);
+    let key = int_value(7);
+    assert_eq!(
+        super::aura_direct_map_index_u64(wide, int_value(-7), 1, 1),
+        0
+    );
+    assert_eq!(
+        super::aura_direct_map_index_int64(wide, key, 1, 1),
+        i64::MIN
+    );
+    unsafe { release_value(key) };
+    for value in [map, wide] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn direct_lookup_word_gets_write_the_found_int64() {
+    let names = super::aura_direct_map_empty();
+    let codes = super::aura_direct_map_empty();
+    for (name, code, value) in [
+        ("zero", -4_i64, 0_i64),
+        ("low", 9, i64::MIN),
+        ("high", 0, i64::MAX),
+    ] {
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            names,
+            string_value(name),
+            int_value(value),
+        ));
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            codes,
+            int_value(code),
+            int_value(value),
+        ));
+    }
+    for (name, code, expected) in [
+        ("zero", -4_i64, Some(0_i64)),
+        ("low", 9, Some(i64::MIN)),
+        ("high", 0, Some(i64::MAX)),
+        ("missing", 5, None),
+    ] {
+        let found = i64::from(expected.is_some());
+        let value = expected.unwrap_or(0);
+        let boxed_name = string_value(name);
+        let boxed_code = int_value(code);
+        // Each call overwrites the word, a missing key with zero.
+        let mut word = 77_i64;
+        assert_eq!(
+            unsafe {
+                super::aura_direct_map_get_str_word(names, name.as_ptr(), name.len(), &mut word)
+            },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_word(names, boxed_name, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_int64_word(codes, code, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_word(codes, boxed_code, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        for value in [boxed_name, boxed_code] {
+            unsafe { release_value(value) };
+        }
+    }
+    for value in [names, codes] {
+        unsafe { release_value(value) };
+    }
 }
 
 #[test]
@@ -31012,36 +31438,82 @@ fn direct_array_views_take_one_or_two_components_as_plain_words() {
 fn every_direct_task_start_test_holds_claim_flag_test_guard() {
     let source = include_str!("native_runtime_tests.rs");
     let lines: Vec<&str> = source.lines().collect();
-    let mut unguarded = Vec::new();
+    let needle_start = ["aura_direct_start_task", "_"].concat();
+    let needle_alloc = ["allocate_direct_task_claim", "_flag"].concat();
+    let needle_count = ["direct_task_claim_flag_live", "_count"].concat();
+    let needle_guard = ["direct_task_claim_flag_test", "_guard"].concat();
+
+    // Collect every top-level `fn <name>` in the test module with whether it is a `#[test]`.
+    let mut funcs: Vec<(bool, usize, String, String)> = Vec::new();
     let mut index = 0;
     while index < lines.len() {
         let trimmed = lines[index].trim();
-        let is_test_attr = trimmed == "#[test]";
-        if is_test_attr {
-            let mut fn_idx = index + 1;
+        let mut is_test = false;
+        let mut fn_idx = index;
+        if trimmed == "#[test]" {
+            is_test = true;
+            fn_idx = index + 1;
             while fn_idx < lines.len() && lines[fn_idx].trim().starts_with("#[") {
                 fn_idx += 1;
             }
-            if fn_idx < lines.len() && lines[fn_idx].starts_with("fn ") {
-                let fn_header = lines[fn_idx];
-                let mut end_idx = fn_idx + 1;
-                while end_idx < lines.len() && lines[end_idx] != "}" {
-                    end_idx += 1;
-                }
-                let body = lines[fn_idx..=end_idx.min(lines.len() - 1)].join("\n");
-                let needle_start = ["aura_direct_start_task", "_"].concat();
-                let needle_count = ["direct_task_claim_flag_live", "_count"].concat();
-                let needle_guard = ["direct_task_claim_flag_test", "_guard"].concat();
-                if (body.contains(&needle_start) || body.contains(&needle_count))
-                    && !body.contains(&needle_guard)
-                {
-                    unguarded.push(format!("line {}: {}", fn_idx + 1, fn_header));
-                }
-                index = end_idx + 1;
-                continue;
+        }
+        if fn_idx < lines.len() && lines[fn_idx].starts_with("fn ") {
+            let fn_header = lines[fn_idx];
+            let name = fn_header
+                .strip_prefix("fn ")
+                .and_then(|rest| {
+                    rest.split(|ch: char| ch == '(' || ch == '<' || ch.is_whitespace())
+                        .next()
+                })
+                .unwrap_or("")
+                .to_string();
+            let mut end_idx = fn_idx + 1;
+            while end_idx < lines.len() && lines[end_idx] != "}" {
+                end_idx += 1;
             }
+            let body = lines[fn_idx..=end_idx.min(lines.len() - 1)].join("\n");
+            funcs.push((is_test, fn_idx + 1, name, body));
+            index = end_idx + 1;
+            continue;
         }
         index += 1;
+    }
+
+    // Compute transitive set of non-test helper functions that start direct tasks
+    // or mutate `DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT` without holding the guard themselves.
+    let mut unguarded_helpers: Vec<String> = Vec::new();
+    let touches_flag = |body: &str, helpers: &[String]| {
+        body.contains(&needle_start)
+            || body.contains(&needle_alloc)
+            || body.contains(&needle_count)
+            || helpers
+                .iter()
+                .any(|helper| body.contains(&format!("{helper}(")))
+    };
+    loop {
+        let mut added = false;
+        for (is_test, _, name, body) in &funcs {
+            if *is_test || name.is_empty() || unguarded_helpers.contains(name) {
+                continue;
+            }
+            if touches_flag(body, &unguarded_helpers) && !body.contains(&needle_guard) {
+                unguarded_helpers.push(name.clone());
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+
+    let mut unguarded = Vec::new();
+    for (is_test, line_no, name, body) in &funcs {
+        if !*is_test {
+            continue;
+        }
+        if touches_flag(body, &unguarded_helpers) && !body.contains(&needle_guard) {
+            unguarded.push(format!("line {line_no}: fn {name}"));
+        }
     }
     assert!(
         unguarded.is_empty(),
@@ -32057,6 +32529,298 @@ fn native_decimal_result_slot_is_written_only_for_compact_answers() {
     assert_eq!(out, [-1, 0]);
 }
 
+#[path = "native_frozen_value_tests.rs"]
+mod compile_time_transport;
+
+#[test]
+fn direct_bit_methods_check_arguments_and_preserve_wide_values() {
+    use aura_core::integer_bits::BitMethod;
+
+    let integer = IntegerValue::from_typed_unsigned(1 << 127, IntegerKind::Uint128).unwrap();
+    let input = boxed_value(Value::Int(integer));
+    let result = super::aura_direct_integer_bits(input, 1, BitMethod::RotateLeft as i64);
+    let Value::Int(rotated) = (unsafe { take_value(result) }) else {
+        panic!("rotation returns an integer");
+    };
+    assert_eq!(rotated.runtime_kind(), Some(IntegerKind::Uint128));
+    assert_eq!(rotated.as_i128(), Some(1));
+    unsafe { release_value(input) };
+
+    let negative = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_integer_bits(std::ptr::null_mut(), -1, BitMethod::RotateRight as i64);
+    });
+    assert_eq!(negative.code, "AU4034");
+    assert!(capture_direct_boundary_error_message(|| {
+        super::aura_direct_integer_bits(std::ptr::null_mut(), 0, -1);
+    })
+    .contains("unknown integer bit method"));
+    assert!(capture_direct_boundary_error_message(|| {
+        let mut text = OpaqueValue::new(Value::string("abc"), None);
+        super::aura_direct_integer_bits(&mut text, 0, BitMethod::CountOnes as i64);
+    })
+    .contains("requires an integer"));
+}
+
+#[test]
+fn float_trait_object_preserves_width_through_generic_boxing() {
+    let f32_box = super::boxed_typed_value(Value::Float(1.5), "float32");
+    assert_eq!(
+        super::aura_direct_value_type_matches(f32_box, b"float32".as_ptr(), b"float32".len()),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_value_type_matches(f32_box, b"float64".as_ptr(), b"float64".len()),
+        0
+    );
+    let wrapped = super::aura_direct_trait_object_from(f32_box);
+    assert_eq!(
+        super::aura_direct_value_type_matches(wrapped, b"float32".as_ptr(), b"float32".len()),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_value_type_matches(wrapped, b"float64".as_ptr(), b"float64".len()),
+        0
+    );
+    unsafe { release_value(wrapped) };
+}
+
+#[test]
+fn cancelled_task_with_trapping_cleanup_reports_trap_cleanly() {
+    unsafe extern "C-unwind" fn trapping_cleanup(_: *const i64, _: usize) -> *mut OpaqueValue {
+        super::aura_direct_assert_fail(0, 12, 3, 0)
+    }
+
+    let leaked_panic = Arc::new(AtomicBool::new(false));
+    let leaked_panic_flag = Arc::clone(&leaked_panic);
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                let _id = super::aura_direct_register_cleanup(
+                    trapping_cleanup as *const () as usize as i64,
+                    std::ptr::null_mut(),
+                    0,
+                );
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    super::task_runtime_boundary(|| {
+                        std::panic::panic_any(crate::runtime_value::TaskCancelledSignal);
+                    });
+                }));
+                if let Err(payload) = outcome {
+                    if payload.is::<super::LightweightTaskFailureSignal>() {
+                        leaked_panic_flag.store(true, Ordering::SeqCst);
+                    }
+                    std::panic::resume_unwind(payload);
+                }
+                Ok(Value::Unit)
+            })
+        })
+    });
+    assert!(
+        !leaked_panic.load(Ordering::SeqCst),
+        "task_runtime_boundary must not let LightweightTaskFailureSignal escape uncaught on cancelled cleanup trap"
+    );
+    let err = result.expect_err("cancelled task with trapping cleanup must fail with trap");
+    assert_eq!(err.code, "AU4001", "expected AU4001 trap: {err:?}");
+}
+
+#[test]
+fn nested_rust_boundary_runs_destructors_before_task_exit() {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let dropped_flag = Arc::clone(&dropped);
+
+    struct DropFlag(Arc<AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let result = unsafe {
+        crate::runtime_value::run_lightweight_root_task_with_forced_exit_cleanup(
+            move || {
+                super::with_direct_task_runtime_scope(|| {
+                    super::with_task_runtime_error_capture(|| {
+                        super::task_runtime_boundary(|| {
+                            let _guard = DropFlag(dropped_flag);
+                            super::aura_direct_assert_fail(0, 7, 1, 0);
+                        });
+                        #[allow(unreachable_code)]
+                        Ok(Value::Unit)
+                    })
+                })
+            },
+            || {
+                super::discard_current_direct_task_runtime_state();
+            },
+        )
+    };
+    let err = result.expect_err("inner assertion trap must fail the task");
+    assert_eq!(err.code, "AU4001");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "enclosing Rust frame destructors must run before task exit or recovery jump"
+    );
+}
+
+#[test]
+fn dropping_list_of_trapping_generators_completes_all_drops_and_reports_trap() {
+    use crate::runtime_value::{
+        generator_yield, GeneratorValue, VecValue, DIRECT_GENERATOR_STACK_BYTES,
+    };
+
+    let second_closed = Arc::new(AtomicBool::new(false));
+    let second_closed_flag = Arc::clone(&second_closed);
+
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                let first = GeneratorValue::new(
+                    || {
+                        let _ = generator_yield(Value::Int(IntegerValue::from_i64(1)))?;
+                        super::aura_direct_assert_fail(0, 11, 2, 0)
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::default())),
+                );
+                let second = GeneratorValue::new(
+                    move || {
+                        let _ = generator_yield(Value::Int(IntegerValue::from_i64(2)))?;
+                        second_closed_flag.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::default())),
+                );
+                assert!(first.resume().expect("first yields"));
+                assert!(second.resume().expect("second yields"));
+                let list = boxed_value(Value::Vec(VecValue::new(
+                    Type::named("Generator"),
+                    vec![Value::Generator(first), Value::Generator(second)].into(),
+                )));
+                unsafe { super::aura_direct_release_value(list) };
+                Ok(Value::Unit)
+            })
+        })
+    });
+    let err = result.expect_err("dropping a trapping generator must report its trap");
+    assert_eq!(err.code, "AU4001", "expected AU4001 trap: {err:?}");
+    assert!(
+        second_closed.load(Ordering::SeqCst),
+        "remaining generators in the dropped Vec must still close cleanly"
+    );
+}
+
+#[test]
+fn generator_suspending_inside_cleanup_isolates_cleanup_stack_from_caller() {
+    use crate::runtime_value::{generator_yield, GeneratorValue, DIRECT_GENERATOR_STACK_BYTES};
+
+    static CALLER_EXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static GEN_EXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C-unwind" fn caller_exit(_: *const i64, _: usize) -> *mut OpaqueValue {
+        CALLER_EXIT_COUNT.fetch_add(1, Ordering::SeqCst);
+        std::ptr::null_mut()
+    }
+    unsafe extern "C-unwind" fn gen_exit(_: *const i64, _: usize) -> *mut OpaqueValue {
+        GEN_EXIT_COUNT.fetch_add(1, Ordering::SeqCst);
+        std::ptr::null_mut()
+    }
+
+    CALLER_EXIT_COUNT.store(0, Ordering::SeqCst);
+    GEN_EXIT_COUNT.store(0, Ordering::SeqCst);
+
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                let _caller_cleanup = super::aura_direct_register_cleanup(
+                    caller_exit as *const () as usize as i64,
+                    std::ptr::null_mut(),
+                    0,
+                );
+                let generator = GeneratorValue::new(
+                    || {
+                        let gen_cleanup = super::aura_direct_register_cleanup(
+                            gen_exit as *const () as usize as i64,
+                            std::ptr::null_mut(),
+                            0,
+                        );
+                        let keep_going = generator_yield(Value::Int(IntegerValue::from_i64(42)))?;
+                        if !keep_going {
+                            // Normal close path runs the generator's own cleanup once.
+                            super::aura_direct_unregister_cleanup(gen_cleanup);
+                            unsafe { gen_exit(std::ptr::null(), 0) };
+                        }
+                        Ok(())
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::default())),
+                );
+
+                assert!(generator.resume().expect("generator yields 42"));
+                // While the generator is suspended, the caller's cleanup_stack must
+                // contain only the caller's own cleanup registration.
+                let caller_cleanup_len =
+                    super::with_direct_task_runtime_state(|state| state.cleanup_stack.len());
+                assert_eq!(
+                    caller_cleanup_len, 1,
+                    "suspended generator cleanup registration must not remain on caller cleanup_stack"
+                );
+
+                // Draining the caller's cleanups (as on a caller trap) must run only
+                // the caller's cleanup, leaving the suspended generator's cleanup untouched.
+                super::drain_direct_cleanup_stack();
+                assert_eq!(CALLER_EXIT_COUNT.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    GEN_EXIT_COUNT.load(Ordering::SeqCst),
+                    0,
+                    "caller cleanup drain must not invoke suspended generator cleanup"
+                );
+
+                // Closing the generator afterwards runs its cleanup exactly once.
+                generator.close().expect("generator closes cleanly");
+                assert_eq!(GEN_EXIT_COUNT.load(Ordering::SeqCst), 1);
+
+                // Dropping DirectGeneratorFrames with saved owned frames and a
+                // live body_box releases both cleanly.
+                let body_raw = super::untracked_boxed_value(Value::Unit, None);
+                let body_box = Arc::new(AtomicUsize::new(body_raw as usize));
+                let discarded = GeneratorValue::new(
+                    || {
+                        super::with_direct_task_runtime_state(|state| {
+                            state.frames_mut().push_owned(Box::new(
+                                super::DirectRuntimeCallFrame {
+                                    function: super::DirectFrameText::shared(
+                                        "gen_body".to_string(),
+                                    ),
+                                    span: super::DirectRuntimeSourceSpan::point(
+                                        None,
+                                        Span::new(1, 1),
+                                    ),
+                                },
+                            ));
+                        });
+                        let _ = generator_yield(Value::Int(IntegerValue::from_i64(7)))?;
+                        Ok(())
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::with_body_box(
+                        Arc::clone(&body_box),
+                    ))),
+                );
+                assert!(discarded.resume().expect("discarded yields"));
+                crate::runtime_value::without_generator_drop_close(|| drop(discarded));
+                assert_eq!(body_box.load(Ordering::Acquire), 0);
+                Ok(Value::Unit)
+            })
+        })
+    });
+    assert_eq!(result.expect("task succeeds"), Value::Unit);
+}
+
 #[test]
 fn a_tasks_last_reference_to_a_str_box_frees_the_text_and_the_block() {
     let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
@@ -32379,4 +33143,28 @@ fn join_reads_the_parts_in_place_and_keeps_the_ascii_flag() {
         release_value(parts);
         release_value(separator);
     }
+}
+
+#[test]
+fn dynamic_host_abi_parameters_name_how_each_argument_is_passed() {
+    use aura_core::ops::ReceiverKind;
+
+    let parse = super::DYNAMIC_HOST_ABI
+        .iter()
+        .find(|abi| abi.name == "json::parse")
+        .expect("`json::parse` has a dynamic host ABI");
+    assert_eq!(parse.params, &[super::borrowed("text")]);
+    assert_eq!(super::borrowed("text").passing, ReceiverKind::Borrow);
+    let owned = super::owned("value");
+    assert_eq!(owned.passing, ReceiverKind::Value);
+    assert!(super::DYNAMIC_HOST_ABI
+        .iter()
+        .any(|abi| abi.params.contains(&owned)));
+}
+
+#[test]
+fn a_new_task_runtime_state_table_holds_no_task() {
+    let mut states = super::DirectTaskRuntimeStates::new();
+    assert!(states.get_mut(7).is_none());
+    assert!(states.cached.is_none());
 }
