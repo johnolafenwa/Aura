@@ -9725,7 +9725,9 @@ thread_local! {
 ///
 /// `value` is live and confined to this thread, its count has reached
 /// zero, and no ledger links it.
-#[inline]
+// Inlined into each caller: as a call of its own, it costs every release
+// of the last reference more than it saves.
+#[inline(always)]
 unsafe fn keep_spare_list(value: *mut OpaqueValue) -> bool {
     // SAFETY: the caller's contract.
     let header = unsafe { &*value };
