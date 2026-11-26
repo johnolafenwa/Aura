@@ -1110,6 +1110,12 @@ fn resize_on(
         .checked_mul(new_height)
         .and_then(|pixels| pixels.checked_mul(channels))
         .ok_or_else(out_of_memory)?;
+    // Refuse an output the allowance cannot hold before reserving it, so a
+    // huge target fails the same way on every platform, including those that
+    // grant large reservations lazily.
+    if !crate::builtin_limit::fits(samples as u64) {
+        return Err(out_of_memory());
+    }
     if filter == Filter::Nearest {
         let mut columns: Vec<usize> = try_with_capacity(new_width)?;
         columns.extend(

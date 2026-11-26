@@ -22116,6 +22116,7 @@ fn closing_a_websocket_in_use_shuts_its_socket_down_instead_of_waiting() {
     assert!(client.inner.closed.load(Ordering::SeqCst));
 }
 
+#[test]
 fn floating_point_casts_check_the_exclusive_upper_bound_of_wide_integers() {
     for (name, exponent) in [("int128", 127), ("uint128", 128)] {
         let upper = 2.0_f64.powi(exponent);

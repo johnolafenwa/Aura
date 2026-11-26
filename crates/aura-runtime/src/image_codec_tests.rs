@@ -448,13 +448,27 @@ fn image_buffers_that_cannot_be_had_are_errors() {
     let data = [0u8; 4];
     for filter in [Filter::Nearest, Filter::Bilinear] {
         assert_eq!(
-            resize(&data, 2, 2, 1, 1 << 21, 1 << 21, filter),
+            resize(&data, 2, 2, 1, 1 << 32, 1 << 32, filter),
             Err(out_of_memory())
         );
         assert_eq!(
             resize(&data, 2, 2, 1, usize::MAX, 2, filter),
             Err(out_of_memory())
         );
+    }
+}
+
+#[test]
+fn resize_targets_over_the_allowance_are_refused_before_reserving() {
+    let data = [0u8; 4];
+    for filter in [Filter::Nearest, Filter::Bilinear] {
+        let mut inner = None;
+        let outer = crate::builtin_limit::with_allowance(64, || {
+            inner = Some(resize(&data, 2, 2, 1, 1 << 20, 1 << 20, filter));
+            Ok(())
+        });
+        assert_eq!(inner, Some(Err(out_of_memory())));
+        assert!(outer.is_err());
     }
 }
 
