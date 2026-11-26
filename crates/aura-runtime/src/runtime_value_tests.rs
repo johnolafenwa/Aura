@@ -4475,7 +4475,7 @@ fn runtime_io_wait_helpers_cover_deadlines_cancellation_and_poll_edges() {
 
     let cancel_flag = Arc::new(super::RuntimeWakeSignal::new(true));
     let cancelled = CancellationContext {
-        flags: vec![cancel_flag],
+        flags: Arc::new([cancel_flag]),
     };
     let error = super::check_deadline_and_cancellation(None, Some(&cancelled))
         .expect_err("cancelled context should abort before deadline checks");
@@ -7340,7 +7340,7 @@ fn channel_runtime_helpers_cover_send_receive_and_close_paths() {
     );
     let cancel_flag = Arc::new(super::RuntimeWakeSignal::new(true));
     let cancelled = CancellationContext {
-        flags: vec![cancel_flag],
+        flags: Arc::new([cancel_flag]),
     };
     assert_eq!(
         bounded
@@ -9535,7 +9535,7 @@ fn p63_retry_cancellation_propagates_as_task_cancellation_not_a_panic_error() {
     let result = run_lightweight_root_task(move || {
         let cancellation_signal = Arc::new(super::RuntimeWakeSignal::new(false));
         let cancellation = CancellationContext {
-            flags: vec![cancellation_signal.clone()],
+            flags: Arc::new([cancellation_signal.clone()]),
         };
         let task = spawn_lightweight_task_with_cancellation(cancellation, move || {
             entered_probe.store(true, Ordering::SeqCst);
@@ -11795,7 +11795,7 @@ fn p63_task_join_reachability_tracks_weak_dependencies_and_external_wake_sources
         task_waits: Vec::new(),
         deadline: None,
         cancellation: Some(CancellationContext {
-            flags: vec![cancellation_signal.clone()],
+            flags: Arc::new([cancellation_signal.clone()]),
         }),
     });
     assert!(!joiner.unbounded_wait_has_reachable_waker());
