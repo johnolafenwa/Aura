@@ -108,7 +108,8 @@ async function runVerifier(
     limiter = defaultVerifierLimiter,
     platform = process.platform,
     killProcess = process.kill,
-    env = process.env
+    env = process.env,
+    freestandingTarget = env.AURA_LSP_FREESTANDING_TARGET
   } = {}
 ) {
   const release = await limiter.acquire(signal);
@@ -119,9 +120,25 @@ async function runVerifier(
     return await new Promise((resolve) => {
       let child;
       try {
+        const targetArgs = [];
+        if (freestandingTarget || env.AURA_LSP_FREESTANDING === "1") {
+          targetArgs.push("--freestanding");
+        }
+        if (freestandingTarget) {
+          targetArgs.push("--target", freestandingTarget);
+        }
         child = spawnImpl(
           command.cmd,
-          [...command.args, "verify", "--offline", "--format", "json", "--stdin", filePath],
+          [
+            ...command.args,
+            "verify",
+            "--offline",
+            ...targetArgs,
+            "--format",
+            "json",
+            "--stdin",
+            filePath
+          ],
           {
             cwd: command.cwd,
             env: { ...env, AURA_OFFLINE: "1" },

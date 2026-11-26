@@ -1,0 +1,5 @@
+error[AU2060]: class `Car` has no field `gone`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_delegation_missing.au:10:23
+   |
+10 | impl Named for Car by gone
+   |                       ^

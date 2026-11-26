@@ -269,6 +269,9 @@ fn element_read(instruction: &Instruction) -> Option<(&str, &str)> {
     else {
         return None;
     };
+    if let Some((array, index, _)) = super::fixed_arrays::access_places(instruction) {
+        return Some((array, index));
+    }
     let parts = callee.member_parts()?;
     let (Operand::Place(list), "__index", None) = (parts.object, parts.field, parts.trait_name)
     else {
@@ -399,6 +402,7 @@ fn changes(facts: &mut Vec<Fact<'_>>, place: &str) {
 }
 
 enum Rewrite {
+    FixedAccess(&'static str),
     Trap(ArithmeticTrap),
     UncheckedRead(RuntimeOp),
     UncheckedLoan,
@@ -470,6 +474,15 @@ fn collect_rewrites(
                 |rewrite| rewrites.push((function_index, block_index, position, rewrite));
             match covered {
                 Covered::Read => {
+                    if let Some((_, _, name)) = super::fixed_arrays::access_places(instruction) {
+                        use super::fixed_arrays::{READ, READ_PROVED, WRITE, WRITE_PROVED};
+                        match name {
+                            READ => push(Rewrite::FixedAccess(READ_PROVED)),
+                            WRITE => push(Rewrite::FixedAccess(WRITE_PROVED)),
+                            _ => {}
+                        }
+                    }
+
                     if let Some(op) = unchecked_form(instruction) {
                         push(Rewrite::UncheckedRead(op));
                     }
@@ -538,6 +551,17 @@ fn apply_rewrite(instruction: &mut Instruction, rewrite: Rewrite) {
             },
             Rewrite::UncheckedRead(unchecked),
         ) => *op = unchecked,
+        (
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: super::CallTarget::Name(name),
+                        ..
+                    },
+                ..
+            },
+            Rewrite::FixedAccess(proved),
+        ) => *name = proved.to_owned(),
         (Instruction::BeginElementLoan { checked, .. }, Rewrite::UncheckedLoan) => *checked = false,
         _ => {}
     }
@@ -573,6 +597,22 @@ fn validate_instruction(
             function.name
         )
     };
+    if let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee: super::CallTarget::Name(name),
+                ..
+            },
+        ..
+    } = instruction
+    {
+        if super::fixed_arrays::checked_form(name) != name && covered != Covered::Read {
+            return Err(format!(
+                "invalid MIR function `{}` accesses a fixed array without a covering IndexInRange",
+                function.name
+            ));
+        }
+    }
     if let Some(op) = unchecked_read_op(instruction) {
         if covered != Covered::Read {
             return Err(match element_read(instruction) {

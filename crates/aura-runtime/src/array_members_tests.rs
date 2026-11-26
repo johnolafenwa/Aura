@@ -125,16 +125,23 @@ fn math_members_follow_the_scalar_functions() {
         panic!("sqrt keeps float64")
     };
     assert!(roots[0].is_nan());
-    for (operation, function) in [
-        (ArrayUnaryOp::Exp, f64::exp as fn(f64) -> f64),
-        (ArrayUnaryOp::Log, f64::ln),
-        (ArrayUnaryOp::Log2, f64::log2),
-        (ArrayUnaryOp::Log10, f64::log10),
-        (ArrayUnaryOp::Sin, f64::sin),
-        (ArrayUnaryOp::Cos, f64::cos),
-        (ArrayUnaryOp::Tan, f64::tan),
+    for operation in [
+        ArrayUnaryOp::Exp,
+        ArrayUnaryOp::Log,
+        ArrayUnaryOp::Log2,
+        ArrayUnaryOp::Log10,
+        ArrayUnaryOp::Sin,
+        ArrayUnaryOp::Cos,
+        ArrayUnaryOp::Tan,
     ] {
-        let expected: Vec<f64> = [1.0, 4.0, 0.25, 9.0].map(function).to_vec();
+        let name = format!("math::{}", operation.name());
+        let scalar = crate::runtime_value::host_builtins::host_builtin_function(&name).unwrap();
+        let expected = [1.0, 4.0, 0.25, 9.0].map(|input| {
+            let Value::Float(result) = scalar(vec![Value::Float(input)], None).unwrap() else {
+                panic!("{name} must return float64")
+            };
+            result
+        });
         assert_eq!(
             values.unary(operation).unwrap(),
             floats(&[2, 2], &expected),

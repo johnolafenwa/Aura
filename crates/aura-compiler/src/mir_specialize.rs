@@ -585,11 +585,18 @@ impl Substitution<'_> {
                 Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
                     self.rvalue(value)?
                 }
+                Instruction::InlineAsm { inputs, .. } => {
+                    for input in inputs {
+                        self.operand(input);
+                    }
+                }
                 Instruction::Eval { value } => self.operand(value),
                 Instruction::BeginElementLoan { selector, .. }
                 | Instruction::ReborrowElement { selector, .. } => self.operand(selector),
                 Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
+                | Instruction::EndOwner { .. }
+                | Instruction::ArmDrop { .. }
                 | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
@@ -694,6 +701,15 @@ impl Substitution<'_> {
                 self.union(union_type, member_index)?;
                 self.types([member_type]);
             }
+            Rvalue::CPointerAccess { address, store, .. } => {
+                self.operand(address);
+                if let Some(value) = store {
+                    self.operand(value);
+                }
+            }
+            Rvalue::CFieldAddress { .. } => {}
+            Rvalue::ModuleStore { value, .. } => self.operand(value),
+            Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => {}
             Rvalue::ModuleConstant { .. } => {}
             Rvalue::Closure {
                 function,
@@ -755,8 +771,12 @@ impl Substitution<'_> {
                         self.types(params.iter_mut().map(|param| &mut param.ty));
                         self.types([return_type]);
                     }
-                    CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. } => {
-                        self.operand(object)
+                    CallTarget::Member { object, .. } => self.operand(object),
+                    CallTarget::TraitMember {
+                        object, trait_args, ..
+                    } => {
+                        self.operand(object);
+                        self.types(trait_args.iter_mut());
                     }
                     CallTarget::Runtime { receiver, .. } => self.operands(receiver.iter_mut()),
                 }

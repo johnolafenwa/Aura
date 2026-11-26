@@ -234,7 +234,8 @@ impl Exec<'_> {
         let digits = self.unmodeled("the digits of an integer", |exec| {
             exec.fresh_const("String", "digits")
         });
-        let longest = ty.lo.to_string().len().max(ty.hi.to_string().len());
+        let (lo, hi) = ty.bounds();
+        let longest = lo.to_string().len().max(hi.to_string().len());
         self.describe(
             &digits,
             format!(

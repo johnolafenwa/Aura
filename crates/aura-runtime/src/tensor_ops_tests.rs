@@ -2834,3 +2834,6 @@ fn metal_shim_and_buffer_contents_checks() {
     let ptr = std::ptr::from_mut(&mut byte);
     assert_eq!(checked_non_null_buffer_ptr(ptr, "metal").unwrap(), ptr);
 }
+
+#[path = "tensor_half_tests.rs"]
+mod half_and_heads;

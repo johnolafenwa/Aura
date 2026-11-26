@@ -1,0 +1,5 @@
+class Page:
+    words: fixed[fixed[uint16, 3], 2]
+
+def paint(row: mut fixed[uint16, 3]) -> None:
+    row[1] = 5

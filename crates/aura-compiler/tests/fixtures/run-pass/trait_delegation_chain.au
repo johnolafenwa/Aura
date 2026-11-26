@@ -1,0 +1,49 @@
+trait Named:
+    def label(self) -> int64
+
+trait Left: Named:
+    def left(self) -> int64
+
+trait Right: Named:
+    def right(self) -> int64
+
+trait Both: Left, Right:
+    def total(self) -> int64
+
+class Engine:
+    n: int64
+
+impl Named for Engine:
+    def label(self) -> int64:
+        return self.n
+
+impl Left for Engine:
+    def left(self) -> int64:
+        return self.n + 1
+
+impl Right for Engine:
+    def right(self) -> int64:
+        return self.n + 2
+
+impl Both for Engine:
+    def total(self) -> int64:
+        return self.left() + self.right()
+
+class Box:
+    engine: Engine
+
+class Car:
+    child: Box
+
+impl Both for Car by child:
+    def label(self) -> int64:
+        return 77
+
+impl Both for Box by engine
+
+def main():
+    car = Car(child=Box(engine=Engine(n=3)))
+    print(car.label())
+    print(car.left())
+    print(car.right())
+    print(car.total())

@@ -33,18 +33,15 @@ use crate::runtime_ops::{
 };
 use crate::sema::Type;
 
-/// The inclusive range of an integer type.
+use aura_core::integer::{IntegerBounds, IntegerKind};
+use aura_core::integer_bits::BitMethod;
+
+/// The integer type whose range constrains an SMT integer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct IntTy {
-    pub(super) lo: i128,
-    pub(super) hi: i128,
-}
+pub(super) struct IntTy(pub(super) IntegerKind);
 
 impl IntTy {
-    pub(super) const INT64: IntTy = IntTy {
-        lo: i64::MIN as i128,
-        hi: i64::MAX as i128,
-    };
+    pub(super) const INT64: IntTy = IntTy(IntegerKind::Int64);
 
     pub(super) fn of(ty: &Type) -> Option<Self> {
         let Type::Named(name, args) = ty else {
@@ -53,25 +50,40 @@ impl IntTy {
         if !args.is_empty() {
             return None;
         }
-        let (lo, hi): (i128, i128) = match name.as_str() {
-            "int8" => (i8::MIN as i128, i8::MAX as i128),
-            "int16" => (i16::MIN as i128, i16::MAX as i128),
-            "int32" => (i32::MIN as i128, i32::MAX as i128),
-            "int64" => (i64::MIN as i128, i64::MAX as i128),
-            "uint8" => (0, u8::MAX as i128),
-            "uint16" => (0, u16::MAX as i128),
-            "uint32" => (0, u32::MAX as i128),
-            "uint64" => (0, u64::MAX as i128),
-            _ => return None,
-        };
-        Some(Self { lo, hi })
+        IntegerKind::from_runtime_type_name(name).map(Self)
+    }
+
+    pub(super) fn bounds(self) -> (i128, u128) {
+        match self.0.bounds() {
+            IntegerBounds::Signed { min, max } => (min, max as u128),
+            IntegerBounds::Unsigned { max } => (0, max),
+        }
+    }
+
+    pub(super) fn contains_literal(self, value: i128) -> bool {
+        let (lo, hi) = self.bounds();
+        value >= lo && (value < 0 || value as u128 <= hi)
     }
 
     pub(super) fn contains(self, term: &str) -> String {
+        let (lo, hi) = self.bounds();
+        format!("(and (<= {} {term}) (<= {term} {hi}))", lit(lo))
+    }
+
+    fn contains_float(self, float: FloatTy, term: &str, truncated: &str) -> String {
+        let (lo, hi) = self.bounds();
+        if self.0.bit_width() == 128 {
+            // The strict upper bound for uint128 is 2^128. Avoid rounding it
+            // on the compiler host or overflowing a Rust integer.
+            return format!(
+                "(and (not (fp.isNaN {term})) (not (fp.isInfinite {term})) {})",
+                self.contains(truncated)
+            );
+        }
         format!(
-            "(and (<= {} {term}) (<= {term} {}))",
-            lit(self.lo),
-            lit(self.hi)
+            "(and {} {})",
+            float.above(term, lo - 1),
+            float.below(term, hi as i128 + 1)
         )
     }
 }
@@ -510,6 +522,7 @@ pub(super) struct Exec<'a> {
     /// Class cleanup methods (`__exit__` / `close`) registered by `PushCleanup`
     /// for each managed place.
     cleanup_callees: BTreeMap<String, BTreeSet<String>>,
+    pub(super) bit_terms: super::bits::BitTerms,
     /// The positions in a base list that a span index was checked to give.
     /// The base list's own check of such a position cannot fail.
     pub(super) span_positions: BTreeSet<String>,
@@ -606,6 +619,7 @@ impl<'a> Exec<'a> {
             unsupported: None,
             captured: closure_captures(function),
             cleanup_callees: collect_cleanup_callees(function),
+            bit_terms: Default::default(),
             span_positions: BTreeSet::new(),
             rounded: Vec::new(),
             entry_facts: 0,
@@ -989,6 +1003,14 @@ impl<'a> Exec<'a> {
                     len,
                     members,
                     elem: args[0].clone(),
+                }
+            }
+            ty if ty.as_fixed_array().is_some() => {
+                let (element, length) = ty.as_fixed_array().unwrap();
+                Val::List {
+                    len: length.to_string(),
+                    data: self.fresh_store(element, hint),
+                    elem: element.clone(),
                 }
             }
             Type::Named(name, args) if name == "list" && args.len() == 1 => {
@@ -2520,7 +2542,7 @@ impl<'a> Exec<'a> {
                 // call proves it, and a loop's checks are proved apart.
                 let obligation = match kind {
                     AssertKind::Requires => None,
-                    AssertKind::Assert => Some(ObligationKind::Assert),
+                    AssertKind::Assert | AssertKind::CBitField => Some(ObligationKind::Assert),
                     AssertKind::Ensures => Some(ObligationKind::Ensures),
                     AssertKind::Invariant => Some(ObligationKind::LoopInvariant),
                     AssertKind::Decreases => Some(ObligationKind::Decreases),
@@ -2557,6 +2579,9 @@ impl<'a> Exec<'a> {
 
     fn instruction(&mut self, state: &mut State, instruction: &Instruction) {
         match instruction {
+            Instruction::InlineAsm { span, .. } => {
+                self.unsupported = Some(super::assembly_boundary(*span).message);
+            }
             Instruction::SourceLocation { line, column } => {
                 self.span = Span {
                     line: *line as usize,
@@ -2564,6 +2589,7 @@ impl<'a> Exec<'a> {
                 };
             }
             Instruction::Safepoint
+            | Instruction::ArmDrop { .. } | Instruction::EndOwner { .. }
             | Instruction::SourceName { .. }
             | Instruction::Retain { .. }
             | Instruction::Eval { .. }
@@ -3390,7 +3416,10 @@ impl<'a> Exec<'a> {
                         Val::Int(result, ty)
                     }
                     (UnaryOp::BitNot, Val::Int(term, _))
-                        if target_type.as_ref().and_then(IntTy::of).is_some() =>
+                        if target_type
+                            .as_ref()
+                            .and_then(IntTy::of)
+                            .is_some_and(IntTy::modeled) =>
                     {
                         let ty = target_type
                             .as_ref()
@@ -3470,11 +3499,7 @@ impl<'a> Exec<'a> {
                         *span,
                         "float converts to an integer in range",
                         &state.pc.clone(),
-                        Goal::Holds(format!(
-                            "(and {} {})",
-                            float.above(term, int.lo - 1),
-                            float.below(term, int.hi + 1)
-                        )),
+                        Goal::Holds(int.contains_float(float, term, &truncated)),
                     );
                     let result = self.define("Int", "cast", format!("(to_int {truncated})"));
                     return Val::Int(result, int);
@@ -3502,6 +3527,13 @@ impl<'a> Exec<'a> {
                     }
                     _ => fresh_target(self),
                 }
+            }
+            Rvalue::Call {
+                callee: CallTarget::Name(op),
+                args,
+                type_args,
+            } if crate::mir::fixed_arrays::is_operation(op) => {
+                self.fixed_call(state, op, args, type_args.get("array"))
             }
             Rvalue::Call { callee, args, .. } => {
                 let result = self.call(state, target, callee, args);
@@ -3867,7 +3899,8 @@ impl<'a> Exec<'a> {
         let right_ty = self.operand_int_ty(right);
         let target_int = target_type.and_then(IntTy::of).or(expected_int);
         let hint = left_ty.or(right_ty).or(target_int);
-        let sized = hint.is_some();
+        // A 128-bit type's bits and width are not modeled.
+        let sized = hint.is_some_and(IntTy::modeled);
         let lhs = self.operand(state, left, hint);
         let rhs = self.operand(state, right, hint);
         let fresh = |exec: &mut Self| match target_type {
@@ -4300,6 +4333,7 @@ impl<'a> Exec<'a> {
                 trait_name,
                 field,
                 dispatch: Some(MethodDispatch::Candidates { candidates, .. }),
+                ..
             } if self
                 .trait_call_target(candidates, trait_name, field)
                 .is_some() =>
@@ -6091,6 +6125,38 @@ impl<'a> Exec<'a> {
                     }
                 }
             }
+            RuntimeOp::Scalar(ScalarOp::Bits(method)) => {
+                let count = if matches!(method, BitMethod::RotateLeft | BitMethod::RotateRight) {
+                    let value = arg(self, state, 0, Some(IntTy::INT64));
+                    let Val::Int(count, _) = value else {
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "nonnegative rotation count",
+                            &pc,
+                            Goal::Unsupported("the rotation count is unknown".into()),
+                        );
+                        return None;
+                    };
+                    self.oblige(
+                        ObligationKind::Overflow,
+                        self.span,
+                        "nonnegative rotation count",
+                        &pc,
+                        Goal::Holds(format!("(>= {count} 0)")),
+                    );
+                    Some(count)
+                } else {
+                    None
+                };
+                let Some(Val::Int(value, ty)) = receiver else {
+                    return None;
+                };
+                Some(
+                    self.bit_terms
+                        .evaluate(method, &value, ty, count.as_deref()),
+                )
+            }
             RuntimeOp::Host(_) if super::integers::math_function(op.name()).is_some() => {
                 let name = super::integers::math_function(op.name())?;
                 let values: Vec<Val> = (0..args.len())
@@ -6105,7 +6171,8 @@ impl<'a> Exec<'a> {
                 let ty = target
                     .and_then(|target| self.place_type(target))
                     .as_ref()
-                    .and_then(IntTy::of)?;
+                    .and_then(IntTy::of)
+                    .filter(|ty| ty.modeled())?;
                 let rhs = arg(self, state, 0, Some(ty));
                 self.int_method(&pc, kind, ty, (receiver, rhs))
             }
@@ -7027,3 +7094,6 @@ fn children(value: &Val) -> Vec<&Val> {
         _ => Vec::new(),
     }
 }
+
+#[path = "verify_fixed_arrays.rs"]
+mod fixed_arrays;

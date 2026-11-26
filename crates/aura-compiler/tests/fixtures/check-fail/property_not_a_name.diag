@@ -1,0 +1,5 @@
+error[AU2999]: unsupported call target
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_not_a_name.au:4:5
+  |
+4 |     @3
+  |     ^

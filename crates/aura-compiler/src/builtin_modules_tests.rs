@@ -1545,6 +1545,91 @@ def main():
 }
 
 #[test]
+fn float16_tensors_take_and_give_float32_numbers() {
+    let directory = std::env::temp_dir().join(format!("aura-float16-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("a directory for the weights");
+    let path = directory.join("halves.safetensors");
+    let source = r#"from tensor import Device, Tensor, float16, layer_norm, linear, load_float16, load_float32, save, scaled_dot_product_attention
+
+def run() -> Result[None, str]:
+    device = Device.cpu()
+    a = Array[float32].from_list([0.1, 2048.0, 60000.0, -3.0], [2, 2])
+    x = Tensor[float16].from_array(a, device)
+    print(x.to_array())
+    one = Tensor[float16].full([2, 2], 1.0, device)
+    print((x + one).to_array())
+    print((x + 1.0).to_array())
+    print((x * x.scalar(0.5) - Tensor[float16].zeros([2, 2], device)).to_array())
+    print(f"{x.max().item()} {x.sum(dim=1).to_array()}")
+    wide = x.to_float32() + 1.0
+    print(wide.to_array())
+    print(wide.to_float16().to_array())
+    print(f"{x.to_float64().to_array()} {x.to_int64().to_array()}")
+    print(Tensor[int64].full([2], 2049, device).to_float16().to_array())
+    weight = Tensor[float16].full([2, 3], 0.25, device)
+    bias = Tensor[float16].full([3], 1.0, device)
+    small = Tensor[float16].from_array(Array[float32].from_list([1.0, 2.0, 3.0, 5.0], [2, 2]), device)
+    print(linear(small, weight, bias).to_array())
+    normed = layer_norm(small, Tensor[float16].full([2], 1.0, device), Tensor[float16].zeros([2], device))
+    print((normed.to_float32() * 100.0).to_int64().to_array())
+    large = Tensor[float16].from_array(Array[float32].from_list([3000.0, -3000.0, 1000.0, -1000.0], [2, 2]), device)
+    print(layer_norm(large, Tensor[float16].full([2], 1.0, device), Tensor[float16].zeros([2], device)).to_array())
+    heads = small.reshape([1, 2, 2])
+    mixed = scaled_dot_product_attention(heads, heads, heads, true)
+    print(f"{mixed.shape()} {mixed.reshape([4]).slice(0, 0, 1).item()}")
+    plain = scaled_dot_product_attention(heads.to_float32(), heads.to_float32(), heads.to_float32(), true)
+    print((mixed.to_float32() - plain).abs().max().item() < 0.01)
+    watched = small.requires_grad()
+    print((watched * watched).sum().gradient(watched).to_array())
+    written = try save(PATH, ["x"], [x])
+    print(written > 8)
+    narrow = try load_float16(PATH, "x", device)
+    print(narrow.to_array())
+    again = try load_float32(PATH, "x", device)
+    print(again.to_array())
+    return Ok(None)
+
+def main():
+    match run():
+        case Ok(_):
+            print("done")
+        case Err(message):
+            print(message)
+"#
+    .replace("PATH", &format!("{:?}", path.to_str().expect("a UTF-8 path")));
+    let output = crate::run_source(&source).expect("float16 tensors should run");
+    let _ = std::fs::remove_dir_all(&directory);
+    assert_eq!(
+        output.stdout,
+        "Array[float32](shape=[2, 2], values=[0.099975586, 2048.0, 60000.0, -3.0])\n\
+         Array[float32](shape=[2, 2], values=[1.0996094, 2048.0, 60000.0, -2.0])\n\
+         Array[float32](shape=[2, 2], values=[1.0996094, 2048.0, 60000.0, -2.0])\n\
+         Array[float32](shape=[2, 2], values=[0.049987793, 1024.0, 30000.0, -1.5])\n\
+         60000.0 Array[float32](shape=[2], values=[2048.0, 60000.0])\n\
+         Array[float32](shape=[2, 2], values=[1.0999756, 2049.0, 60001.0, -2.0])\n\
+         Array[float32](shape=[2, 2], values=[1.0996094, 2048.0, 60000.0, -2.0])\n\
+         Array[float64](shape=[2, 2], values=[0.0999755859375, 2048.0, 60000.0, -3.0]) Array[int64](shape=[2, 2], values=[0, 2048, 60000, -3])\n\
+         Array[float32](shape=[2], values=[2048.0, 2048.0])\n\
+         Array[float32](shape=[2, 3], values=[1.75, 1.75, 1.75, 3.0, 3.0, 3.0])\n\
+         Array[int64](shape=[2, 2], values=[-100, 100, -100, 100])\n\
+         Array[float32](shape=[2, 2], values=[1.0, -1.0, 1.0, -1.0])\n\
+         [1, 2, 2] 1.0\n\
+         true\n\
+         Array[float32](shape=[2, 2], values=[2.0, 4.0, 6.0, 10.0])\n\
+         true\n\
+         Array[float32](shape=[2, 2], values=[0.099975586, 2048.0, 60000.0, -3.0])\n\
+         Array[float32](shape=[2, 2], values=[0.099975586, 2048.0, 60000.0, -3.0])\n\
+         done\n"
+    );
+
+    let error = crate::check_source(
+        "from tensor import Device, Tensor, float16\n\ndef bad(x: Tensor[float16], y: Tensor[float32]) -> Tensor[float16]:\n    return x + y\n",
+    )
+    .expect_err("float16 and float32 tensors do not mix");
+    assert!(error.message.contains("Tensor"), "{}", error.message);
+}
+
+#[test]
 fn an_associated_trait_call_runs_the_implementation_for_the_written_type_arguments() {
     let output = crate::run_source(
         r#"trait Make[E]:
@@ -2438,4 +2523,43 @@ fn a_derived_module_keeps_the_mut_rule_and_rejects_what_it_cannot_walk() {
             "{fields}"
         );
     }
+}
+
+#[test]
+fn build_module_exposes_the_compilation_target_and_flags() {
+    use crate::{current_build_config, with_build_config, BuildConfig};
+
+    let previous = current_build_config();
+    let mut config = BuildConfig::for_target("riscv64gc-unknown-none-elf", false).unwrap();
+    config.cfg.insert("driver".into(), "spi".into());
+    with_build_config(config.clone(), || {
+        assert_eq!(current_build_config(), config);
+        let output = crate::run_source(
+            "import build\nfrom build import pointer_width as bits\ndef main():\n    print(build.os)\n    print(build.arch)\n    print(bits)\n    print(build.endianness)\n    print(build.freestanding)\n    print(build.hosted)\n    print(build.debug)\n    print(build.release)\n    print(build.cfg[\"driver\"])\n",
+        ).unwrap();
+        assert_eq!(
+            output.stdout,
+            "none\nriscv64\n64\nlittle\ntrue\nfalse\nfalse\ntrue\nspi\n"
+        );
+    });
+    assert_eq!(current_build_config(), previous);
+}
+
+#[test]
+fn build_configuration_distinguishes_target_profile_and_feature_values() {
+    use crate::{current_build_config, with_build_config, BuildConfig};
+
+    assert!(BuildConfig::for_target("bogus", true).is_none());
+    let mut base = BuildConfig::for_target("x86_64-unknown-linux-gnu", true).unwrap();
+    base.cfg.insert("x".into(), "a:b".into());
+    let targets = base.supported_targets();
+    assert_eq!(targets.len(), 10);
+    for (name, target) in targets {
+        assert_eq!(target.target, name);
+        assert!(target.debug && !target.release);
+        assert_eq!(target.cfg, base.cfg);
+    }
+    let before = current_build_config();
+    let _ = std::panic::catch_unwind(|| with_build_config(base, || panic!("unwind test")));
+    assert_eq!(current_build_config(), before);
 }

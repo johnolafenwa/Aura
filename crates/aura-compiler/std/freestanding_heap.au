@@ -1,0 +1,366 @@
+"""
+The allocator of a freestanding program (ADR-0128).
+
+A freestanding build compiles this file into the object when the program
+allocates and does not define the allocation hooks itself. The object then
+defines `aura_alloc`, `aura_free`, `aura_realloc`, `aura_heap_add_region`,
+and `aura_heap_free_bytes` as weak symbols that call the functions below
+with the address of the object's heap state.
+
+The heap is the regions the program gives it. A region is cut into blocks.
+Each block starts with one header word: the block's size in bytes, which is
+a multiple of 16, with two flags in its low bits. A block's memory starts
+after the header, at an address that is a multiple of 16. A free block also
+holds the links of its free list after the header and its size again in its
+last word, so the block after it can find where it starts. A zero-sized
+used block ends each region.
+
+Free blocks are kept in 96 lists by size. Lists 0 to 63 each hold one size,
+from 32 to 1040 bytes. Lists 64 to 95 each hold the sizes from one power of
+two up to the next, and the last holds everything larger. Two words of the
+state have one bit for each list that is not empty.
+
+The state is 784 zeroed bytes at an address that is a multiple of 8:
+
+    0    the lock, a `uint32` that is 1 while a call is in progress
+    8    the bytes of the regions that no used block holds
+    16   the bits of the lists 0 to 63 that are not empty
+    24   the bits of the lists 64 to 95 that are not empty
+    32   the first block of each list, or 0
+"""
+
+import mem
+
+USED: uint64 = 1
+PREVIOUS_USED: uint64 = 2
+SIZE_MASK: uint64 = 0xFFFFFFFFFFFFFFF0
+ALL_BITS: uint64 = 0xFFFFFFFFFFFFFFFF
+SMALLEST_BLOCK: uint64 = 32
+# A request this large or larger fails without a search. Sizes below it
+# cannot overflow the arithmetic here.
+SIZE_LIMIT: uint64 = 0x800000000000
+LISTS: uint64 = 96
+
+
+def heap_block_size(block: uint64) -> uint64:
+    return mem.read_uint64(block) & SIZE_MASK
+
+
+def heap_align_up(value: uint64, align: uint64) -> uint64:
+    return (value + (align - 1)) & ((align - 1) ^ ALL_BITS)
+
+
+# The list that holds free blocks of `size` bytes.
+def heap_list_of(size: uint64) -> uint64:
+    if size < 1056:
+        return size // 16 - 2
+    mut rest = size >> 11
+    mut list: uint64 = 64
+    while rest > 0 and list < 95:
+        rest = rest >> 1
+        list = list + 1
+    return list
+
+
+# The index of the lowest set bit of `bits`, which is not zero.
+def heap_lowest_bit(bits: uint64) -> uint64:
+    mut rest = bits
+    mut index: uint64 = 0
+    if rest & 0xFFFFFFFF == 0:
+        rest = rest >> 32
+        index = index + 32
+    if rest & 0xFFFF == 0:
+        rest = rest >> 16
+        index = index + 16
+    if rest & 0xFF == 0:
+        rest = rest >> 8
+        index = index + 8
+    if rest & 0xF == 0:
+        rest = rest >> 4
+        index = index + 4
+    if rest & 3 == 0:
+        rest = rest >> 2
+        index = index + 2
+    if rest & 1 == 0:
+        index = index + 1
+    return index
+
+
+def heap_list_bit(list: uint64) -> uint64:
+    mut bit: uint64 = 1
+    return bit << (list % 64)
+
+
+def heap_list_bits(state: uint64, list: uint64) -> uint64:
+    return state + 16 + (list // 64) * 8
+
+
+def heap_list_head(state: uint64, list: uint64) -> uint64:
+    return state + 32 + list * 8
+
+
+# The first list from `list` on that is not empty, or `LISTS`.
+def heap_next_list(state: uint64, list: uint64) -> uint64:
+    mut from = list
+    if from < 64:
+        low = mem.read_uint64(state + 16) >> from
+        if low != 0:
+            return from + heap_lowest_bit(low)
+        from = 64
+    if from < LISTS:
+        high = mem.read_uint64(state + 24) >> (from - 64)
+        if high != 0:
+            return from + heap_lowest_bit(high)
+    return LISTS
+
+
+# Puts the free block at `block` on its list. Its header is written.
+def heap_insert(state: uint64, block: uint64, size: uint64) -> None:
+    list = heap_list_of(size)
+    head = heap_list_head(state, list)
+    first = mem.read_uint64(head)
+    mem.write_uint64(block + 8, first)
+    mem.write_uint64(block + 16, 0)
+    if first != 0:
+        mem.write_uint64(first + 16, block)
+    mem.write_uint64(head, block)
+    bits = heap_list_bits(state, list)
+    mem.write_uint64(bits, mem.read_uint64(bits) | heap_list_bit(list))
+
+
+# Takes the free block at `block` off its list.
+def heap_remove(state: uint64, block: uint64, size: uint64) -> None:
+    list = heap_list_of(size)
+    next = mem.read_uint64(block + 8)
+    previous = mem.read_uint64(block + 16)
+    if next != 0:
+        mem.write_uint64(next + 16, previous)
+    if previous != 0:
+        mem.write_uint64(previous + 8, next)
+        return
+    mem.write_uint64(heap_list_head(state, list), next)
+    if next == 0:
+        bits = heap_list_bits(state, list)
+        mem.write_uint64(bits, mem.read_uint64(bits) & (heap_list_bit(list) ^ ALL_BITS))
+
+
+# Writes a free block of `size` bytes at `block` and puts it on its list.
+# `flags` is the block's `PREVIOUS_USED` flag.
+def heap_write_free(state: uint64, block: uint64, size: uint64, flags: uint64) -> None:
+    mem.write_uint64(block, size | flags)
+    mem.write_uint64(block + size - 8, size)
+    heap_insert(state, block, size)
+
+
+# Sets or clears the `PREVIOUS_USED` flag of the block at `block`.
+def heap_mark_previous(block: uint64, used: bool) -> None:
+    header = mem.read_uint64(block)
+    if used:
+        mem.write_uint64(block, header | PREVIOUS_USED)
+    else:
+        mem.write_uint64(block, header & (PREVIOUS_USED ^ ALL_BITS))
+
+
+# A free block of at least `size` bytes, or 0.
+def heap_find(state: uint64, size: uint64) -> uint64:
+    mut list = heap_list_of(size)
+    if list >= 64:
+        # A list of a range of sizes may hold a block that is too small.
+        mut block = mem.read_uint64(heap_list_head(state, list))
+        while block != 0:
+            if heap_block_size(block) >= size:
+                return block
+            block = mem.read_uint64(block + 8)
+        list = list + 1
+    list = heap_next_list(state, list)
+    if list == LISTS:
+        return 0
+    return mem.read_uint64(heap_list_head(state, list))
+
+
+# Frees the used block at `block` and joins it with the free blocks on
+# either side.
+def heap_release(state: uint64, block: uint64) -> None:
+    header = mem.read_uint64(block)
+    mut start = block
+    mut size = header & SIZE_MASK
+    mut flags = header & PREVIOUS_USED
+    mem.write_uint64(state + 8, mem.read_uint64(state + 8) + size)
+    after = block + size
+    after_header = mem.read_uint64(after)
+    if after_header & USED == 0:
+        after_size = after_header & SIZE_MASK
+        heap_remove(state, after, after_size)
+        size = size + after_size
+    if flags == 0:
+        before_size = mem.read_uint64(block - 8)
+        start = block - before_size
+        heap_remove(state, start, before_size)
+        size = size + before_size
+        flags = mem.read_uint64(start) & PREVIOUS_USED
+    heap_write_free(state, start, size, flags)
+    heap_mark_previous(start + size, false)
+
+
+# Cuts the used block at `block` down to `size` bytes when what is left
+# over can make a block, and frees what is left over.
+def heap_trim(state: uint64, block: uint64, size: uint64) -> None:
+    header = mem.read_uint64(block)
+    whole = header & SIZE_MASK
+    if whole - size < SMALLEST_BLOCK:
+        return
+    mem.write_uint64(block, size | (header & PREVIOUS_USED) | USED)
+    rest = block + size
+    mem.write_uint64(rest, (whole - size) | PREVIOUS_USED | USED)
+    heap_release(state, rest)
+
+
+# Takes a free block of at least `size` bytes off its list and makes it a
+# used block. Returns the block, or 0.
+def heap_take(state: uint64, size: uint64) -> uint64:
+    block = heap_find(state, size)
+    if block == 0:
+        return 0
+    header = mem.read_uint64(block)
+    whole = header & SIZE_MASK
+    heap_remove(state, block, whole)
+    mem.write_uint64(block, header | USED)
+    heap_mark_previous(block + whole, true)
+    mem.write_uint64(state + 8, mem.read_uint64(state + 8) - whole)
+    return block
+
+
+# The size of the block that holds `size` bytes after its header, or 0
+# when the request is too large.
+def heap_block_for(size: uint64) -> uint64:
+    if size >= SIZE_LIMIT:
+        return 0
+    block = heap_align_up(size + 8, 16)
+    if block < SMALLEST_BLOCK:
+        return SMALLEST_BLOCK
+    return block
+
+
+def heap_allocate(state: uint64, size: uint64, align: uint64) -> uint64:
+    need = heap_block_for(size)
+    if need == 0 or align == 0 or align & (align - 1) != 0 or align >= SIZE_LIMIT:
+        return 0
+    if align <= 16:
+        block = heap_take(state, need)
+        if block == 0:
+            return 0
+        heap_trim(state, block, need)
+        return block + 8
+    # The memory must start at a multiple of `align`. What lies before it
+    # in the block found is freed, so it must be nothing or a whole block.
+    found = heap_take(state, need + align + 16)
+    if found == 0:
+        return 0
+    mut memory = heap_align_up(found + 8, align)
+    if memory - (found + 8) == 16:
+        memory = memory + align
+    block = memory - 8
+    if block != found:
+        header = mem.read_uint64(found)
+        before = block - found
+        mem.write_uint64(block, ((header & SIZE_MASK) - before) | PREVIOUS_USED | USED)
+        mem.write_uint64(found, before | (header & PREVIOUS_USED) | USED)
+        heap_release(state, found)
+    heap_trim(state, block, need)
+    return memory
+
+
+def heap_reallocate(state: uint64, address: uint64, align: uint64, new_size: uint64) -> uint64:
+    if address == 0:
+        return heap_allocate(state, new_size, align)
+    need = heap_block_for(new_size)
+    if need == 0:
+        return 0
+    block = address - 8
+    header = mem.read_uint64(block)
+    mut whole = header & SIZE_MASK
+    if whole < need:
+        # Grow into the block after this one when it is free.
+        after = block + whole
+        after_header = mem.read_uint64(after)
+        after_size = after_header & SIZE_MASK
+        if after_header & USED == 0 and whole + after_size >= need:
+            heap_remove(state, after, after_size)
+            whole = whole + after_size
+            mem.write_uint64(block, whole | (header & PREVIOUS_USED) | USED)
+            heap_mark_previous(block + whole, true)
+            mem.write_uint64(state + 8, mem.read_uint64(state + 8) - after_size)
+    if whole >= need:
+        heap_trim(state, block, need)
+        return address
+    moved = heap_allocate(state, new_size, align)
+    if moved == 0:
+        return 0
+    mut offset: uint64 = 0
+    while offset < whole - 8:
+        mem.write_uint64(moved + offset, mem.read_uint64(address + offset))
+        offset = offset + 8
+    heap_release(state, block)
+    return moved
+
+
+def heap_lock(state: uint64) -> None:
+    while mem.atomic_compare_exchange_uint32(state, 0, 1) != 0:
+        pass
+
+
+def heap_unlock(state: uint64) -> None:
+    mem.atomic_store_uint32(state, 0)
+
+
+# Gives the heap the `size` bytes at `start`. A region too small to hold a
+# block is ignored.
+def heap_add_region(state: uint64, start: uint64, size: uint64) -> None:
+    if size >= SIZE_LIMIT or start > ALL_BITS - size or start > ALL_BITS - 32:
+        return
+    # A block's memory starts at a multiple of 16, one word after the block.
+    first = heap_align_up(start + 8, 16) - 8
+    end = ((start + size) & SIZE_MASK) - 8
+    if end < first or end - first < SMALLEST_BLOCK:
+        return
+    heap_lock(state)
+    mem.write_uint64(end, USED)
+    mem.write_uint64(state + 8, mem.read_uint64(state + 8) + (end - first))
+    heap_write_free(state, first, end - first, PREVIOUS_USED)
+    heap_unlock(state)
+
+
+# The address of `size` bytes at a multiple of `align`, or 0 when no free
+# block is large enough. `align` is a power of two.
+def heap_alloc(state: uint64, size: uint64, align: uint64) -> uint64:
+    heap_lock(state)
+    address = heap_allocate(state, size, align)
+    heap_unlock(state)
+    return address
+
+
+# Frees the memory at `address`, which `heap_alloc` or `heap_realloc`
+# returned and nothing has freed since. Address 0 is ignored.
+def heap_free(state: uint64, address: uint64) -> None:
+    if address == 0:
+        return
+    heap_lock(state)
+    heap_release(state, address - 8)
+    heap_unlock(state)
+
+
+# Moves the memory at `address` to `new_size` bytes, in place when the
+# block has or can take the room. Returns the new address, or 0 with the
+# memory unchanged when no free block is large enough.
+def heap_realloc(state: uint64, address: uint64, align: uint64, new_size: uint64) -> uint64:
+    heap_lock(state)
+    moved = heap_reallocate(state, address, align, new_size)
+    heap_unlock(state)
+    return moved
+
+
+def heap_free_bytes(state: uint64) -> uint64:
+    heap_lock(state)
+    free = mem.read_uint64(state + 8)
+    heap_unlock(state)
+    return free

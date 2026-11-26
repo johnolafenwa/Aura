@@ -2,6 +2,50 @@
 
 Last updated: 2026-11-24
 
+## Compile-Time Evaluation And Conditional Compilation
+
+Module constants can evaluate through MIR at build time. Conditional suites select imports, declarations and statements by target, build profile and package features. The 0.18 integration work includes the command line, editor and a freestanding kernel example. [Work note](2026-11-24-compile-time.md)
+
+## Freestanding machine code
+
+The three freestanding targets support typed assembly, interrupt entries
+and privileged operations. The x86-64 kernel board checks two interrupt
+returns in QEMU. [Design and local results](2026-11-24-freestanding-machine-code.md)
+
+## Release 0.18 systems data
+
+The integration branch adds writable freestanding module cells, inline arrays, typed pointers, C layout controls, wide integers and ordered subword atomics. [Implementation and validation](2026-11-24-systems-data.md)
+
+## Class items for 0.18
+
+Field delegation, property setters, destructor hooks and method decorators passed 62 combined interpreter and native output comparisons. All three measured programs met the instruction-count gate. [Verification results](2026-11-24-class-items.md) and [integration pull request](https://github.com/johnolafenwa/Aura/pull/317).
+
+## Freestanding heap
+
+- Target: memory at run time in freestanding builds (ADR-0128), and after
+  it the heap values of the language there. Scope: the `mem` module, the
+  freestanding emitter, and a new Aura source file. No file of the runtime
+  moves.
+- Done: the allocation hooks `aura_alloc`, `aura_free`, and `aura_realloc`;
+  `mem.alloc`, `mem.free`, `mem.realloc`, `mem.heap_add_region`, and
+  `mem.heap_free_bytes` in hosted and freestanding builds; the default
+  allocator in `crates/aura-compiler/std/freestanding_heap.au`; the heap in
+  the example kernel.
+- Verified locally on Linux x86-64: 9 compiler tests, 5 command tests, and
+  4 runtime tests for the heap pass. The example kernel boots under QEMU on
+  RISC-V and AArch64 and prints `h=76127` and `f=0`.
+- Done after that, not yet in a pull request: tuples, enums, and `Result`
+  of words in freestanding builds, kept in machine words (ADR-0129), with
+  `try` on them, and enums that hold themselves in counted heap blocks
+  (ADR-0160), `str` with its first operations and f-strings, and lists of numbers,
+  text, classes, enums, and lists, 22 compiler tests and 6 command tests.
+  [Notes](2026-11-24-freestanding-values.md)
+- Remaining: `dict`, `set`,
+  and closures in freestanding builds, by route D1 of
+  [checkpoint 40](../architecture_docs/40-freestanding-heap-design-checkpoint.md),
+  a lean value layer written in Aura, which the owner chose.
+  [Notes](2026-11-24-freestanding-heap.md)
+
 ## Dict and set speed (in progress)
 
 - Target: John's 2026-11-24 goal of Rust's speed, dict and set half.
@@ -412,9 +456,12 @@ See `2026-11-17-ordered-collections.md`.
   an early start of a product's operands, `tensor.set_grad_enabled`.
   `gpt_infer` on the A40 went from 338 to 362 ms to 274 to 277 ms
   against PyTorch's 270 to 272.
-- Remaining: the Mac runs, Metal support for the new operations,
-  `float16`, and the whole-program benchmarks listed in
-  `2026-11-12-gpu-tensors.md`.
+- Done 2026-11-24: `float16` tensors, attention heads read in place by
+  the CUDA products (ADR-0118), and the `gpt2` and `nanogpt` programs
+  with real weights and a real text beside PyTorch. See
+  `2026-11-24-float16-tensors.md`.
+- Remaining: the Mac runs, Metal support for the new operations and for
+  `float16`.
 
 ## Release 0.15.0-preview (complete)
 

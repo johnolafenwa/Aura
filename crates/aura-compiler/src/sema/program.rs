@@ -19,6 +19,7 @@ use super::{
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    pub(crate) machine_target: Option<crate::FreestandingTarget>,
     pub module: Module,
     pub module_name: String,
     pub source_path: Option<String>,
@@ -34,6 +35,7 @@ pub struct Program {
     /// initialization. The file loader replaces the local-only seed with the
     /// complete transitive plan for an entry program.
     pub constant_init_plan: Vec<ConstantInfo>,
+    pub frozen_constants: BTreeMap<String, crate::const_eval::FrozenValue>,
     /// The native libraries the program's packages name under `[ffi]`. The
     /// file loader fills it in for an entry program in a package.
     pub foreign_link: crate::package::ForeignLinkPlan,
@@ -160,6 +162,7 @@ impl AliasInfo {
 
 #[derive(Clone, Debug)]
 pub struct ConstantInfo {
+    pub state: Option<std::sync::Arc<super::StateImage>>,
     pub module_name: String,
     pub decl: crate::ast::ConstantDecl,
     pub ty: Type,
@@ -328,6 +331,7 @@ fn callable_contract_decl(alias: &crate::ast::TypeAliasDecl) -> Result<FunctionD
         span: alias.span,
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: alias.contracts.clone(),
         spec: false,
@@ -567,7 +571,27 @@ pub struct FunctionSignature {
 // crate-private. Public callers must use the source wrappers (which reject
 // unmanifested FFI) or path APIs (which enforce package opt-in and reports).
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
+    check_with_profile(module, context, false)
+}
+
+pub(crate) fn check_with_profile(
+    module: Module,
+    context: ModuleContext,
+    freestanding: bool,
+) -> Result<Program> {
+    if !freestanding {
+        if let Some(cell) = module.constants.iter().find(|decl| decl.mutable) {
+            return Err(Diagnostic::coded_at("AU3030", cell.span, "hosted module bindings are immutable")
+                .with_help("share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task"));
+        }
+    }
+    if let Some(span) = module.asm_span {
+        crate::inline_asm::target_at(span)?;
+    }
     let mut module = module;
+    if freestanding {
+        module.use_freestanding_c_layout();
+    }
     let mut context = context;
     // A prelude name is imported only into a module that needs it: a check
     // that fails for want of one (an unknown `Ord`, `Add`, or `From`, or a
@@ -697,6 +721,12 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     name.clone(),
                     format!("{}.{}", class_info.module_name, class_info.decl.name),
                 );
+                if class_info.decl.c_layout {
+                    type_names.c_class_names.insert(format!(
+                        "{}.{}",
+                        class_info.module_name, class_info.decl.name
+                    ));
+                }
                 type_names.insert(name.clone(), class_info.decl.span);
                 type_arities.insert(name.clone(), class_info.decl.type_params.len());
                 item_names.insert(name.clone(), ("class", class_info.decl.span));
@@ -785,6 +815,9 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                             class_decl.name, kind, existing
                         ),
                     ));
+                }
+                if class_decl.c_layout {
+                    type_names.c_class_names.insert(class_decl.name.clone());
                 }
                 type_names.insert(class_decl.name.clone(), class_decl.span);
                 type_arities.insert(class_decl.name.clone(), class_decl.type_params.len());
@@ -991,6 +1024,13 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         }
         let mut methods = BTreeMap::new();
         for method in &trait_decl.methods {
+            if method.name == super::DROP_HOOK {
+                return Err(Diagnostic::coded_at(
+                    "AU2065",
+                    method.span,
+                    "drop hook must be an inherent class method",
+                ));
+            }
             if method.name == INITIALIZER_NAME {
                 return Err(Diagnostic::coded_at(
                     "AU2016",
@@ -1227,7 +1267,12 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 &canonical_type_names,
                 &class_type_param_scope,
             )?;
-            super::types::reject_span_type(&lowered, field.ty.span, "a field type")?;
+            super::types::reject_span_type(&lowered, field.ty.span, "a field type").map_err(
+                |error| {
+                    super::delegation::view_field_error(&module, &class_decl.name, &field.name)
+                        .unwrap_or(error)
+                },
+            )?;
             if !field.ty.indirect && type_contains_named(&lowered, &class_decl.name) {
                 return Err(Diagnostic::at(
                     field.span,
@@ -1301,6 +1346,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 &method_type_param_scope,
                 Some(&class_self_type),
             )?;
+            super::drop_hooks::validate(class_decl, method, &return_type)?;
             if method.name == INITIALIZER_NAME && return_type != Type::Unit {
                 return Err(initializer_result_annotation_error(method));
             }
@@ -1402,6 +1448,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
 
     // A union's class holds as many bytes as the C union has. The parser
     // wrote the default of that field for a length it could not know.
+    super::c_union_writes::complete_lengths(&mut classes);
     let union_sizes = classes
         .iter()
         .filter(|(_, class)| class.decl.c_union.is_some())
@@ -1738,6 +1785,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     span: extern_decl.span,
                     property: None,
                     decorators: Vec::new(),
+                    machine: None,
                     doc: None,
                     contracts: extern_decl.contracts.clone(),
                     spec: false,
@@ -1756,6 +1804,18 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
     }
 
     let mut module = module;
+    super::delegation::expand_parents(&mut module, &traits, &module_name, |ty, decl| {
+        let mut params = BTreeSet::new();
+        collect_type_ref_type_params(ty, &type_names, &mut params, false);
+        params.extend(decl.type_params.iter().cloned());
+        lower_type(
+            ty,
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &params.into_iter().map(|name| (name, ())).collect(),
+        )
+    })?;
     inherit_trait_contracts(&mut module, &traits)?;
     let module = module;
     let mut trait_impls = Vec::new();
@@ -1770,6 +1830,8 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         })
         .collect::<Vec<_>>();
     impl_decls.sort_by_key(|impl_decl| inherited_assoc_depth(&impl_decl.trait_name, &traits, 16));
+    super::delegation::order_after_field_impls(&mut impl_decls, &classes, &traits);
+    let mut forwarded_span = 0;
     for impl_decl in impl_decls {
         validate_type_params(&impl_decl.type_params, impl_decl.span, "impl")?;
         for method in &impl_decl.methods {
@@ -1784,9 +1846,8 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 format!("unknown trait `{}`", impl_decl.trait_name),
             )
         })?;
-        let (impl_decl, open_assoc_types) =
+        let (mut impl_decl, open_assoc_types) =
             impl_with_assoc_type_args(impl_decl, trait_info, &traits)?;
-        let impl_decl = &impl_decl;
         let mut implicit_type_params = BTreeSet::new();
         collect_type_ref_type_params(
             &impl_decl.for_type,
@@ -1848,7 +1909,9 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             &canonical_type_names,
             &impl_type_param_scope,
         )?;
-        let (trait_args, impl_type_params) = if open_assoc_types.is_empty() {
+        let (trait_args, impl_type_params) = if impl_decl.delegation.is_none()
+            && open_assoc_types.is_empty()
+        {
             (trait_args, impl_type_params)
         } else {
             let checker = FunctionChecker::new(
@@ -1865,12 +1928,22 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 &imported_modules,
                 &context.module_registry,
             );
-            let found = checker.inherited_assoc_types(
-                trait_info,
-                &trait_args,
-                &for_type,
-                &open_assoc_types,
-            );
+            let found = if impl_decl.delegation.is_some() {
+                super::delegation::elaborate(
+                    &checker.with_type_params(
+                        impl_type_param_scope.clone(),
+                        impl_type_param_bounds.clone(),
+                    ),
+                    &mut impl_decl,
+                    trait_info,
+                    &for_type,
+                    &trait_args,
+                    &open_assoc_types,
+                    &mut forwarded_span,
+                )?
+            } else {
+                checker.inherited_assoc_types(trait_info, &trait_args, &for_type, &open_assoc_types)
+            };
             if let Some(missing) = open_assoc_types
                 .iter()
                 .find(|open| !found.contains_key(*open))
@@ -1899,6 +1972,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     .collect::<Vec<_>>(),
             )
         };
+        let impl_decl = &impl_decl;
         let display = super::is_prelude_display(trait_info);
         if display {
             super::display::validate_display_target(
@@ -2272,6 +2346,13 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         };
         if let Some(expected) = &expected {
             if &inferred != expected {
+                if constant.name == crate::parser::CONDITION_RESULT {
+                    return Err(Diagnostic::coded_at(
+                        "AU2071",
+                        constant.span,
+                        "a compile-time condition must have type bool",
+                    ));
+                }
                 return Err(Diagnostic::coded_at(
                     "AU2002",
                     constant.value.span,
@@ -2285,11 +2366,19 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         checker.consume_value_expr(&constant.value, &mut scope)?;
         constant_closure_infos.extend(checker.closure_infos.borrow().clone());
         constant_comprehension_infos.extend(checker.comprehension_infos.borrow().clone());
+        let folded = super::c_layout_queries::folded_binding(constant, &imported_modules, &classes);
         constants.insert(
             constant.name.clone(),
             ConstantInfo {
                 module_name: module_name.clone(),
-                decl: constant.clone(),
+                state: constant
+                    .mutable
+                    .then(|| {
+                        checker.state_image(expected.as_ref().unwrap_or(&inferred), &folded.value)
+                    })
+                    .transpose()?
+                    .map(std::sync::Arc::new),
+                decl: folded,
                 ty: expected.unwrap_or(inferred),
             },
         );
@@ -2318,7 +2407,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         .collect::<Vec<_>>();
     local_constants.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
     constant_init_plan.extend(local_constants);
+    for constant in &constant_init_plan {
+        crate::machine_data::check(constant)?;
+    }
     let mut program = Program {
+        machine_target: crate::freestanding_check_target(),
         aliases,
         type_definitions: type_names.clone(),
         module: module.clone(),
@@ -2329,6 +2422,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         functions,
         constants,
         constant_init_plan,
+        frozen_constants: BTreeMap::new(),
         foreign_link: Default::default(),
         extern_functions,
         opaque_handles,
@@ -2980,6 +3074,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         &program.module_registry,
         &program.imported_modules,
     )?;
+    super::fixed_arrays::validate_layouts(&program)?;
     Ok(program)
 }
 
@@ -3089,6 +3184,9 @@ pub(super) fn register_module_namespace_types(
     }
     for class in namespace.classes.values() {
         let qualified_name = format!("{}.{}", namespace.path, class.decl.name);
+        if class.decl.c_layout {
+            type_names.c_class_names.insert(qualified_name.clone());
+        }
         type_names.insert(qualified_name.clone(), class.decl.span);
         type_arities.insert(qualified_name, class.decl.type_params.len());
     }
@@ -3109,6 +3207,9 @@ pub(super) fn register_module_namespace_types(
     for class in namespace.all_classes.values() {
         if !class.module_name.is_empty() && class.module_name != namespace.path {
             let qualified_name = format!("{}.{}", class.module_name, class.decl.name);
+            if class.decl.c_layout {
+                type_names.c_class_names.insert(qualified_name.clone());
+            }
             type_names.insert(qualified_name.clone(), class.decl.span);
             type_arities.insert(qualified_name, class.decl.type_params.len());
         }
@@ -3329,7 +3430,7 @@ fn impl_with_assoc_type_args(
             .find(|binding| binding.name == assoc.name);
         let arg = match binding {
             Some(binding) => binding.target.clone(),
-            None if inherited.contains(&assoc.name) => {
+            None if impl_decl.delegation.is_some() || inherited.contains(&assoc.name) => {
                 open.push(crate::ast::assoc_type_param_name(&assoc.name));
                 super::assoc_bounds::inherited_placeholder(&assoc.name, impl_decl.span)
             }
@@ -3374,4 +3475,46 @@ fn inherited_assoc_depth(
         .map(|(name, _)| inherited_assoc_depth(name, traits, fuel - 1))
         .max()
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+#[test]
+fn property_write_discovery_rewrites_only_sites_in_the_current_module() {
+    use super::property_reads::check_with_property_reads;
+
+    let declaration = include_str!("../../tests/fixtures/parse-pass/property_setter.au");
+    let original = crate::parser::parse(declaration).unwrap();
+    let with_write = format!(
+        "{declaration}\ndef main():\n    mut counter = Counter(stored=0)\n    counter.count = 1\n"
+    );
+    let generated = crate::parser::parse(&with_write).unwrap();
+    // A preceding expansion can supply a body with sites absent from the
+    // module the rewriter is walking. Report that site instead of retrying.
+    let error = check_with_property_reads(original, ModuleContext::default(), |_, context| {
+        check_with_context_once(generated.clone(), context)
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "AU2064");
+    assert_eq!(
+        error.span,
+        Some(crate::diag::Span::new(with_write.lines().count(), 5))
+    );
+    assert!(error.message.contains("cannot lower a property assignment"));
+
+    // A check of a different module cannot publish its write positions into
+    // this rewrite, even when both modules use the same line and column.
+    let foreign = ModuleContext {
+        module_name: "foreign".into(),
+        ..ModuleContext::default()
+    };
+    let checked = check_with_property_reads(generated.clone(), ModuleContext::default(), |_, _| {
+        check_with_context_once(generated.clone(), foreign.clone())
+    })
+    .unwrap();
+    let Some(Item::Function(main)) = checked.module.items.last() else {
+        panic!("expected main");
+    };
+    assert!(
+        matches!(&main.body[1], Stmt::Assign(assign) if matches!(&assign.target, AssignTarget::Member {field, ..} if field == "count"))
+    );
 }

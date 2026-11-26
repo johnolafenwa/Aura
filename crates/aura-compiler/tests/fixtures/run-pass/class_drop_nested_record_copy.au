@@ -1,0 +1,20 @@
+class Ticket:
+    count: int64
+    def __drop__(mut self):
+        print(self.count)
+
+class Envelope:
+    ticket: Ticket
+
+class Wrapper:
+    envelope: Envelope
+
+def main():
+    mut original = [Wrapper(Envelope(Ticket(1)))]
+    if true:
+        mut copy = original.copy()
+        copy.clear()
+        print("cleared copy")
+    print("original alive")
+    original.clear()
+    print("cleared original")

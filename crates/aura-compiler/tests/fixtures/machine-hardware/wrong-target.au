@@ -1,0 +1,4 @@
+from mem import in_uint8 as device_read
+
+def read() -> uint8:
+    return device_read(1)

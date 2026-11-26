@@ -12,6 +12,8 @@
 //! unknown (the solver gave up), or unsupported (the step is outside the
 //! subset the encoding models). Only proved obligations count as proof.
 
+#[path = "verify_bits.rs"]
+mod bits;
 #[path = "verify_closures.rs"]
 mod closures;
 #[path = "verify_collections.rs"]
@@ -27,6 +29,8 @@ mod frame;
 mod guard;
 #[path = "verify_integers.rs"]
 mod integers;
+#[path = "verify_raw_memory.rs"]
+mod raw_memory;
 #[path = "verify_shapes.rs"]
 mod shapes;
 #[path = "verify_smt.rs"]
@@ -1252,12 +1256,82 @@ fn auxiliary_verified_function(
     cx.decl(&function.name).is_some_and(|decl| decl.lemma)
 }
 
+pub(crate) fn assembly_boundary(span: Span) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU4035",
+        span,
+        "the verifier cannot reason through assembly",
+    )
+}
+
+/// A builtin module can supply target-specific assembly routines alongside
+/// portable functions. Importing the portable part must still allow proofs.
+fn reached_assembly(program: &Program, module: &MirModule) -> Option<Diagnostic> {
+    let assembly: BTreeMap<_, _> = module
+        .functions
+        .iter()
+        .chain(&module.top_level)
+        .filter_map(|function| {
+            let span = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .find_map(|instruction| match instruction {
+                    crate::mir::Instruction::InlineAsm { span, .. } => Some(*span),
+                    _ => None,
+                })?;
+            Some((function.name.as_str(), span))
+        })
+        .collect();
+    if assembly.is_empty() {
+        return None;
+    }
+    let (functions, callees) = crate::mir::recursion::call_graph(module);
+    let mut pending: Vec<_> = functions
+        .iter()
+        .enumerate()
+        .filter(|(_, function)| function.module_name == program.module_name)
+        .collect();
+    let mut visited = vec![false; callees.len()];
+    while let Some((index, root)) = pending.pop() {
+        if std::mem::replace(&mut visited[index], true) {
+            continue;
+        }
+        if let Some((function, span)) = functions.get(index).and_then(|function| {
+            assembly
+                .get(function.name.as_str())
+                .map(|span| (*function, span))
+        }) {
+            if function.module_name == program.module_name {
+                return Some(assembly_boundary(*span));
+            }
+            return Some(assembly_boundary(root.span).with_note(format!(
+                "`{}` reaches assembly in `{}`",
+                root.name, function.name
+            )));
+        }
+        pending.extend(callees[index].iter().map(|&callee| (callee, root)));
+    }
+    None
+}
+
 /// Verifies every function of `program` whose MIR is `module`.
 pub fn verify_module(
     program: &Program,
     module: &MirModule,
     options: &Options,
 ) -> std::result::Result<Report, Diagnostic> {
+    // Assembly can change memory that an Aura contract describes. An imported
+    // routine can affect a caller even when a function filter hides its body.
+    if let Some(span) = program.module.asm_span {
+        return Err(assembly_boundary(span));
+    }
+    if !module.foreign_link.module_asm.is_empty() {
+        return Err(assembly_boundary(Span::new(1, 1)));
+    }
+    if let Some(diagnostic) = reached_assembly(program, module) {
+        return Err(diagnostic);
+    }
     let command = smt::SolverCommand::find(options.solver.as_deref())
         .map_err(|message| Diagnostic::coded("AU5103", message))?;
     let cx = VerifyContext::new(program, module);
@@ -1275,6 +1349,7 @@ pub fn verify_module(
     let mut rough_solver: Option<smt::Solver> = None;
     let mut sample_solver: Option<smt::Solver> = None;
     let trace = options.trace;
+    let raw_effects = raw_memory::affected_functions(module);
     // The module body is verified like a function. A build that removes
     // proved checks runs it only for erased contract obligations.
     let at_calls = closures::checked_at_calls(program, &cx, module);
@@ -1333,39 +1408,43 @@ pub fn verify_module(
         };
         let mut exec = exec::Exec::new(&cx, function);
         exec.prove_sites = options.prove_sites && !is_erased_only;
-        let entry = exec.entry_state();
-        exec.prove_weakened_requires(&entry);
-        let before = exec.facts.len();
-        exec.assume_entry_requires(&entry);
-        exec.assume_entry_invariant(&entry);
-        exec.assume_entry_parameters(&entry);
-        if exec.facts.len() > before {
-            exec.oblige(
-                ObligationKind::Satisfiable,
-                function.span,
-                format!("the contract `{public}` assumes on entry"),
-                "true",
-                exec::Goal::CanHold,
-            );
+        if raw_effects.contains(function.name.as_str()) {
+            exec.unsupported = Some("raw memory effects may change an aliased Aura value".into());
+        } else {
+            let entry = exec.entry_state();
+            exec.prove_weakened_requires(&entry);
+            let before = exec.facts.len();
+            exec.assume_entry_requires(&entry);
+            exec.assume_entry_invariant(&entry);
+            exec.assume_entry_parameters(&entry);
+            if exec.facts.len() > before {
+                exec.oblige(
+                    ObligationKind::Satisfiable,
+                    function.span,
+                    format!("the contract `{public}` assumes on entry"),
+                    "true",
+                    exec::Goal::CanHold,
+                );
+            }
+            if let Some(target) = cx.charged(&function.name) {
+                let erasing = exec.erasing;
+                exec.erasing = true;
+                exec.oblige(
+                    ObligationKind::ClassInvariant,
+                    function.span,
+                    format!(
+                        "class invariant holds wherever `{public}` may call `{}`, which assumes it",
+                        crate::mir::public_function_name(target)
+                    ),
+                    &entry.pc,
+                    exec::Goal::Unsupported(
+                        "a call on a union, through a function value, or on a value of a type parameter does not prove the receiver's class invariant".into(),
+                    ),
+                );
+                exec.erasing = erasing;
+            }
+            exec.run(entry);
         }
-        if let Some(target) = cx.charged(&function.name) {
-            let erasing = exec.erasing;
-            exec.erasing = true;
-            exec.oblige(
-                ObligationKind::ClassInvariant,
-                function.span,
-                format!(
-                    "class invariant holds wherever `{public}` may call `{}`, which assumes it",
-                    crate::mir::public_function_name(target)
-                ),
-                &entry.pc,
-                exec::Goal::Unsupported(
-                    "a call on a union, through a function value, or on a value of a type parameter does not prove the receiver's class invariant".into(),
-                ),
-            );
-            exec.erasing = erasing;
-        }
-        exec.run(entry);
         if let Some(reason) = exec.unsupported.clone() {
             if cx.has_erased_contracts()
                 || (!is_primary && cx.decl(&function.name).is_some_and(|decl| decl.lemma))

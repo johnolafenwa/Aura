@@ -3,4 +3,4 @@ error[AU2005]: decorator `@traced` is not supported
   |
 2 |     @traced
   |     ^
-  = help: decorators apply only to module-level functions; in a class body, `@property` before a method declares a read-only property
+  = help: decorators apply to module-level functions and class methods; write `@property` alone above a getter

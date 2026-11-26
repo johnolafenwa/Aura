@@ -1,10 +1,15 @@
 mod api_docs;
+mod class_items;
+mod profile;
+use class_items::method_source_name;
 mod requests;
+mod systems_data;
 use crate::sema::recover;
 pub use api_docs::{
     api_module_from_program, render_api_markdown, ApiDeclaration, ApiMember, ApiModule,
     API_DOCS_SCHEMA_VERSION,
 };
+pub use profile::with_freestanding_analysis;
 pub use requests::{
     prepare_rename_path_source, references_path_source, rename_path_source,
     signature_help_path_source, AnalysisRename, AnalysisSignatureHelp,
@@ -38,6 +43,9 @@ use crate::sema::{lookup_type, optional_type, poll_type};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AnalysisOutput {
     pub diagnostics: Vec<AnalysisDiagnostic>,
+    /// Half-open ranges of zero-based source lines discarded by build-time selection.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inactive_lines: Vec<std::ops::Range<usize>>,
     pub symbols: Vec<AnalysisSymbol>,
     pub occurrences: Vec<AnalysisOccurrence>,
     /// Source files read for the modules the analyzed file imports, directly
@@ -161,6 +169,7 @@ struct ResolvedMember {
 
 pub fn analyze_source(source: &str) -> AnalysisOutput {
     analyze_with_checker(
+        None,
         source,
         |error| error.render_path.is_none(),
         crate::check_source,
@@ -176,8 +185,8 @@ pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
             .is_none_or(|rendered| crate::absolutize(Path::new(rendered)) == analyzed)
     };
     let (mut output, reads) = crate::with_source_reads(|| {
-        analyze_with_checker(source, is_local, |candidate| {
-            crate::check_path_with_source_without_lockfile(path, candidate)
+        analyze_with_checker(Some(path), source, is_local, |candidate| {
+            profile::check(path, candidate)
         })
     });
     output.dependencies = reads
@@ -211,7 +220,7 @@ pub fn complete_path_source(
         character,
         trigger_character,
         is_local,
-        |candidate| crate::check_path_with_source_without_lockfile(path, candidate),
+        |candidate| profile::check(path, candidate),
     )
 }
 
@@ -239,12 +248,17 @@ pub fn complete_source(
     )
 }
 
-fn analyze_with_checker<L, F>(source: &str, is_local: L, mut check_program: F) -> AnalysisOutput
+fn analyze_with_checker<L, F>(
+    path: Option<&Path>,
+    source: &str,
+    is_local: L,
+    mut check_program: F,
+) -> AnalysisOutput
 where
     L: Fn(&Diagnostic) -> bool,
     F: FnMut(&str) -> Result<Program>,
 {
-    match parser::parse(source) {
+    match profile::parse(source) {
         Err(error) => {
             if let Some(program) =
                 recover_checked_program_after_parse_error_with(source, &error, &mut check_program)
@@ -264,16 +278,24 @@ where
             } else {
                 AnalysisOutput {
                     diagnostics: vec![analysis_diagnostic(&error)],
+                    inactive_lines: Vec::new(),
                     symbols: Vec::new(),
                     occurrences: Vec::new(),
                     dependencies: Vec::new(),
                 }
             }
         }
-        Ok(module) => {
-            let symbols = symbols_from_module(&module, source);
+        Ok(syntax) => {
             match check_program(source) {
                 Err(error) => {
+                    // A bad active declaration can prevent checking, but the selected
+                    // outline and inactive suites still belong to this configuration.
+                    let module = match path {
+                        Some(path) => crate::parse_path_with_source(path, source),
+                        None => parser::parse(source),
+                    }
+                    .unwrap_or(syntax);
+                    let symbols = symbols_from_module(&module, source);
                     // Keep hover, definitions, and references alive in the
                     // rest of the file while one statement is wrong.
                     if let Some((program, later)) =
@@ -288,13 +310,36 @@ where
                     }
                     AnalysisOutput {
                         diagnostics: vec![analysis_diagnostic(&error)],
+                        inactive_lines: module.inactive_lines,
                         symbols,
                         occurrences: Vec::new(),
                         dependencies: Vec::new(),
                     }
                 }
                 Ok(program) => {
+                    // The checked module contains generated declarations for decorators.
+                    // Show the user's source declarations that survived branch selection.
+                    let mut symbols = symbols_from_module(&syntax, source);
+                    if !program.module.inactive_lines.is_empty() {
+                        let active = |symbol: &AnalysisSymbol| {
+                            !program
+                                .module
+                                .inactive_lines
+                                .iter()
+                                .any(|lines| lines.contains(&symbol.line))
+                        };
+                        symbols.retain(&active);
+                        for symbol in &mut symbols {
+                            symbol.children.retain(&active);
+                        }
+                    }
                     let mut output = AnalysisBuilder::new(source, &program, symbols).build();
+                    output.diagnostics.extend(
+                        profile::diagnostics(&program)
+                            .iter()
+                            .filter(|error| is_local(error))
+                            .map(analysis_diagnostic),
+                    );
                     output
                         .diagnostics
                         .extend(unused_binding_warnings(source, &output.occurrences));
@@ -448,6 +493,7 @@ impl<'a> AnalysisBuilder<'a> {
             module_sources: Default::default(),
             output: AnalysisOutput {
                 diagnostics: Vec::new(),
+                inactive_lines: program.module.inactive_lines.clone(),
                 symbols,
                 occurrences: Vec::new(),
                 dependencies: Vec::new(),
@@ -462,15 +508,18 @@ impl<'a> AnalysisBuilder<'a> {
         for constant in &self.program.module.constants {
             self.visit_expr(&constant.value, &top_level_scope);
             if let Some(info) = self.program.constants.get(&constant.name) {
-                top_level_scope.insert(
-                    constant.name.clone(),
-                    BindingInfo {
-                        ty: info.ty.clone(),
-                        trait_bounds: Vec::new(),
-                        definition: self.constant_definition(info),
-                        hover: self.constant_hover(&constant.name, info),
-                    },
-                );
+                let binding = self.constant_binding_info(&constant.name, info);
+                if constant.mutable {
+                    self.push_occurrence(
+                        binding.definition.clone(),
+                        binding.hover.clone(),
+                        Some(binding.definition.clone()),
+                    );
+                    if let Some(annotation) = &constant.annotation {
+                        self.visit_type_reference(annotation);
+                    }
+                }
+                top_level_scope.insert(constant.name.clone(), binding);
             }
         }
         self.visit_stmts(&self.program.top_level_stmts, &mut top_level_scope);
@@ -484,6 +533,10 @@ impl<'a> AnalysisBuilder<'a> {
                     self.visit_stmts(&function_decl.body, &mut scope);
                 }
                 Item::Class(class_decl) => {
+                    // Union methods come from the parser and have no user-written bodies.
+                    if class_decl.c_union.is_some() {
+                        continue;
+                    }
                     let class_info = self.program.classes.get(&class_decl.name).unwrap();
                     for method in &class_decl.methods {
                         self.type_parameters = class_decl
@@ -492,6 +545,7 @@ impl<'a> AnalysisBuilder<'a> {
                             .chain(&method.type_params)
                             .cloned()
                             .collect();
+                        self.visit_class_item_declaration(class_info, method);
                         let method_info = class_info.methods.get(&method.name).unwrap();
                         let mut scope =
                             self.method_scope(class_decl.name.as_str(), method, method_info);
@@ -584,6 +638,7 @@ impl<'a> AnalysisBuilder<'a> {
                     self.type_parameters
                         .extend(declaration.type_params.iter().cloned());
                     self.visit_type_reference(&declaration.for_type);
+                    self.visit_delegation_field(declaration);
                     for argument in &declaration.trait_args {
                         self.visit_type_reference(argument);
                     }
@@ -788,8 +843,27 @@ impl<'a> AnalysisBuilder<'a> {
         let mut completions =
             requests::keyword_argument_completions(self, &source, line, character, &scope);
         completions.extend(self.top_level_completions());
+        if crate::freestanding_check_target().is_some() {
+            let (name, detail) = if line_text.starts_with(char::is_whitespace) {
+                ("asm", "Freestanding inline assembly")
+            } else {
+                ("module_asm", "Module-level assembly")
+            };
+            if line_text
+                .get(..character)
+                .is_some_and(|prefix| name.starts_with(prefix.trim_start()))
+            {
+                completions.push(AnalysisCompletion {
+                    name: name.into(),
+                    kind: "keyword".into(),
+                    detail: detail.into(),
+                    documentation: None,
+                });
+            }
+        }
         completions.retain(|completion| {
-            (completion.kind != "constant" || scope.contains_key(&completion.name))
+            (!matches!(completion.kind.as_str(), "constant" | "variable")
+                || scope.contains_key(&completion.name))
                 && !is_decorator_generated(&completion.name)
         });
         let mut names = completions
@@ -797,7 +871,7 @@ impl<'a> AnalysisBuilder<'a> {
             .map(|completion| completion.name.clone())
             .collect::<BTreeSet<_>>();
         for (name, binding) in scope {
-            if names.insert(name.clone()) {
+            if !is_generated_binding(&name) && names.insert(name.clone()) {
                 completions.push(AnalysisCompletion {
                     name,
                     kind: "variable".to_string(),
@@ -895,6 +969,9 @@ impl<'a> AnalysisBuilder<'a> {
     /// The hover for a module constant. A decorated function shows its
     /// decorators above its signature.
     fn constant_hover(&self, name: &str, info: &crate::sema::ConstantInfo) -> String {
+        if info.decl.mutable {
+            return format_value_hover("module binding", name, &info.ty);
+        }
         let generated = format!("{}{}", crate::sema::UNDECORATED_PREFIX, info.decl.name);
         let function = if info.module_name == self.program.module_name {
             self.program.functions.get(&generated)
@@ -1858,6 +1935,17 @@ impl<'a> AnalysisBuilder<'a> {
             detail: "Array[T] numeric multidimensional array".to_string(),
             documentation: None,
         });
+        for (name, detail) in [
+            ("fixed", "fixed[T, N] inline array"),
+            ("ptr", "ptr[T] raw pointer"),
+        ] {
+            completions.push(AnalysisCompletion {
+                name: name.into(),
+                kind: "type".into(),
+                detail: detail.into(),
+                documentation: None,
+            });
+        }
         for (visible_name, function_info) in &self.program.functions {
             completions.push(AnalysisCompletion {
                 name: visible_name.clone(),
@@ -1869,7 +1957,7 @@ impl<'a> AnalysisBuilder<'a> {
         for (visible_name, constant) in &self.program.constants {
             completions.push(AnalysisCompletion {
                 name: visible_name.clone(),
-                kind: "constant".to_string(),
+                kind: storage_symbol_kind(&constant.decl).into(),
                 detail: constant.ty.to_string(),
                 documentation: None,
             });
@@ -1913,6 +2001,9 @@ impl<'a> AnalysisBuilder<'a> {
         let mut completions = Vec::new();
         if let Type::Module(path) = receiver_type {
             if let Some(namespace) = self.module_namespace(path) {
+                if systems_data::builtin_mem(namespace) {
+                    completions.extend(systems_data::mem_completions());
+                }
                 if namespace.path == recover::MODULE {
                     completions.push(AnalysisCompletion {
                         name: recover::RECOVER.into(),
@@ -1944,7 +2035,7 @@ impl<'a> AnalysisBuilder<'a> {
                 for constant in namespace.constants.values() {
                     completions.push(AnalysisCompletion {
                         name: constant.decl.name.clone(),
-                        kind: "constant".to_string(),
+                        kind: storage_symbol_kind(&constant.decl).into(),
                         detail: constant.ty.to_string(),
                         documentation: None,
                     });
@@ -2028,6 +2119,10 @@ impl<'a> AnalysisBuilder<'a> {
                 // `__init__` runs only through a class call; the invariant check is hidden.
                 if name == crate::sema::INITIALIZER_NAME
                     || name == crate::ast::CLASS_INVARIANT_METHOD
+                    || (class_info.decl.c_union.is_some() && name.starts_with("__write_"))
+                    || name == "__drop__"
+                    || name.ends_with(crate::ast::PROPERTY_SETTER_SUFFIX)
+                    || is_decorator_generated(name)
                 {
                     continue;
                 }
@@ -2441,7 +2536,7 @@ impl<'a> AnalysisBuilder<'a> {
         }
         let doc = crate::read_source_file(Path::new(&source_path))
             .ok()
-            .and_then(|source| parser::parse(&source).ok())
+            .and_then(|source| parser::parse_all_syntax(&source).ok())
             .and_then(|module| module.doc);
         self.module_docs
             .borrow_mut()
@@ -2817,7 +2912,16 @@ impl<'a> AnalysisBuilder<'a> {
                 self.visit_stmts(&while_stmt.body, &mut loop_scope);
             }
             Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
-            Stmt::Expr(expr_stmt) => self.visit_expr(&expr_stmt.expr, scope),
+            Stmt::Expr(expr_stmt) => {
+                if let Ok(Some(assembly)) = crate::inline_asm::AsmStatement::parse(&expr_stmt.expr)
+                {
+                    for (_, operand) in assembly.inputs.into_iter().chain(assembly.outputs) {
+                        self.visit_expr(operand, scope);
+                    }
+                } else {
+                    self.visit_expr(&expr_stmt.expr, scope);
+                }
+            }
         }
     }
 
@@ -3150,7 +3254,9 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: hover.clone(),
             },
         );
-        self.push_occurrence(definition.clone(), hover, Some(definition));
+        if !is_generated_binding(name) {
+            self.push_occurrence(definition.clone(), hover, Some(definition));
+        }
     }
 
     /// The type and hover kind of a `with` item's name. A manager whose
@@ -3242,7 +3348,9 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: hover.clone(),
             },
         );
-        self.push_occurrence(declaration, hover, Some(definition));
+        if !is_generated_binding(&view.name) {
+            self.push_occurrence(declaration, hover, Some(definition));
+        }
     }
 
     fn keyword_argument_definition(
@@ -3477,8 +3585,8 @@ impl<'a> AnalysisBuilder<'a> {
                     self.visit_expr(&link.operand, scope);
                 }
             }
-            // A decorated function's generated parts have no source text.
-            ExprKind::Name(name) if is_decorator_generated(name) => {}
+            // Rewritten properties and decorated callables use internal bindings.
+            ExprKind::Name(name) if is_generated_binding(name) => {}
             ExprKind::Name(name) => {
                 if let Some(resolved) = self.resolve_name(name, scope) {
                     let hover = self.narrowed_hover(expr, resolved.hover);
@@ -3491,13 +3599,13 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::Member { object, field } => {
                 self.visit_expr(object, scope);
-                if let Some(resolved) = self.resolve_member_expr(object, field, scope) {
+                if let Some((range, member)) = self.written_union_member(expr, object, field, scope)
+                {
+                    self.push_occurrence(range, member.hover, member.definition);
+                } else if let Some(resolved) = self.resolve_member_expr(object, field, scope) {
                     let hover = self.narrowed_hover(expr, resolved.hover);
-                    self.push_occurrence(
-                        range_from_span(expr.span, field.len()),
-                        hover,
-                        resolved.definition,
-                    );
+                    let range = range_from_span(expr.span, method_source_name(field).len());
+                    self.push_occurrence(range, hover, resolved.definition);
                 }
             }
             ExprKind::Specialize { expr, type_args } => {
@@ -3508,6 +3616,9 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::Call { callee, args } => {
                 self.visit_expr(callee, scope);
+                if self.visit_offset_field(callee, args, scope) {
+                    return;
+                }
                 for arg in args {
                     if let Some(name) = &arg.name {
                         if let Some(definition) =
@@ -3840,6 +3951,17 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         match name {
+            "fixed" => Some(ResolvedSymbol {
+                hover: builtin_type_hover(
+                    "fixed[T, N]",
+                    "An inline array of N elements of type T.",
+                ),
+                definition: None,
+            }),
+            "ptr" => Some(ResolvedSymbol {
+                hover: builtin_type_hover("ptr[T]", "A raw address pointing to a value of type T."),
+                definition: None,
+            }),
             "Array" => Some(ResolvedSymbol {
                 hover: builtin_type_hover(
                     "Array[T]",
@@ -4006,6 +4128,14 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn resolve_member_type(&self, receiver_type: &Type, field: &str) -> Option<ResolvedMember> {
+        if let Some(element) = receiver_type.as_raw_pointer() {
+            let (signature, ty) = systems_data::raw_pointer_signature(element, field)?;
+            return Some(ResolvedMember {
+                hover: format!("```aura\n{signature}\n```"),
+                definition: None,
+                ty: Some(ty),
+            });
+        }
         if let Type::Module(path) = receiver_type {
             let namespace = self.module_namespace(path)?;
             if namespace.path == recover::MODULE && field == recover::RECOVER {
@@ -4026,6 +4156,11 @@ impl<'a> AnalysisBuilder<'a> {
                     definition: self.find_imported_module_range(&child.path),
                     ty: Some(Type::Module(child.path.clone())),
                 });
+            }
+            if systems_data::builtin_mem(namespace) {
+                if let Some(member) = systems_data::mem_member(field) {
+                    return Some(member);
+                }
             }
             if let Some(alias) = namespace.aliases.get(field) {
                 return Some(ResolvedMember {
@@ -4164,7 +4299,7 @@ impl<'a> AnalysisBuilder<'a> {
                     definition: Some(self.definition_range(
                         &class_info.module_name,
                         method_info.decl.span,
-                        &method_info.decl.name,
+                        method_source_name(&method_info.decl.name),
                     )),
                     ty: Some(crate::sema::substitute_type(
                         &method_info.signature.return_type,
@@ -4182,11 +4317,9 @@ impl<'a> AnalysisBuilder<'a> {
                     &trait_method.decl,
                     self.implementation_method_doc(trait_impl, &trait_method.decl),
                 ),
-                definition: Some(self.definition_range(
-                    &trait_impl.module_name,
-                    trait_method.decl.span,
-                    &trait_method.decl.name,
-                )),
+                definition: Some(
+                    self.implementation_method_definition(trait_impl, &trait_method.decl),
+                ),
                 ty: Some(crate::sema::substitute_type(
                     &trait_method.signature.return_type,
                     &substitutions,
@@ -4222,6 +4355,11 @@ impl<'a> AnalysisBuilder<'a> {
                 | BuiltinMember::IntegerToFloat
                 | BuiltinMember::DurationToMilliseconds
                 | BuiltinMember::DurationToSeconds => Some(Type::named("float64")),
+                BuiltinMember::IntegerBits(method) => Some(if method.counts() {
+                    Type::named("int64")
+                } else {
+                    receiver_type.clone()
+                }),
                 BuiltinMember::IntegerWrappingAdd
                 | BuiltinMember::IntegerWrappingSub
                 | BuiltinMember::IntegerWrappingMul
@@ -5386,6 +5524,7 @@ impl<'a> AnalysisBuilder<'a> {
                             // the Array, not one element.
                             "Array" if crate::parser::index_has_slice(index) => Some(ty.clone()),
                             "Array" => ty.type_arguments().first().cloned(),
+                            "fixed" => ty.as_fixed_array().map(|(element, _)| element.clone()),
                             "list" | "Span" => ty.type_arguments().first().cloned(),
                             "dict" => ty.type_arguments().get(1).cloned(),
                             "str" => Some(ty.clone()),
@@ -5746,6 +5885,16 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 let receiver_type = self.infer_expr_type(object, scope)?;
                 if let Type::Module(path) = &receiver_type {
+                    if field == "address_of"
+                        && self
+                            .module_namespace(path)
+                            .is_some_and(systems_data::builtin_mem)
+                    {
+                        return Some(Type::Named(
+                            "ptr".into(),
+                            vec![self.infer_expr_type(&args.first()?.value, scope)?],
+                        ));
+                    }
                     if self
                         .module_namespace(path)
                         .is_some_and(|module| module.path == recover::MODULE)
@@ -6187,6 +6336,9 @@ impl<'a> AnalysisBuilder<'a> {
 
         let iterable_ty = self.infer_expr_type(iterable, scope)?;
         match base_type_name(&iterable_ty) {
+            "fixed" => iterable_ty
+                .as_fixed_array()
+                .map(|(element, _)| element.clone()),
             "Queue" | "list" | "set" => iterable_ty.type_arguments().first().cloned(),
             _ => None,
         }
@@ -6493,6 +6645,14 @@ where
     }
 }
 
+fn storage_symbol_kind(decl: &crate::ast::ConstantDecl) -> &'static str {
+    if decl.mutable {
+        "variable"
+    } else {
+        "constant"
+    }
+}
+
 fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
     let lines = source.lines().collect::<Vec<_>>();
     let symbol =
@@ -6512,6 +6672,7 @@ fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
     let method_symbols = |methods: &[FunctionDecl], kind: fn(&FunctionDecl) -> &'static str| {
         methods
             .iter()
+            .filter(|method| !method.name.ends_with(crate::ast::PROPERTY_SETTER_SUFFIX))
             .map(|method| {
                 symbol(
                     &method.name,
@@ -6529,7 +6690,7 @@ fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
         .map(|constant| {
             symbol(
                 &constant.name,
-                "constant",
+                storage_symbol_kind(constant),
                 constant
                     .annotation
                     .as_ref()
@@ -6946,7 +7107,7 @@ fn base_type_name(ty: &Type) -> &str {
     }
 }
 
-fn expression_start_span(expr: &Expr) -> Span {
+pub(crate) fn expression_start_span(expr: &Expr) -> Span {
     let leftmost_child = match &expr.kind {
         ExprKind::Membership { value, .. } => Some(value.as_ref()),
         ExprKind::CompareChain { first, .. } => Some(first.as_ref()),
@@ -7333,6 +7494,10 @@ fn is_decorator_generated(name: &str) -> bool {
         || name.starts_with(crate::sema::DECORATED_PREFIX)
 }
 
+fn is_generated_binding(name: &str) -> bool {
+    name.contains(' ') || is_decorator_generated(name)
+}
+
 fn format_function_hover(function_decl: &FunctionDecl) -> String {
     let params = function_decl
         .params
@@ -7402,15 +7567,17 @@ fn format_method_hover_with_doc(method_decl: &FunctionDecl, doc: Option<&DocStri
         .chain(method_decl.params.iter().map(format_param_decl))
         .collect::<Vec<_>>()
         .join(", ");
-    with_doc(
-        format!(
-            "```aura\nmethod {}({}) -> {}\n```",
-            method_decl.name,
-            params,
-            format_decl_return(method_decl)
-        ),
-        doc,
-    )
+    let name = method_source_name(&method_decl.name);
+    let signature = format!(
+        "method {name}({params}) -> {}",
+        format_decl_return(method_decl)
+    );
+    let signature = if name != method_decl.name {
+        format!("@{name}.setter\n{signature}")
+    } else {
+        api_docs::decorated_signature(method_decl, &signature)
+    };
+    with_doc(format!("```aura\n{signature}\n```"), doc)
 }
 
 /// `Name[T: Bound, U] = target` for an alias declaration; the target is the
@@ -7450,6 +7617,9 @@ fn format_alias_detail(alias: &AliasInfo) -> String {
 }
 
 fn format_class_hover(class_info: &ClassInfo) -> String {
+    if !class_info.decl.layout_controls.is_default() {
+        return systems_data::layout_hover(&class_info.decl);
+    }
     if let Some(constructor) = class_info.builtin_constructor() {
         return match constructor {
             BuiltinClassConstructor::RandomRng => format!(
@@ -7708,7 +7878,7 @@ fn format_enum_variant_payload(payload: &crate::sema::EnumPayloadFieldInfo) -> S
 const KEYWORDS: &[&str] = &[
     "class", "enum", "trait", "def", "if", "elif", "else", "while", "for", "in", "match", "case",
     "with", "return", "assert", "try", "lambda", "public", "mut", "own", "indirect", "copy",
-    "break", "continue", "pass", "yield",
+    "break", "continue", "pass", "yield", "const",
 ];
 
 struct CompletionMeta {
@@ -7960,6 +8130,20 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
 }
 
 fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
+    if let Some(element) = receiver_type.as_raw_pointer() {
+        return ["read", "write", "volatile_read", "volatile_write", "offset"]
+            .into_iter()
+            .filter_map(|name| {
+                let (detail, _) = systems_data::raw_pointer_signature(element, name)?;
+                Some(AnalysisCompletion {
+                    name: name.into(),
+                    kind: "method".into(),
+                    detail,
+                    documentation: None,
+                })
+            })
+            .collect();
+    }
     let mut completions = Vec::new();
     match base_type_name(receiver_type) {
         "Span" => {
@@ -8390,7 +8574,14 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::RngNextInt,
         BuiltinMember::RngNextFloat,
         BuiltinMember::RngShuffle,
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        aura_core::integer_bits::BitMethod::ALL
+            .iter()
+            .copied()
+            .map(BuiltinMember::IntegerBits),
+    ) {
         if is_array_integer_arithmetic_member(builtin)
             && !matches!(
                 receiver_type,
@@ -8963,7 +9154,7 @@ fn recover_checked_program_after_member_errors_with(
             continue;
         }
 
-        match parser::parse(&candidate) {
+        match profile::parse(&candidate) {
             Ok(_) => match check_program(&candidate) {
                 Ok(program) => return Some(program),
                 Err(error) => {
@@ -9141,7 +9332,7 @@ where
         ));
     }
     for candidate in candidates {
-        let result = match parser::parse(&candidate) {
+        let result = match profile::parse(&candidate) {
             Ok(_) => check_program(&candidate),
             Err(error) => Err(error),
         };
@@ -9262,7 +9453,7 @@ where
     let mut candidate = source.to_string();
     let mut later = Vec::new();
     let mut lost_bindings = BTreeSet::new();
-    let check = |candidate: &str, check_program: &mut F| match parser::parse(candidate) {
+    let check = |candidate: &str, check_program: &mut F| match profile::parse(candidate) {
         Ok(_) => check_program(candidate),
         Err(error) => Err(error),
     };

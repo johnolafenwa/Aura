@@ -158,6 +158,9 @@ struct Api {
         i64,
         c_int,
     ) -> Status,
+    /// The `float16` products, which an old cuBLAS may lack. The one and
+    /// the zero they take are half-precision bits.
+    half: Option<HalfApi>,
     #[allow(clippy::type_complexity)]
     cublasDgemmStridedBatched: unsafe extern "C" fn(
         *mut c_void,
@@ -195,6 +198,93 @@ impl Drop for Library {
         }
     }
 }
+
+/// cuBLAS's matrix products of `float16` elements. These are the calls
+/// that take the type the terms are added in: `cublasHgemm` adds in half
+/// precision, and its results drift from the CPU device's and from
+/// other libraries' by several half-precision steps.
+#[allow(non_snake_case)]
+struct HalfApi {
+    #[allow(clippy::type_complexity)]
+    cublasGemmEx: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        c_int,
+        DevicePointer,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+    ) -> Status,
+    #[allow(clippy::type_complexity)]
+    cublasGemmBatchedEx: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        c_int,
+        DevicePointer,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+    ) -> Status,
+    #[allow(clippy::type_complexity)]
+    cublasGemmStridedBatchedEx: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        c_int,
+        i64,
+        DevicePointer,
+        c_int,
+        c_int,
+        i64,
+        *const f32,
+        DevicePointer,
+        c_int,
+        c_int,
+        i64,
+        c_int,
+        c_int,
+        c_int,
+    ) -> Status,
+}
+
+/// `CUDA_R_16F`: the elements of a product are halves.
+const HALF_TYPE: c_int = 2;
+/// `CUBLAS_COMPUTE_32F`: the terms of a product are added in `float32`,
+/// so the scale factors are `float32` too.
+const ADD_IN_SINGLE: c_int = 68;
+/// `CUBLAS_GEMM_DEFAULT`.
+const DEFAULT_ALGORITHM: c_int = -1;
 
 /// Opens the first of `names` the loader finds using `RTLD_LOCAL`.
 fn open(names: &[&str]) -> Option<Library> {
@@ -313,6 +403,16 @@ fn cuda_library_candidates(
     names
 }
 
+impl HalfApi {
+    fn load(cublas: &Library) -> Option<Self> {
+        Some(Self {
+            cublasGemmEx: load!(cublas, cublasGemmEx),
+            cublasGemmBatchedEx: load!(cublas, cublasGemmBatchedEx),
+            cublasGemmStridedBatchedEx: load!(cublas, cublasGemmStridedBatchedEx),
+        })
+    }
+}
+
 impl Api {
     fn load() -> Option<Self> {
         // The driver library that matches the kernel driver is the system
@@ -371,6 +471,7 @@ impl Api {
             cublasDgemmBatched: load!(cublas, cublasDgemmBatched),
             cublasSgemmStridedBatched: load!(cublas, cublasSgemmStridedBatched),
             cublasDgemmStridedBatched: load!(cublas, cublasDgemmStridedBatched),
+            half: HalfApi::load(&cublas),
             _libraries: [driver, nvrtc, cublas],
         })
     }
@@ -594,6 +695,200 @@ impl Runtime {
     }
 }
 
+/// The element type of a matrix product.
+#[derive(Clone, Copy)]
+enum Element {
+    Half,
+    Single,
+    Double,
+}
+
+impl Element {
+    const fn bytes(self) -> usize {
+        match self {
+            Self::Half => 2,
+            Self::Single => 4,
+            Self::Double => 8,
+        }
+    }
+}
+
+/// One cuBLAS product: the elements, the operations on the first and the
+/// second matrix, and the rows of the result, its columns and the inner
+/// dimension, all as cuBLAS counts them.
+#[derive(Clone, Copy)]
+struct Product {
+    kind: Element,
+    ops: (c_int, c_int),
+    sizes: (c_int, c_int, c_int),
+}
+
+impl Runtime {
+    fn half(&self) -> Result<&HalfApi> {
+        self.api
+            .half
+            .as_ref()
+            .ok_or_else(|| cuda_error("has a cuBLAS with no float16 matrix products"))
+    }
+
+    /// One product of the matrices at `a` and `b` into `c`. Each is an
+    /// address and how far apart its columns are.
+    ///
+    /// # Safety
+    ///
+    /// Each address must hold a whole matrix of the product's sizes.
+    unsafe fn gemm(
+        &self,
+        product: Product,
+        a: (DevicePointer, c_int),
+        b: (DevicePointer, c_int),
+        c: (DevicePointer, c_int),
+    ) -> Result<Status> {
+        let (api, handle) = (&self.api, self.cublas);
+        let ((ta, tb), (m, n, k)) = (product.ops, product.sizes);
+        // SAFETY: the caller upholds the sizes of the three matrices.
+        Ok(unsafe {
+            match product.kind {
+                Element::Half => (self.half()?.cublasGemmEx)(
+                    handle,
+                    ta,
+                    tb,
+                    m,
+                    n,
+                    k,
+                    &1.0,
+                    a.0,
+                    HALF_TYPE,
+                    a.1,
+                    b.0,
+                    HALF_TYPE,
+                    b.1,
+                    &0.0,
+                    c.0,
+                    HALF_TYPE,
+                    c.1,
+                    ADD_IN_SINGLE,
+                    DEFAULT_ALGORITHM,
+                ),
+                Element::Single => (api.cublasSgemm_v2)(
+                    handle, ta, tb, m, n, k, &1.0, a.0, a.1, b.0, b.1, &0.0, c.0, c.1,
+                ),
+                Element::Double => (api.cublasDgemm_v2)(
+                    handle, ta, tb, m, n, k, &1.0, a.0, a.1, b.0, b.1, &0.0, c.0, c.1,
+                ),
+            }
+        })
+    }
+
+    /// `count` products of the matrices whose addresses the tables at
+    /// `a`, `b` and `c` hold.
+    ///
+    /// # Safety
+    ///
+    /// Each table must hold `count` addresses of whole matrices.
+    unsafe fn gemm_batched(
+        &self,
+        product: Product,
+        a: (DevicePointer, c_int),
+        b: (DevicePointer, c_int),
+        c: (DevicePointer, c_int),
+        count: c_int,
+    ) -> Result<Status> {
+        let (api, handle) = (&self.api, self.cublas);
+        let ((ta, tb), (m, n, k)) = (product.ops, product.sizes);
+        // SAFETY: the caller upholds the tables and the matrices.
+        Ok(unsafe {
+            match product.kind {
+                Element::Half => (self.half()?.cublasGemmBatchedEx)(
+                    handle,
+                    ta,
+                    tb,
+                    m,
+                    n,
+                    k,
+                    &1.0,
+                    a.0,
+                    HALF_TYPE,
+                    a.1,
+                    b.0,
+                    HALF_TYPE,
+                    b.1,
+                    &0.0,
+                    c.0,
+                    HALF_TYPE,
+                    c.1,
+                    count,
+                    ADD_IN_SINGLE,
+                    DEFAULT_ALGORITHM,
+                ),
+                Element::Single => (api.cublasSgemmBatched)(
+                    handle, ta, tb, m, n, k, &1.0, a.0, a.1, b.0, b.1, &0.0, c.0, c.1, count,
+                ),
+                Element::Double => (api.cublasDgemmBatched)(
+                    handle, ta, tb, m, n, k, &1.0, a.0, a.1, b.0, b.1, &0.0, c.0, c.1, count,
+                ),
+            }
+        })
+    }
+
+    /// `count` products of matrices one after another. Each of `a`, `b`
+    /// and `c` is an address, how far apart its columns are, and the
+    /// elements from one matrix to the next.
+    ///
+    /// # Safety
+    ///
+    /// Each address must hold `count` whole matrices spaced by its step.
+    unsafe fn gemm_strided(
+        &self,
+        product: Product,
+        a: (DevicePointer, c_int, i64),
+        b: (DevicePointer, c_int, i64),
+        c: (DevicePointer, c_int, i64),
+        count: c_int,
+    ) -> Result<Status> {
+        let (api, handle) = (&self.api, self.cublas);
+        let ((ta, tb), (m, n, k)) = (product.ops, product.sizes);
+        // SAFETY: the caller upholds the sizes and the spacing.
+        Ok(unsafe {
+            match product.kind {
+                Element::Half => (self.half()?.cublasGemmStridedBatchedEx)(
+                    handle,
+                    ta,
+                    tb,
+                    m,
+                    n,
+                    k,
+                    &1.0,
+                    a.0,
+                    HALF_TYPE,
+                    a.1,
+                    a.2,
+                    b.0,
+                    HALF_TYPE,
+                    b.1,
+                    b.2,
+                    &0.0,
+                    c.0,
+                    HALF_TYPE,
+                    c.1,
+                    c.2,
+                    count,
+                    ADD_IN_SINGLE,
+                    DEFAULT_ALGORITHM,
+                ),
+                Element::Single => (api.cublasSgemmStridedBatched)(
+                    handle, ta, tb, m, n, k, &1.0, a.0, a.1, a.2, b.0, b.1, b.2, &0.0, c.0, c.1,
+                    c.2, count,
+                ),
+                Element::Double => (api.cublasDgemmStridedBatched)(
+                    handle, ta, tb, m, n, k, &1.0, a.0, a.1, a.2, b.0, b.1, b.2, &0.0, c.0, c.1,
+                    c.2, count,
+                ),
+            }
+        })
+    }
+}
+
 static RUNTIME: OnceLock<Option<Runtime>> = OnceLock::new();
 
 fn runtime() -> Option<&'static Runtime> {
@@ -705,6 +1000,31 @@ impl Buffer {
         Self::from_bytes(storage_bytes(&storage))
     }
 
+    /// A buffer holding the elements of a non-empty `float32` Array as
+    /// half-precision floats: the memory of a `float16` tensor.
+    pub(crate) fn from_half_array(elements: &ArrayValue) -> Result<Self> {
+        Self::from_bytes(&super::tensor_kernels::half_bytes(elements)?)
+    }
+
+    /// A `float32` Array holding the buffer's half-precision elements.
+    pub(crate) fn to_half_array(&self, shape: &[usize]) -> Result<ArrayValue> {
+        let runtime = started()?;
+        let len = checked_array_element_count(shape)?;
+        if len.checked_mul(2) != Some(self.bytes) {
+            return Err(cuda_error(
+                "received a buffer whose size does not match its shape",
+            ));
+        }
+        runtime.enter()?;
+        let mut bytes = vec![0_u8; self.bytes];
+        // SAFETY: `bytes` has room for the buffer's bytes.
+        let status = unsafe {
+            (runtime.api.cuMemcpyDtoH_v2)(bytes.as_mut_ptr().cast(), self.pointer, self.bytes)
+        };
+        check(status, "copy elements from the device")?;
+        super::tensor_kernels::from_half_bytes(shape, &bytes)
+    }
+
     /// A buffer holding `bytes`.
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let runtime = started()?;
@@ -796,8 +1116,10 @@ fn kernel_cache_file(source: &str, compiler: (c_int, c_int)) -> Option<std::path
     };
     let mut hash = Sha256::new();
     hash.update(format!(
-        "nvrtc {}.{} {COMPILE_OPTION}\n",
-        compiler.0, compiler.1
+        "nvrtc {}.{} {COMPILE_OPTION}{}\n",
+        compiler.0,
+        compiler.1,
+        if soft_half() { SOFT_HALF_OPTION } else { "" }
     ));
     hash.update(source);
     let name: String = hash
@@ -1075,6 +1397,18 @@ fn keep_kernel_image(file: &std::path::Path, image: &[u8]) {
 /// whose `a * b + c` rounds twice.
 const COMPILE_OPTION: &str = "--fmad=false";
 
+/// Asks the kernels of a `float16` plan to convert in C, in place of the
+/// GPU's own instructions. `AURA_TENSOR_SOFT_HALF=1` turns it on, for a
+/// compiler that does not take the instructions.
+const SOFT_HALF_OPTION: &str = "-DAURA_SOFT_HALF";
+
+fn soft_half() -> bool {
+    static SOFT: OnceLock<bool> = OnceLock::new();
+    *SOFT.get_or_init(|| {
+        std::env::var("AURA_TENSOR_SOFT_HALF").is_ok_and(|value| !value.is_empty() && value != "0")
+    })
+}
+
 impl Compiled {
     /// The PTX image NVRTC compiles `source` to.
     fn compile(runtime: &Runtime, source: &str) -> Result<Vec<u8>> {
@@ -1096,9 +1430,12 @@ impl Compiled {
         };
         check(status, "start a kernel compile")?;
         let option = CString::new(COMPILE_OPTION).expect("the option has no NUL byte");
-        let options = [option.as_ptr()];
-        // SAFETY: `handle` is the program just created.
-        let status = unsafe { (api.nvrtcCompileProgram)(handle, 1, options.as_ptr()) };
+        let soft = CString::new(SOFT_HALF_OPTION).expect("the option has no NUL byte");
+        let options = [option.as_ptr(), soft.as_ptr()];
+        let count = if soft_half() { 2 } else { 1 };
+        // SAFETY: `handle` is the program just created, and `options`
+        // holds `count` NUL-terminated strings at least.
+        let status = unsafe { (api.nvrtcCompileProgram)(handle, count, options.as_ptr()) };
         let image = if status == 0 {
             read_nvrtc_ptx(handle, api.nvrtcGetPTXSize, api.nvrtcGetPTX)
         } else {
@@ -1156,9 +1493,9 @@ impl Compiled {
         for action in &program.actions {
             let name = match action {
                 Action::Kernel { name, .. } => Some(name.as_str()),
-                Action::Matmul {
-                    spread: Some(_), ..
-                } => Some(tensor_codegen::ADDRESSES_KERNEL),
+                Action::Matmul { .. } if action.is_tabled() => {
+                    Some(tensor_codegen::ADDRESSES_KERNEL)
+                }
                 _ => None,
             };
             if let Some(name) = name {
@@ -1314,7 +1651,14 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     copied += 1;
                     copied_elements += elements.len();
                     let storage = elements.elements()?;
-                    let bytes = storage_bytes(&storage);
+                    // A `float16` leaf goes to the device as halves.
+                    let halves = match slot {
+                        Slot::Leaf { dtype, .. } if *dtype == super::HALF_DTYPE => {
+                            Some(super::tensor_kernels::half_bytes(elements)?)
+                        }
+                        _ => None,
+                    };
+                    let bytes = halves.as_deref().unwrap_or_else(|| storage_bytes(&storage));
                     validate_leaf_byte_len(slot, bytes.len())?;
                     if bytes.len() <= MAX_STAGED_LEAF_BYTES {
                         staged.resize(staged.len().next_multiple_of(8), 0);
@@ -1407,32 +1751,65 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 output,
                 bytes,
                 double,
+                half,
                 rows,
                 inner,
                 columns,
                 pairs,
                 swapped,
                 spread,
+                wide,
             } => Buffer::new(*bytes).and_then(|made| {
                 let (left, right) = (pointer(&buffers, *left), pointer(&buffers, *right));
-                let element = if *double { 8 } else { 4 };
+                let kind = match (*half, *double) {
+                    (true, _) => Element::Half,
+                    (_, true) => Element::Double,
+                    _ => Element::Single,
+                };
+                let element = kind.bytes();
+                let tabled = action.is_tabled();
                 let params =
                     plan_cublas_matmul(*rows, *inner, *columns, element, pairs, *swapped, spread)?;
                 let (rows, inner, columns) = (params.rows_i, params.inner_i, params.columns_i);
-                let (right_op, right_step) = (params.right_op, params.right_step);
-                let (left_op, left_step) = (params.left_op, params.left_step);
+                // cuBLAS matrices are column-major. A row-major product
+                // A B is the column-major product of B and A as stored,
+                // which is the transpose of the same result. A matrix that
+                // is part of wider rows has its columns that far apart.
+                let (right_op, left_op) = (params.right_op, params.left_op);
+                let right_step = match wide.1 {
+                    Some(step) => checked_cublas_dim(step, "right row stride")?,
+                    None => params.right_step,
+                };
+                let left_step = match wide.0 {
+                    Some(step) => checked_cublas_dim(step, "left row stride")?,
+                    None => params.left_step,
+                };
+                let shape = Product {
+                    kind,
+                    ops: (right_op, left_op),
+                    sizes: (columns, rows, inner),
+                };
                 let product = params.product_bytes;
-                let mut status = 0;
                 let count = pairs.len();
-                if let (Some((_, starts)), Some(spread_params)) = (spread, params.spread) {
-                    // The products go beside each other in wider rows,
-                    // so each has its own place: one batched call takes
+                let status = if tabled {
+                    // The matrices are not one after another: the
+                    // products go beside each other in wider rows, or an
+                    // operand is read from them. One batched call takes
                     // the address of every matrix. The offsets are the
                     // same on every run and their copy on the device is
                     // kept; a kernel adds the buffers of this run.
+                    let table_params = match &params.spread {
+                        Some(spread_params) => spread_params.table,
+                        None => plan_address_table(count)?,
+                    };
+                    let result_step = match &params.spread {
+                        Some(spread_params) => spread_params.step_i,
+                        None => columns,
+                    };
+                    let count_i = checked_cublas_dim(count, "batch count")?;
                     let mut offsets = Vec::new();
                     offsets
-                        .try_reserve_exact(spread_params.table_bytes)
+                        .try_reserve_exact(table_params.table_bytes)
                         .map_err(|_| cuda_error("could not allocate matmul address offsets"))?;
                     let place = |offset: usize| -> Result<[u8; 8]> {
                         let byte_offset = offset
@@ -1447,11 +1824,18 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     for pair in pairs {
                         offsets.extend(place(pair.0)?);
                     }
-                    for &start in starts {
+                    let out_matrix = product / element;
+                    for index in 0..count {
+                        let start = match spread {
+                            Some((_, starts)) => starts[index],
+                            None => index
+                                .checked_mul(out_matrix)
+                                .ok_or_else(|| cuda_error("matmul output offset overflows"))?,
+                        };
                         offsets.extend(place(start)?);
                     }
                     let table = kept_constant(runtime, &offsets).and_then(|offsets| {
-                        let table = Buffer::new(spread_params.table_bytes)?;
+                        let table = Buffer::new(table_params.table_bytes)?;
                         let mut arguments: [u64; 6] = [
                             table.pointer,
                             offsets.pointer,
@@ -1470,7 +1854,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         let status = unsafe {
                             (api.cuLaunchKernel)(
                                 compiled.functions[tensor_codegen::ADDRESSES_KERNEL] as *mut c_void,
-                                spread_params.address_blocks,
+                                table_params.address_blocks,
                                 1,
                                 1,
                                 BLOCK_THREADS as c_uint,
@@ -1486,107 +1870,41 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         tables.push(offsets);
                         Ok(Arc::new(table))
                     });
-                    match table {
-                        Ok(table) => {
-                            let each = spread_params.each_bytes;
-                            let (a, b, c) = (
-                                table.pointer,
-                                table.pointer + each,
-                                table.pointer + 2 * each,
-                            );
-                            // SAFETY: each address is a whole matrix
-                            // inside its buffer, and the rows of a product
-                            // are `step` elements apart in the result.
-                            status = unsafe {
-                                if *double {
-                                    (api.cublasDgemmBatched)(
-                                        runtime.cublas,
-                                        right_op,
-                                        left_op,
-                                        columns,
-                                        rows,
-                                        inner,
-                                        &1.0,
-                                        a,
-                                        right_step,
-                                        b,
-                                        left_step,
-                                        &0.0,
-                                        c,
-                                        spread_params.step_i,
-                                        spread_params.count_i,
-                                    )
-                                } else {
-                                    (api.cublasSgemmBatched)(
-                                        runtime.cublas,
-                                        right_op,
-                                        left_op,
-                                        columns,
-                                        rows,
-                                        inner,
-                                        &1.0,
-                                        a,
-                                        right_step,
-                                        b,
-                                        left_step,
-                                        &0.0,
-                                        c,
-                                        spread_params.step_i,
-                                        spread_params.count_i,
-                                    )
-                                }
-                            };
-                            tables.push(table);
-                        }
-                        Err(error) => {
-                            buffers[*output] = Some(Arc::new(made));
-                            return Err(error);
-                        }
-                    }
+                    table.and_then(|table| {
+                        let each = table_params.each_bytes;
+                        // SAFETY: each address is a whole matrix inside
+                        // its buffer, with rows the given steps apart.
+                        let status = unsafe {
+                            runtime.gemm_batched(
+                                shape,
+                                (table.pointer, right_step),
+                                (table.pointer + each, left_step),
+                                (table.pointer + 2 * each, result_step),
+                                count_i,
+                            )
+                        };
+                        tables.push(table);
+                        status
+                    })
                 } else if let Some(tall) = params.tall.filter(|_| {
                     count > 1 && params.left_stacked && params.right_shared && !swapped.0
                 }) {
                     // A stack of matrices times one shared matrix is one
                     // product with the stack read as a single tall matrix.
+                    let shape = Product {
+                        sizes: (columns, tall, inner),
+                        ..shape
+                    };
                     // SAFETY: the left buffer holds `count` matrices in a
                     // row and the output holds as many products.
-                    status = unsafe {
-                        if *double {
-                            (api.cublasDgemm_v2)(
-                                runtime.cublas,
-                                right_op,
-                                left_op,
-                                columns,
-                                tall,
-                                inner,
-                                &1.0,
-                                right,
-                                right_step,
-                                left,
-                                left_step,
-                                &0.0,
-                                made.pointer,
-                                columns,
-                            )
-                        } else {
-                            (api.cublasSgemm_v2)(
-                                runtime.cublas,
-                                right_op,
-                                left_op,
-                                columns,
-                                tall,
-                                inner,
-                                &1.0,
-                                right,
-                                right_step,
-                                left,
-                                left_step,
-                                &0.0,
-                                made.pointer,
-                                columns,
-                            )
-                        }
-                    };
+                    unsafe {
+                        runtime.gemm(
+                            shape,
+                            (right, right_step),
+                            (left, left_step),
+                            (made.pointer, columns),
+                        )
+                    }
                 } else if let Some((a_step, b_step, c_step, batch_count)) = params
                     .strided_batch
                     .filter(|_| count > 1 && params.left_stacked && params.right_stacked)
@@ -1594,56 +1912,18 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     // Matching stacks on both sides are one batched call.
                     // SAFETY: every buffer holds `count` whole matrices
                     // spaced by its step.
-                    status = unsafe {
-                        if *double {
-                            (api.cublasDgemmStridedBatched)(
-                                runtime.cublas,
-                                right_op,
-                                left_op,
-                                columns,
-                                rows,
-                                inner,
-                                &1.0,
-                                right,
-                                right_step,
-                                a_step,
-                                left,
-                                left_step,
-                                b_step,
-                                &0.0,
-                                made.pointer,
-                                columns,
-                                c_step,
-                                batch_count,
-                            )
-                        } else {
-                            (api.cublasSgemmStridedBatched)(
-                                runtime.cublas,
-                                right_op,
-                                left_op,
-                                columns,
-                                rows,
-                                inner,
-                                &1.0,
-                                right,
-                                right_step,
-                                a_step,
-                                left,
-                                left_step,
-                                b_step,
-                                &0.0,
-                                made.pointer,
-                                columns,
-                                c_step,
-                                batch_count,
-                            )
-                        }
-                    };
+                    unsafe {
+                        runtime.gemm_strided(
+                            shape,
+                            (right, right_step, a_step),
+                            (left, left_step, b_step),
+                            (made.pointer, columns, c_step),
+                            batch_count,
+                        )
+                    }
                 } else {
+                    let mut status = Ok(0);
                     for (index, (left_offset, right_offset)) in pairs.iter().enumerate() {
-                        // cuBLAS matrices are column-major. A row-major product
-                        // A B is the column-major product of B and A as stored,
-                        // which is the transpose of the same result.
                         let a_bytes = right_offset
                             .checked_mul(element)
                             .and_then(|bytes| u64::try_from(bytes).ok())
@@ -1662,49 +1942,16 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         // SAFETY: each pointer addresses a whole matrix of the
                         // given size inside its buffer.
                         status = unsafe {
-                            if *double {
-                                (api.cublasDgemm_v2)(
-                                    runtime.cublas,
-                                    right_op,
-                                    left_op,
-                                    columns,
-                                    rows,
-                                    inner,
-                                    &1.0,
-                                    a,
-                                    right_step,
-                                    b,
-                                    left_step,
-                                    &0.0,
-                                    c,
-                                    columns,
-                                )
-                            } else {
-                                (api.cublasSgemm_v2)(
-                                    runtime.cublas,
-                                    right_op,
-                                    left_op,
-                                    columns,
-                                    rows,
-                                    inner,
-                                    &1.0,
-                                    a,
-                                    right_step,
-                                    b,
-                                    left_step,
-                                    &0.0,
-                                    c,
-                                    columns,
-                                )
-                            }
+                            runtime.gemm(shape, (a, right_step), (b, left_step), (c, columns))
                         };
-                        if status != 0 {
+                        if !matches!(status, Ok(0)) {
                             break;
                         }
                     }
-                }
+                    status
+                };
                 buffers[*output] = Some(Arc::new(made));
-                check(status, "multiply matrices")
+                check(status?, "multiply matrices")
             }),
             Action::Alias { output, input } => {
                 buffers[*output] = buffers[*input].clone();
@@ -2288,13 +2535,40 @@ fn read_nvrtc_log(
         .unwrap_or_default()
 }
 
-#[derive(Debug)]
-struct SpreadParams {
-    step_i: c_int,
-    count_i: c_int,
+/// The table of matrix addresses a batched product reads: its size, where
+/// its second and third parts start, and the blocks of the kernel that
+/// fills it.
+#[derive(Clone, Copy, Debug)]
+struct TableParams {
     table_bytes: usize,
     each_bytes: DevicePointer,
     address_blocks: c_uint,
+}
+
+#[derive(Debug)]
+struct SpreadParams {
+    step_i: c_int,
+    table: TableParams,
+}
+
+fn plan_address_table(count: usize) -> Result<TableParams> {
+    let table_bytes = count
+        .checked_mul(24)
+        .filter(|&bytes| bytes <= isize::MAX as usize)
+        .ok_or_else(|| cuda_error("matmul address table size overflows"))?;
+    let each_bytes = count
+        .checked_mul(8)
+        .and_then(|bytes| DevicePointer::try_from(bytes).ok())
+        .ok_or_else(|| cuda_error("matmul address table offset overflows"))?;
+    let address_threads = count
+        .checked_mul(3)
+        .ok_or_else(|| cuda_error("matmul address thread count overflows"))?;
+    let address_blocks = checked_grid_blocks(address_threads)?;
+    Ok(TableParams {
+        table_bytes,
+        each_bytes,
+        address_blocks,
+    })
 }
 
 #[derive(Debug)]
@@ -2402,25 +2676,10 @@ fn plan_cublas_matmul(
                 ));
             }
             let step_i = checked_cublas_dim(*step, "spread stride")?;
-            let count_i = checked_cublas_dim(count, "batch count")?;
-            let table_bytes = count
-                .checked_mul(24)
-                .filter(|&bytes| bytes <= isize::MAX as usize)
-                .ok_or_else(|| cuda_error("matmul spread address table size overflows"))?;
-            let each_bytes = count
-                .checked_mul(8)
-                .and_then(|bytes| DevicePointer::try_from(bytes).ok())
-                .ok_or_else(|| cuda_error("matmul spread table offset overflows"))?;
-            let address_threads = count
-                .checked_mul(3)
-                .ok_or_else(|| cuda_error("matmul spread thread count overflows"))?;
-            let address_blocks = checked_grid_blocks(address_threads)?;
+            checked_cublas_dim(count, "batch count")?;
             Some(SpreadParams {
                 step_i,
-                count_i,
-                table_bytes,
-                each_bytes,
-                address_blocks,
+                table: plan_address_table(count)?,
             })
         }
         None => None,
@@ -2448,9 +2707,16 @@ fn validate_leaf_byte_len(slot: &Slot, actual_bytes: usize) -> Result<usize> {
     let Slot::Leaf { dtype, shape } = slot else {
         return Err(cuda_error("expected a leaf slot"));
     };
-    let dtype = ArrayDType::from_code(*dtype)
-        .ok_or_else(|| cuda_error("received an unknown leaf dtype"))?;
-    let (_, expected_bytes) = super::checked_tensor_byte_len(shape, dtype)?;
+    let expected_bytes = if *dtype == super::HALF_DTYPE {
+        checked_array_element_count(shape)?
+            .checked_mul(2)
+            .filter(|&bytes| bytes <= isize::MAX as usize)
+            .ok_or_else(|| cuda_error("float16 leaf byte size overflows"))?
+    } else {
+        let dtype = ArrayDType::from_code(*dtype)
+            .ok_or_else(|| cuda_error("received an unknown leaf dtype"))?;
+        super::checked_tensor_byte_len(shape, dtype)?.1
+    };
     if actual_bytes != expected_bytes {
         return Err(cuda_error(format!(
             "received a leaf buffer of {actual_bytes} bytes for a shape requiring {expected_bytes} bytes"

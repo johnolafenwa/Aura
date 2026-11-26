@@ -93,6 +93,10 @@ macro_rules! io_timeout_or_return {
     };
 }
 
+mod const_eval;
+mod const_memory;
+pub(crate) use const_eval::evaluate_constants;
+
 pub type StdoutSink = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
 pub fn run(module: &MirModule) -> Result<RunOutput> {
@@ -224,6 +228,7 @@ fn run_resolved_entry(
                             program_args,
                             trusted_ffi,
                         );
+                        runtime.raw_memory_allowed = trusted_ffi;
                         runtime.run_entry(task_entry.as_deref())
                     })
                 } else {
@@ -235,6 +240,7 @@ fn run_resolved_entry(
                         program_args,
                         trusted_ffi,
                     );
+                    runtime.raw_memory_allowed = trusted_ffi;
                     catch_lightweight_task_failure(|| runtime.run_entry(entry.as_deref()))
                 };
                 let rendered_stdout = lock_stdout(&stdout).clone();
@@ -404,7 +410,13 @@ fn untrusted_ffi_in_rvalue(value: &Rvalue) -> Option<&str> {
         Rvalue::Construct { fields, .. } => fields
             .iter()
             .find_map(|field| untrusted_ffi_in_operand(&field.value)),
-        Rvalue::UnionTagTest { .. }
+        // Raw pointer reads, writes and field addresses are raw memory.
+        Rvalue::CPointerAccess { .. } => Some("mem::pointer_access"),
+        Rvalue::CFieldAddress { .. } => Some("mem::field_address"),
+        Rvalue::ModuleStore { value, .. } => untrusted_ffi_in_operand(value),
+        Rvalue::ModuleLoad { .. }
+        | Rvalue::ModuleAddress { .. }
+        | Rvalue::UnionTagTest { .. }
         | Rvalue::UnionTakePayload { .. }
         | Rvalue::TupleTakeElement { .. } => None,
     }
@@ -447,6 +459,12 @@ fn untrusted_ffi_diagnostic(symbol: &str) -> Diagnostic {
 }
 
 fn reject_untrusted_extern_calls(module: &MirModule, entry: Option<&str>) -> Result<()> {
+    if module.foreign_link.asm_arch.is_some() {
+        return Err(Diagnostic::coded(
+            "AU2090",
+            "machine assembly requires freestanding native code",
+        ));
+    }
     // Loading a library runs its initializers, so only MIR lowered from a
     // package whose manifest opted in may name one.
     if !module.foreign_link.is_empty() {
@@ -519,8 +537,11 @@ fn reject_untrusted_extern_calls(module: &MirModule, entry: Option<&str>) -> Res
                             | CleanupCallee::CloseTaskGroup
                             | CleanupCallee::Nothing => None,
                         },
+                        Instruction::InlineAsm { .. } => Some("asm"),
                         Instruction::Safepoint
                         | Instruction::SourceLocation { .. }
+                        | Instruction::ArmDrop { .. }
+                        | Instruction::EndOwner { .. }
                         | Instruction::SourceName { .. }
                         | Instruction::Retain { .. }
                         | Instruction::Release { .. }
@@ -571,8 +592,11 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
             .iter()
             .any(|instruction| match instruction {
                 Instruction::Assign { value, .. } => rvalue_uses_lightweight_tasks(value),
+                Instruction::InlineAsm { .. } => false,
                 Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
+                | Instruction::ArmDrop { .. }
+                | Instruction::EndOwner { .. }
                 | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
@@ -689,6 +713,10 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Construct { fields, .. } => fields
             .iter()
             .any(|field| operand_is_process_run_function(&field.value)),
+        Rvalue::CPointerAccess { .. } => false,
+        Rvalue::CFieldAddress { .. } => false,
+        Rvalue::ModuleStore { value, .. } => operand_is_process_run_function(value),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => false,
         Rvalue::TupleTakeElement { .. } | Rvalue::ModuleConstant { .. } => false,
     }
 }
@@ -1039,7 +1067,14 @@ fn validate_runtime_module_complexity_with_limits(
     Ok(())
 }
 
+#[path = "mir_runtime_drop.rs"]
+mod class_drop;
+
 struct MirRuntime {
+    raw_memory_allowed: bool,
+    borrowed_raw_cells: raw_cells::SharedCells,
+    raw_parameters: Arc<raw_cells::ParameterLayouts>,
+    has_owner_hooks: bool,
     module: Arc<MirModule>,
     /// Explicit-tag layout plans keyed by canonical union identity
     /// (ADR-0052 A9); an injection into an unplanned union is refused.
@@ -1065,6 +1100,7 @@ struct MirRuntime {
     task_ancestry: Vec<RuntimeTaskFrame>,
     return_type_stack: Vec<Type>,
     constant_states: Arc<Mutex<HashMap<String, MirConstantState>>>,
+    eval_budget: Option<const_eval::Budget>,
     /// Projection returned by the most recently completed child call and
     /// awaiting BeginReturnedLoan in the current frame.
     pending_returned_view_projection: Option<String>,
@@ -1163,12 +1199,19 @@ fn try_clone_mir_value(value: &Value) -> Result<Value> {
     try_clone_array_containing_value(value)
 }
 
+#[path = "mir_runtime_raw_cells.rs"]
+mod raw_cells;
+
 #[derive(Default)]
 struct Env {
+    raw_cells: raw_cells::SharedCells,
+    lexical_owners: BTreeSet<String>,
+    owner_order: Vec<String>,
     values: HashMap<String, Value>,
     shared_values: HashMap<String, Arc<Value>>,
     types: HashMap<String, Type>,
     loans: BTreeMap<String, RuntimeLoan>,
+    type_args: HashMap<String, Type>,
 }
 
 #[derive(Clone)]
@@ -1720,9 +1763,14 @@ impl Env {
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
 
+        if self.raw_cells.contains_key(root) {
+            self.write_raw_cell(root, rest, place, &value)?;
+        }
         if rest.is_empty() {
             self.shared_values.remove(root);
-            return Ok(self.values.insert((*root).to_string(), value));
+            let replaced = self.values.insert((*root).to_string(), value);
+            self.update_addressed_members(root)?;
+            return Ok(replaced);
         }
 
         let root_value = self
@@ -1733,7 +1781,9 @@ impl Env {
             .iter()
             .map(|segment| segment.as_str())
             .collect::<Vec<_>>();
-        write_nested_place_replacing(root_value, &rest_refs, value, place)
+        let replaced = write_nested_place_replacing(root_value, &rest_refs, value, place)?;
+        self.update_addressed_members(root)?;
+        Ok(replaced)
     }
 
     fn ensure_place_mutation_allowed(&self, place: &str) -> Result<()> {
@@ -2143,7 +2193,6 @@ fn enum_projection_index(
     Ok(index)
 }
 
-#[cfg(test)]
 fn write_nested_place(
     current: &mut Value,
     segments: &[&str],
@@ -2654,6 +2703,12 @@ fn evaluate_json_mir_host_call(
                 Ok(bound) => bound,
                 Err(error) => return Some(Err(error)),
             };
+            if aura_runtime::builtin_limit::active() {
+                return Some(
+                    borrow_mir_string(&bound[0].value, env, name)
+                        .and_then(aura_runtime::runtime_value::json_parse_on_caller),
+                );
+            }
             let prepared = prepare_json_codec_source(|| {
                 borrow_mir_string(&bound[0].value, env, name).and_then(clone_json_codec_source)
             });
@@ -2941,6 +2996,15 @@ impl MirRuntime {
                 .collect::<HashMap<_, _>>(),
         );
         Self {
+            raw_memory_allowed: true,
+            borrowed_raw_cells: Default::default(),
+            raw_parameters: Arc::new(raw_cells::parameter_layouts(&module)),
+            has_owner_hooks: module.classes.iter().any(|class| {
+                class
+                    .methods
+                    .iter()
+                    .any(|method| method.name == crate::sema::DROP_HOOK)
+            }),
             module: Arc::new(module),
             union_layouts,
             safepoints_enabled,
@@ -2958,6 +3022,7 @@ impl MirRuntime {
             call_stack: Vec::new(),
             task_ancestry: Vec::new(),
             return_type_stack: Vec::new(),
+            eval_budget: None,
             constant_states: Arc::new(Mutex::new(HashMap::new())),
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
@@ -2995,6 +3060,11 @@ impl MirRuntime {
             generator_body: false,
             callback_closures: Arc::clone(&other.callback_closures),
             trusted_ffi: other.trusted_ffi,
+            raw_memory_allowed: other.raw_memory_allowed,
+            borrowed_raw_cells: Default::default(),
+            raw_parameters: Arc::clone(&other.raw_parameters),
+            has_owner_hooks: other.has_owner_hooks,
+            eval_budget: None,
         }
     }
 
@@ -3060,6 +3130,20 @@ impl MirRuntime {
                 None => {}
             }
         }
+        if let Some(frozen) = self
+            .module
+            .constants
+            .iter()
+            .find(|constant| constant.key == key)
+            .and_then(|constant| constant.frozen.as_ref())
+        {
+            let value = Arc::new(frozen.thaw());
+            self.constant_states
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(key.to_string(), MirConstantState::Ready(value.clone()));
+            return Ok(value);
+        }
         self.constant_states
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -3092,7 +3176,22 @@ impl MirRuntime {
     }
 
     fn initialize_module_constants(&mut self) -> Result<()> {
-        for constant in self.module.constants.clone() {
+        if self
+            .module
+            .constants
+            .iter()
+            .any(|cell| cell.state.is_some())
+        {
+            return Err(Diagnostic::coded(
+                "AU4030",
+                "mutable module storage requires freestanding execution",
+            ));
+        }
+        let module = Arc::clone(&self.module);
+        for constant in &module.constants {
+            if constant.frozen.is_some() {
+                continue;
+            }
             let _ = self.read_module_constant(&constant.key, &constant.initializer)?;
         }
         Ok(())
@@ -3146,7 +3245,7 @@ impl MirRuntime {
     }
 
     fn find_trait_impl_method(&self, receiver_ty: &Type, field: &str) -> Option<&MirMethod> {
-        self.find_trait_impl_method_for_trait(receiver_ty, None, field)
+        self.find_trait_impl_method_for_trait(receiver_ty, None, field, &[])
     }
 
     fn find_trait_impl_method_for_trait(
@@ -3154,6 +3253,7 @@ impl MirRuntime {
         receiver_ty: &Type,
         trait_name: Option<&str>,
         field: &str,
+        trait_args: &[Type],
     ) -> Option<&MirMethod> {
         let mut best = None;
         let mut best_specificity = 0usize;
@@ -3170,6 +3270,9 @@ impl MirRuntime {
                 &type_params,
                 &mut substitutions,
             ) {
+                continue;
+            }
+            if !trait_impl.matches_trait_args(trait_args, &substitutions) {
                 continue;
             }
             for method in &trait_impl.methods {
@@ -3216,6 +3319,10 @@ impl MirRuntime {
             .iter()
             .map(|argument| argument.writeback_place.clone())
             .collect::<Vec<_>>();
+        self.lend_argument_owners(env, &evaluated_args)?;
+        if method.receiver == Some(MirReceiverKind::BorrowMut) {
+            self.lend_mutable_owner(env, receiver_place, &receiver)?;
+        }
         let outcome = self.call_function_with_receiver_type(
             &function,
             Some(receiver),
@@ -3843,6 +3950,10 @@ impl MirRuntime {
         receiver_type: Option<&Type>,
         registered_exit: bool,
     ) -> Result<CallOutcome> {
+        if let Some(budget) = &self.eval_budget {
+            budget.check_memory((self.call_depth + 1).saturating_mul(128 * 1024))?;
+        }
+        let borrowed_cells = std::mem::take(&mut self.borrowed_raw_cells);
         // The headroom excludes the allocator's guard layout, so a probe that
         // passes leaves at least the reserve of writable stack for the frames
         // this call pushes before its own callees probe again.
@@ -3930,7 +4041,25 @@ impl MirRuntime {
                 }
             }
 
-            let mut env = Env::default();
+            let mut env = Env {
+                raw_cells: borrowed_cells,
+                ..Default::default()
+            };
+            if self.has_owner_hooks {
+                env.lexical_owners.extend(
+                    function
+                        .blocks
+                        .iter()
+                        .flat_map(|block| &block.instructions)
+                        .filter_map(|instruction| match instruction {
+                            Instruction::EndOwner { place } => Some(place.clone()),
+                            _ => None,
+                        }),
+                );
+                if env.lexical_owners.contains("self") {
+                    env.owner_order.push("self".to_string());
+                }
+            }
             for local in &function.local_types {
                 env.set_place_type(&local.name, substitute_type(&local.ty, &substitutions));
             }
@@ -3949,6 +4078,9 @@ impl MirRuntime {
             }
 
             for (param, argument) in function.params.iter().zip(bound_args) {
+                if env.lexical_owners.contains(&param.name) {
+                    env.owner_order.push(param.name.clone());
+                }
                 let ty = substitute_type(&param.ty, &substitutions);
                 let value = self.coerce_value_to_type(argument.value, &ty, None)?;
                 env.define_typed(&param.name, ty, value);
@@ -3956,6 +4088,7 @@ impl MirRuntime {
 
             let return_type = substitute_type(&function.return_type, &substitutions);
             self.return_type_stack.push(return_type);
+            env.type_args = substitutions;
             let value = match panic::catch_unwind(AssertUnwindSafe(|| {
                 self.execute_function(function, &mut env)
             })) {
@@ -4029,6 +4162,16 @@ impl MirRuntime {
                     }
                 }
                 other => other,
+            };
+            let value = if self.has_owner_hooks {
+                match (value, self.drop_frame_owners(&mut env)) {
+                    (CallValueOutcome::Completed(Ok(_)), Err(error)) => {
+                        CallValueOutcome::Completed(Err(error))
+                    }
+                    (outcome, _) => outcome,
+                }
+            } else {
+                value
             };
             Ok(CallOutcome {
                 value,
@@ -4158,6 +4301,7 @@ impl MirRuntime {
             let block = &function.blocks[block_index];
             for instruction in &block.instructions {
                 let instruction_result = panic::catch_unwind(AssertUnwindSafe(|| {
+                    env.refresh_raw_cells()?;
                     // A generator the instruction drops, such as an element
                     // of a cleared list, closes there. A trap from its exits
                     // traps this instruction unless it already failed.
@@ -4185,6 +4329,11 @@ impl MirRuntime {
                     }
                     Err(payload) => panic::resume_unwind(payload),
                 };
+                let instruction_result = if self.has_owner_hooks {
+                    instruction_result.and_then(|result| self.drain_owner_hooks().map(|()| result))
+                } else {
+                    instruction_result
+                };
                 match instruction_result {
                     Ok(Some(value)) => {
                         self.unwind_cleanups(&mut cleanup_stack, env, true, &mut Vec::new())?;
@@ -4209,6 +4358,7 @@ impl MirRuntime {
                 }
             }
 
+            env.refresh_raw_cells()?;
             let outcome = match self.execute_terminator(
                 &block.label,
                 &block.terminator,
@@ -4269,14 +4419,41 @@ impl MirRuntime {
         cleanup_stack: &mut CleanupStack,
         safepoint_fuel: &mut u64,
     ) -> Result<Option<Value>> {
+        if let Some(budget) = &mut self.eval_budget {
+            budget.instruction(instruction, env, self.call_depth)?;
+        }
         match instruction {
             // The interpreter's values own themselves, so a retain has
             // nothing to do; releasing a sole-owned generator closes it at
             // the exact scope boundary so its `with` exits run in order and
             // any trap reaches the enclosing frame.
+            Instruction::ArmDrop { place, function } => {
+                let Value::Instance(value) = env.place_mut(place)? else {
+                    return Err(Diagnostic::new("drop hook receiver must be a class"));
+                };
+                value.arm_drop(
+                    aura_runtime::runtime_value::class_drop::DropMethod::Interpreted(
+                        function.clone(),
+                    ),
+                );
+                Ok(None)
+            }
+            Instruction::EndOwner { place } => {
+                env.owner_order.retain(|owner| owner != place);
+                env.shared_values.remove(place);
+                env.values.remove(place);
+                Ok(None)
+            }
             Instruction::Retain { .. } => Ok(None),
             Instruction::Release { place } => {
                 let on_cleanup_stack = cleanup_stack.iter().any(|(active, _)| active == place);
+                if self.has_owner_hooks
+                    && !on_cleanup_stack
+                    && env.values.get(place).is_some_and(class_drop::holds_owner)
+                {
+                    env.values.remove(place);
+                    return Ok(None);
+                }
                 if !on_cleanup_stack
                     && !env.loans.contains_key(place)
                     && env.values.get(place).is_some_and(owns_generator)
@@ -4308,6 +4485,11 @@ impl MirRuntime {
                 }
                 Ok(None)
             }
+            Instruction::InlineAsm { span, .. } => Err(Diagnostic::coded_at(
+                "AU2090",
+                *span,
+                "machine assembly requires freestanding native code",
+            )),
             Instruction::SourceLocation { .. } | Instruction::SourceName { .. } => Ok(None),
             Instruction::Safepoint => {
                 if self.safepoints_enabled {
@@ -4433,6 +4615,12 @@ impl MirRuntime {
                 Ok(None)
             }
             Instruction::Assign { target, value } => {
+                if self.has_owner_hooks
+                    && env.lexical_owners.contains(target)
+                    && !env.owner_order.contains(target)
+                {
+                    env.owner_order.push(target.clone());
+                }
                 let target_ty = self.resolve_place_type(target, env);
                 match self.evaluate_rvalue_for_target(value, env, target_ty.as_ref())? {
                     RvalueOutcome::Value(evaluated) => {
@@ -4539,6 +4727,9 @@ impl MirRuntime {
         loop_state: &mut HashMap<String, i128>,
         _cleanup_stack: &mut CleanupStack,
     ) -> Result<BlockOutcome> {
+        if let Some(budget) = &mut self.eval_budget {
+            budget.step()?;
+        }
         match terminator {
             Terminator::Return(value) => Ok(BlockOutcome::Return(
                 self.evaluate_owned_operand(value, env)?,
@@ -4940,9 +5131,13 @@ impl MirRuntime {
                     method.function_name
                 ))
             })?;
+        let receiver = Value::Instance(instance);
+        if method.receiver == Some(MirReceiverKind::BorrowMut) {
+            self.lend_mutable_owner(env, Some(place), &receiver)?;
+        }
         let outcome = self.call_function_with_receiver_type(
             &function,
-            Some(Value::Instance(instance)),
+            Some(receiver),
             Vec::new(),
             None,
             None,
@@ -4961,6 +5156,20 @@ impl MirRuntime {
     }
 
     fn evaluate_rvalue_for_target(
+        &mut self,
+        value: &Rvalue,
+        env: &mut Env,
+        expected_type: Option<&Type>,
+    ) -> Result<RvalueOutcome> {
+        if let Some(budget) = &self.eval_budget {
+            return aura_runtime::builtin_limit::with_allowance(budget.output_allowance(), || {
+                self.evaluate_rvalue_body(value, env, expected_type)
+            });
+        }
+        self.evaluate_rvalue_body(value, env, expected_type)
+    }
+
+    fn evaluate_rvalue_body(
         &mut self,
         value: &Rvalue,
         env: &mut Env,
@@ -5014,6 +5223,45 @@ impl MirRuntime {
                 };
                 Ok(RvalueOutcome::Value(Value::Bool(is_none)))
             }
+            Rvalue::CPointerAccess { .. } | Rvalue::CFieldAddress { .. }
+                if !self.raw_memory_allowed =>
+            {
+                Err(raw_cells::permission_error())
+            }
+            Rvalue::CPointerAccess {
+                address,
+                store,
+                layout,
+                volatile,
+            } => {
+                let word = self.evaluate_operand(address, env)?;
+                let value = store
+                    .as_ref()
+                    .map(|operand| self.evaluate_operand(operand, env))
+                    .transpose()?;
+                Ok(RvalueOutcome::Value(raw_cells::access(
+                    &word,
+                    value.as_ref(),
+                    layout,
+                    *volatile,
+                )?))
+            }
+            Rvalue::CFieldAddress {
+                root,
+                layout,
+                offset,
+            } => {
+                let addr = env.raw_field_address(root, layout, *offset)?;
+                Ok(RvalueOutcome::Value(Value::Int(IntegerValue::from_u64(
+                    addr,
+                ))))
+            }
+            Rvalue::ModuleStore { .. }
+            | Rvalue::ModuleLoad { .. }
+            | Rvalue::ModuleAddress { .. } => Err(Diagnostic::coded(
+                "AU4030",
+                "mutable module storage requires freestanding execution",
+            )),
             Rvalue::ModuleConstant { key, initializer } => Ok(RvalueOutcome::SharedModuleConstant(
                 self.read_module_constant(key, initializer)?,
             )),
@@ -5137,6 +5385,12 @@ impl MirRuntime {
             }
             Rvalue::Cast { value, ty, span } => {
                 let value = self.evaluate_operand(value, env)?;
+                let address = Type::named("uint64");
+                let ty = if ty.as_raw_pointer().is_some() {
+                    &address
+                } else {
+                    ty
+                };
                 Ok(RvalueOutcome::Value(cast_numeric_value(
                     value,
                     ty,
@@ -5282,6 +5536,13 @@ impl MirRuntime {
                     Some(*span),
                 )?))
             }
+            Rvalue::Call {
+                callee: CallTarget::Name(op),
+                args,
+                type_args,
+            } if crate::mir::fixed_arrays::is_operation(op) => self
+                .evaluate_fixed(op, args, type_args.get("array"), env)
+                .map(RvalueOutcome::Value),
             Rvalue::Call { callee, args, .. } => Ok(RvalueOutcome::Value(
                 self.evaluate_call_for_target(callee, args, env, expected_type)?,
             )),
@@ -5540,6 +5801,33 @@ impl MirRuntime {
 
     /// Runs the built-in function a named call or named runtime op calls.
     fn evaluate_named_builtin(
+        &mut self,
+        name: &str,
+        args: &[MirArg],
+        env: &mut Env,
+        expected_return_type: Option<&Type>,
+    ) -> Result<Value> {
+        if let Some(budget) = &self.eval_budget {
+            // The source wrappers use lists for their portable fallback. Choosing
+            // it keeps their normal class fields usable on the target without
+            // transporting opaque runtime collection storage.
+            if name == "collections::__aura_supported" {
+                return Ok(Value::Bool(false));
+            }
+            let available = budget.output_allowance();
+            if const_memory::host_output_bound(name, args, env) > available {
+                return Err(const_eval::Budget::memory_error());
+            }
+            let value = aura_runtime::builtin_limit::with_allowance(available, || {
+                self.evaluate_named_builtin_body(name, args, env, expected_return_type)
+            })?;
+            self.eval_budget.as_mut().unwrap().builtin_result(&value)?;
+            return Ok(value);
+        }
+        self.evaluate_named_builtin_body(name, args, env, expected_return_type)
+    }
+
+    fn evaluate_named_builtin_body(
         &mut self,
         name: &str,
         args: &[MirArg],
@@ -6084,7 +6372,12 @@ impl MirRuntime {
                 .collect::<Vec<_>>();
             let values = evaluate_named_args(args, env)?;
             let bound = bind_builtin_args(&arg_names, values)?;
-            let evaluated_args = bound.into_iter().map(|argument| argument.value).collect();
+            if let Some(budget) = &self.eval_budget {
+                if name.starts_with("path::") {
+                    return budget.path_builtin(name, &bound);
+                }
+            }
+            let evaluated_args: Vec<_> = bound.into_iter().map(|argument| argument.value).collect();
             if is_mem {
                 // SAFETY: `self.trusted_ffi` confirmed the package opted into
                 // `allow_ffi = true` and executed through a path-checked API;
@@ -6170,6 +6463,21 @@ impl MirRuntime {
                 let evaluated_args = evaluate_named_args(args, env)?;
                 let writeback_places =
                     bind_function_writeback_places(&function.params, &evaluated_args)?;
+                let borrowed_cells = if !env.raw_cells.is_empty()
+                    || self.raw_parameters.contains_key(&function.name)
+                {
+                    Some(env.borrowed_cells(
+                        &function,
+                        args,
+                        self.raw_parameters.get(&function.name),
+                    )?)
+                } else {
+                    None
+                };
+                self.lend_argument_owners(env, &evaluated_args)?;
+                if let Some(cells) = borrowed_cells {
+                    self.borrowed_raw_cells = cells;
+                }
                 let outcome = self.call_function_for_target(
                     &function,
                     None,
@@ -6250,7 +6558,18 @@ impl MirRuntime {
                 let receiver_static_ty = self
                     .resolve_operand_type(object, env)
                     .filter(|ty| !matches!(ty, Type::TypeParam(_)));
-                let receiver = self.evaluate_owned_operand(object, env)?;
+                let mut receiver = self.evaluate_owned_operand(object, env)?;
+                if self.has_owner_hooks
+                    && matches!(
+                        op,
+                        RuntimeOp::Value(
+                            crate::runtime_ops::ValueOp::Copy | crate::runtime_ops::ValueOp::Clone
+                        )
+                    )
+                    && class_drop::holds_owner(&receiver)
+                {
+                    aura_runtime::runtime_value::class_drop::renew_owners(&mut receiver);
+                }
                 self.evaluate_receiver_method(
                     receiver,
                     receiver_static_ty,
@@ -6273,7 +6592,12 @@ impl MirRuntime {
                 receiver_place,
                 ..
             } => {
-                if let CallTarget::TraitMember { trait_name, .. } = callee {
+                if let CallTarget::TraitMember {
+                    trait_name,
+                    trait_args,
+                    ..
+                } = callee
+                {
                     let receiver_static_ty = self
                         .resolve_operand_type(object, env)
                         .filter(|ty| !matches!(ty, Type::TypeParam(_) | Type::Union(_)));
@@ -6312,6 +6636,7 @@ impl MirRuntime {
                             &resolved_receiver_ty,
                             Some(trait_name),
                             field,
+                            &trait_args.iter().map(|ty| substitute_type(ty, &env.type_args)).collect::<Vec<_>>(),
                         )
                         .cloned()
                         .ok_or_else(|| {
@@ -6559,6 +6884,11 @@ impl MirRuntime {
             }
             receiver => receiver,
         };
+        if let (Value::Int(value), Some(method)) =
+            (&receiver, aura_core::integer_bits::BitMethod::of(field))
+        {
+            return integer_bits::evaluate(method, *value, receiver_static_ty.as_ref(), args, env);
+        }
         match &receiver {
             Value::Float(value) if field == "sqrt" => {
                 if !args.is_empty() {
@@ -6825,9 +7155,12 @@ impl MirRuntime {
                     .iter()
                     .map(|argument| argument.writeback_place.clone())
                     .collect::<Vec<_>>();
+                self.lend_argument_owners(env, &evaluated_args)?;
+                let lent = method.receiver == Some(MirReceiverKind::BorrowMut)
+                    && self.lend_mutable_owner(env, receiver_place, &receiver)?;
                 let outcome = self.call_function_with_receiver_type(
                     &function,
-                    Some(if method.receiver == Some(MirReceiverKind::Value) {
+                    Some(if lent || method.receiver == Some(MirReceiverKind::Value) {
                         std::mem::replace(&mut receiver, Value::Unit)
                     } else {
                         try_clone_mir_value(&receiver)?
@@ -6887,6 +7220,9 @@ impl MirRuntime {
             });
         }
         self.evaluate_extern_call_with(call, args, env, |symbol, signature, arguments| {
+            if signature.needs_aligned_stack() {
+                return ffi_stack::call(symbol, signature, arguments);
+            }
             // SAFETY: semantic analysis admits only the documented FFI v0
             // surface. The remaining process-symbol signature and foreign
             // implementation obligations belong to the package author.
@@ -7222,6 +7558,7 @@ impl MirRuntime {
             }
             combined.append(&mut evaluated_args);
             let writeback_places = bind_function_writeback_places(&function.params, &combined)?;
+            self.lend_argument_owners(env, &combined)?;
             let outcome =
                 self.call_function_for_target(&function, None, combined, expected_return_type)?;
             // Environment-owned mutable captures have no caller place: their
@@ -7248,6 +7585,7 @@ impl MirRuntime {
             return Ok(value);
         }
         let writeback_places = bind_function_writeback_places(&function.params, &evaluated_args)?;
+        self.lend_argument_owners(env, &evaluated_args)?;
         let outcome = self.call_function_for_value(
             &function,
             evaluated_args,
@@ -7269,6 +7607,10 @@ impl MirRuntime {
     /// its indices, output and program-wide constant states.
     fn fork_for_child(&self, cancellation: CancellationContext) -> MirRuntime {
         MirRuntime {
+            raw_memory_allowed: self.raw_memory_allowed,
+            borrowed_raw_cells: Default::default(),
+            raw_parameters: Arc::clone(&self.raw_parameters),
+            has_owner_hooks: self.has_owner_hooks,
             module: Arc::clone(&self.module),
             union_layouts: Arc::clone(&self.union_layouts),
             safepoints_enabled: self.safepoints_enabled,
@@ -7286,6 +7628,7 @@ impl MirRuntime {
             call_stack: Vec::new(),
             task_ancestry: self.task_ancestry.clone(),
             return_type_stack: Vec::new(),
+            eval_budget: None,
             constant_states: Arc::clone(&self.constant_states),
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
@@ -11802,6 +12145,9 @@ fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
 /// by-value boundary type of a parameter. `c_string` marks a `str` or
 /// `str | None` that crosses as NUL-terminated text.
 fn ffi_type_for_extern_result(ty: &Type, c_string: bool) -> Result<FfiType> {
+    if ty.as_raw_pointer().is_some() {
+        return Ok(FfiType::U64);
+    }
     if c_string {
         return Ok(match ty {
             Type::Union(_) => FfiType::NullableCString,
@@ -11852,6 +12198,9 @@ fn ffi_type_for_extern_result(ty: &Type, c_string: bool) -> Result<FfiType> {
 }
 
 fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
+    if ty.as_raw_pointer().is_some() {
+        return ffi_value_from_runtime(value, &Type::named("uint64"));
+    }
     let mismatch = || {
         Diagnostic::coded(
             "AU4005",
@@ -12009,6 +12358,7 @@ impl Drop for ActiveCallbackRuntime {
 pub(crate) fn callback_signature(ty: &Type) -> Option<crate::ffi::CCallback> {
     use crate::ffi::{CCallback, CCallbackParam, FfiScalar};
     let scalar = |ty: &Type| match ty {
+        _ if ty.as_raw_pointer().is_some() => Some(FfiScalar::U64),
         Type::Named(name, args) if args.is_empty() => {
             let name = if name == "int" {
                 "int64"
@@ -12423,6 +12773,9 @@ fn runtime_value_from_ffi_with(
         )
     };
     match (value, ty) {
+        (FfiValue::U64(address), ty) if ty.as_raw_pointer().is_some() => {
+            Ok(Value::Int(IntegerValue::from_u64(address)))
+        }
         (FfiValue::Unit, Type::Unit) => Ok(Value::Unit),
         (FfiValue::Bool(value), Type::Named(name, args)) if name == "bool" && args.is_empty() => {
             Ok(Value::Bool(value))
@@ -12656,7 +13009,8 @@ impl MirRuntime {
                     }
                     // A recovered snapshot contains only text, integers and a
                     // list of text. Mutation first converts it to an ordinary map.
-                    crate::runtime_value::InstanceFields::Recovered(_) => {}
+                    crate::runtime_value::InstanceFields::Hooked(_)
+                    | crate::runtime_value::InstanceFields::Recovered(_) => {}
                     crate::runtime_value::InstanceFields::Typed(typed) => {
                         for (_, field) in typed.into_map() {
                             self.close_released_generators(field)?;
@@ -13808,3 +14162,11 @@ mod tests;
 #[cfg(test)]
 #[path = "mir_runtime_task_stack_tests.rs"]
 mod task_stack_tests;
+
+#[path = "mir_runtime_fixed_arrays.rs"]
+mod fixed_arrays;
+#[path = "mir_integer_bits.rs"]
+mod integer_bits;
+
+#[path = "mir_ffi_stack.rs"]
+mod ffi_stack;

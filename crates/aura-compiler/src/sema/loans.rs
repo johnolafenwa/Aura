@@ -81,6 +81,7 @@ pub(crate) fn synthetic_returned_view_decl(
         span,
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: Vec::new(),
         spec: false,
@@ -1106,6 +1107,7 @@ impl<'a> FunctionChecker<'a> {
                     "returned view origin `self` requires an instance receiver",
                 )
             })?;
+            self.reject_state_loan(receiver, locals)?;
             let conservative = self.view_expr_has_conservative_footprint(receiver, locals)?;
             return self
                 .view_place(receiver, locals)?
@@ -1178,6 +1180,7 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Slice { object, .. } => (&**object, true),
             _ => (&argument.value, false),
         };
+        self.reject_state_loan(origin_value, locals)?;
         let conservative =
             range_origin || self.view_expr_has_conservative_footprint(origin_value, locals)?;
         self.view_place(origin_value, locals)?
@@ -2383,6 +2386,9 @@ impl<'a> FunctionChecker<'a> {
         destination: &str,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        if passing == ReceiverKind::BorrowMut {
+            self.reject_state_loan(expr, locals)?;
+        }
         self.reject_mutable_returned_view_value(expr, locals, passing == ReceiverKind::BorrowMut)?;
         if passing == ReceiverKind::Value {
             self.reject_owned_view_value(expr, locals, destination)?;
@@ -4480,6 +4486,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Option<PlacePath>> {
+        self.reject_state_loan(scrutinee, locals)?;
         self.reject_property_place(scrutinee, "matched with `match mut`", locals)?;
         let Some(access) = self.borrow_call_place(scrutinee) else {
             return Err(Diagnostic::coded_at(

@@ -1,0 +1,9 @@
+trait Named:
+    def name(self) -> str
+
+class Pair[T]:
+    first: T
+    second: T
+
+impl[T: Named] Named for Pair[T] by first
+impl[U: Named] Named for Pair[U] by second

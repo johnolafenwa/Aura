@@ -1,0 +1,4 @@
+impl[T: Named] Named for Car[T] by engine
+impl Loud for Truck by speaker:
+    def volume(self) -> int64:
+        return 11

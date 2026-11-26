@@ -344,9 +344,19 @@ def build[T: shapes.Make](seed: int64) -> T:
 
 The qualified name and a `from shapes import Make` name the same trait. A module alias works too, as in `impl sh.Make for Gadget` after `import shapes as sh`.
 
-An implementation with no body, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` and `tensor.Module` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs) and [Modules](/manual/tensors#modules).
+An implementation with neither a body nor a `by` field, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` and `tensor.Module` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs) and [Modules](/manual/tensors#modules).
 
 Aura 0.17 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
+
+### Delegating To A Field
+
+Write `impl Named for Car by engine` when the owned field `Car.engine` already implements `Named`. The declaration makes a `Car` usable as a `Named` in a concrete call, a generic bound, or a `dyn Named` object.
+
+<<< ../../examples/traits/delegation.au{aura}
+
+An optional suite after `by engine:` can implement individual methods. Other methods call the field's selected implementation, including its overrides of trait defaults. A shared receiver borrows the field, `mut self` updates it in place, and `own self` consumes it. Parameter modes and trait contracts carry through the call. Verification checks the forwarding body against the same contract as a written method.
+
+Delegation also supplies the required supertraits and takes associated types from the field implementation. An existing coherent parent implementation supplies its own methods. For a generic class, state the field's required bound, as in `impl[T: Named] Named for Car[T] by engine`. A qualified import can name the trait. If a method promises to return the outer `Self` and the field implementation returns the field type, supply an override that constructs the outer value.
 
 ### Trait Methods On Unions
 
@@ -741,7 +751,7 @@ trait Labelled: Named:
 
 The second colon ends the header. Separate multiple supertraits with commas.
 
-`impl Labelled for User` is valid only when `User` also satisfies `Named` through an applicable implementation. Implementing the child trait does not create the parent implementation. A child bound makes the supertrait methods available, and default child methods can call them.
+`impl Labelled for User` is valid only when `User` also satisfies `Named` through an applicable implementation. An ordinary implementation of the child trait requires a separate parent implementation. A delegated implementation can forward the parent to its field. A child bound makes the supertrait methods available, and default child methods can call them.
 
 Supertrait types must name known traits with exact arity. Bound and dispatch checking closes the requirements transitively.
 

@@ -76,7 +76,7 @@ String and format-specification diagnostics are described under
 | `AU2002` | type mismatch | A value of the wrong type, a callback with the wrong contract, a type without the ordering an operation needs, or a format specification that does not fit its value. | Make the value's type match the type the position requires. |
 | `AU2003` | unsupported operator | An operator the operand types do not define, including ordering or arithmetic on a union. | Use an operator the operand types define. |
 | `AU2004` | argument binding | Arguments that do not bind to the callee's parameters. | Match the call to the callee's parameter list. |
-| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment to a list or `str`, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
+| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment to a list or `str`, a decorator inside a function body, or a reserved FFI contract. | Use the Aura form the message names. |
 | `AU2006` | builtin method collision | A trait method whose name shadows a builtin member of its target. | Rename the trait method. |
 | `AU2007` | builtin function redefinition | A module-level function named after a builtin function. | Rename the function. |
 | `AU2008` | equality unavailable | `==`, `!=`, or an equality-based collection operation on a type without equality. | Use a type that defines equality, or avoid the equality-based operation. |
@@ -95,13 +95,39 @@ String and format-specification diagnostics are described under
 | `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
 | `AU2043` | invalid Display implementation | A `Display` implementation for a type the module does not declare, a builtin, tuple, or union, a partial or bounded generic target, an overlap, or a mismatched `display` method. | Implement `def display(self) -> str` once, in the module that declares the type, for every specialization. |
 | `AU2044` | invalid property declaration | An `@property` getter outside a class, with a receiver other than `self`, with parameters, type parameters, a `None` or view result, or a name that collides with a field. | Declare `def name(self) -> Type:` in the class body. |
-| `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
+| `AU2045` | invalid property use | Assignment or compound assignment to a getter without a setter, or using a property as a `mut` argument or receiver, `match mut` scrutinee, view, or callable. | Read the property without parentheses, or bind it to a local and change the local. |
 | `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec` and `tensor.Module`, for a type from another module, a generic class or enum, or a class with `__init__`. Also a positional enum payload, a field type with no JSON form, or a union whose members a decoder cannot tell apart. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
-| `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
+| `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, on an initializer or a method of a generic class, or a decorator group without a function or class method definition. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
 | `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` to loops and class bodies, `decreases` to `while` loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method of a user type, a method named `__invariant__`, an `old` outside `ensures` or around something other than a parameter path, a `spec def` whose body is not one pure `return` or that is used outside a contract, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/contracts). |
 | `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
 | `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, a `mut` argument whose type is not already the parameter's trait object type, and `value as dyn Trait` used as a `mut` receiver or a `mut` argument. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
-| `AU2052` | not available in a freestanding build | A function that `aura check --freestanding` or `aura build --freestanding` reaches holds a value or an operation that needs the Aura runtime: text, a collection, a tuple, an enum, a closure, a trait object, `print`, `try`, `with`, a task, a 128-bit integer, or a builtin module. Also a program with no exported function, or two exports with one name. | Keep freestanding code to fixed-width numbers, `bool`, classes of those, and unions with `None`, and move the rest behind a function the exports do not call. See [Freestanding Builds](/manual/freestanding). |
+| `AU2052` | not available in a freestanding build | A function that `aura check --freestanding` or `aura build --freestanding` reaches holds a value or an operation that needs the Aura runtime: text, a collection, a tuple, an enum, a closure, a trait object, `print`, `try`, `with`, a task, or a hosted builtin module. Also a program with no exported function, or two exports with one name. | Keep freestanding code to fixed-width numbers, `bool`, classes of those, and unions with `None`, and move the rest behind a function the exports do not call. See [Freestanding Builds](/manual/freestanding). |
+| `AU2060` | unknown delegation field | The name after `by` does not name a field of the class. | Name the stored field that supplies the trait. |
+| `AU2061` | unsatisfied delegation trait | The field type does not implement the requested trait specialization. | Implement that trait on the field type, or add the required generic bound. |
+| `AU2062` | duplicate trait delegation | Two declarations delegate the same trait specialization for one class. | Keep one delegation and put the overrides in its suite. |
+| `AU2063` | delegation to a view field | A view cannot supply the owned field required by a delegation. | Store the concrete owner in the class. |
+| `AU2064` | invalid property setter | A setter is duplicated, lacks a matching getter, or has the wrong name, receiver, parameter, or result. | Pair it with the same-name getter and write `def name(mut self, value: T):` for a getter returning `T`. |
+| `AU2065` | invalid drop hook declaration | The hook is on a Copy class or has an invalid signature or precondition. | Use `def __drop__(mut self):` in an ordinary class. |
+| `AU2066` | explicit drop hook reference | A program calls or binds the automatic hook. | Let the owner release it, or put an explicit operation in another method. |
+| `AU2070` | invalid build configuration | A cfg name is invalid, an option is incomplete, or a manifest value has an unsupported type. | Use an identifier and a string or boolean manifest value. |
+| `AU2071` | invalid compile-time condition | A declaration guard depends on a runtime value or its result is not boolean. | Write a boolean condition over build properties or marked constants. |
+| `AU2080` | invalid static storage initializer | A module cell has a runtime initializer. | Supply a literal or supported structural initializer. |
+| `AU2081` | invalid fixed array type | An inline array has an invalid length or element representation. | Choose an inline type and a positive length within the size limits. |
+| `AU2082` | invalid fixed array initializer | The literal or repeat length differs from the destination array. | Supply exactly the declared number of elements. |
+| `AU2083` | invalid raw pointer operation | A pointer method, cast or comparison has incompatible types. | Use an eligible pointee and the method's declared operand type. |
+| `AU2084` | raw pointer requires FFI permission | Code uses a typed raw pointer without the package capability. | Set `allow_ffi = true` in the package manifest to opt in. |
+| `AU2085` | invalid C layout declaration | An alignment, layout modifier or bit width is invalid. | Use a supported power-of-two alignment and a width within the unsigned field type. |
+| `AU2086` | invalid C layout query | A layout query names an ineligible type or field. | Use an addressable C member for `offset_of`. |
+| `AU2087` | invalid atomic ordering | An atomic operation requests an incompatible order or a computed order name. | Use a supported ordering string literal for that operation. |
+| `AU2088` | invalid rotation count type | A rotation count has an incompatible type. | Pass an `int64` count. |
+| `AU2090` | assembly target | Assembly requires freestanding mode. | Select a freestanding target. |
+| `AU2091` | assembly operand type | The register cannot hold this scalar type or width. | Match the operand type and register. |
+| `AU2092` | assembly register | A register is unknown, reserved or overlaps another constraint. | Choose distinct registers supported by the target. |
+| `AU2093` | assembly contract | The template, operand reference, clause or options are invalid. | Correct the assembly declaration. |
+| `AU2094` | machine attribute target | A hosted declaration specifies a machine attribute. | Select a freestanding target. |
+| `AU2095` | machine declaration | An attribute, signature, placement or body violates its contract. | Follow the declaration requirements in Freestanding Builds. |
+| `AU2096` | interrupt convention | The interrupt target differs or the entry is used as an ordinary function. | Use the matching hardware entry convention. |
+| `AU2097` | hardware operation | The selected target does not provide this mem operation. | Choose an operation provided on this target. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -323,6 +349,12 @@ process. They are not Aura diagnostics. See [FFI](/manual/ffi).
 | `AU3010` | view escape or returned provenance | A view that outlives or does not come from its declared origin. | Return an owned clone, index, or handle, or keep the loan inside the owner's region. |
 | `AU3011` | collection mutation under a live element view | `append`, `remove`, dictionary assignment, or another structural change of a collection while a view of one of its elements or entries is live, or a write to an element the view may select. | End the view first, or write a different literal position. |
 | `AU3012` | definite initialization | Inside `__init__`, a read of a field before it is set, an assignment to a field set on only some paths, or a use, escape, or return of `self` before every field is set. | Set the field on every path first, or move the use after the last field assignment. |
+| `AU3020` | partial move from a class with a drop hook | A move would leave the hook with an uninitialized field. | Move the complete owner or borrow the field. |
+| `AU3030` | module state access | A hosted module declares a mutable cell, or an operation borrows mutable module storage. | Use an immutable synchronization handle in a hosted module. Snapshot a cell before borrowing it. |
+| `AU3031` | fixed array would duplicate a non-copy element | An operation would duplicate an element that is not Copy. | Construct each element individually or use a Copy element type. |
+| `AU3032` | place has no writable stable address | A writable pointer is requested for an immutable place, temporary or bit-field. | Take the address of stable, writable storage. |
+| `AU3033` | borrow of a C bit-field | A borrow requires an independent address for a bit-field. | Read its value into a local or assign to the field directly. |
+| `AU3035` | assembly output binding | An output lacks a distinct writable scalar destination. | Bind each output to its own mutable scalar. |
 
 The guidance these diagnostics carry is described under
 [Ownership Diagnostics](#ownership-diagnostics).
@@ -457,6 +489,17 @@ owner's region.
 | `AU2004` | A call-shape error, such as an empty call or a named source. |
 | `AU2002` | An invalid source kind, or an inconsistent Queue/Task category type. |
 
+### Compile-Time Evaluation Codes
+
+| Code | Cause | Fix |
+| --- | --- | --- |
+| `AU3025` | A required initializer cannot produce a build-time value. | Remove the runtime dependency, or use an ordinary binding for startup initialization. |
+| `AU3026` | A pure initializer traps. | Follow the Aura call frames and fix the failing operation. |
+| `AU3027` | An initializer exceeds the evaluation step limit. | Reduce iteration or recursion. |
+| `AU3028` | An initializer exceeds the evaluation memory limit. | Reduce allocation and intermediate data. |
+
+[Compile-time evaluation limits](/manual/compile-time#module-bindings)
+
 ### Runtime Codes
 
 | Code | Meaning | Common causes | How to fix |
@@ -469,6 +512,11 @@ owner's region.
 | `AU4006` | invalid runtime configuration | An invalid `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, or `AURA_BLOCKING_QUEUE_CAPACITY` value. | Set the variable to a positive decimal integer, or unset it. |
 | `AU4007` | numeric Array shape or reduction violation | Array shapes that do not broadcast, an axis outside the rank, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
 | `AU4009` | contract violated | A `requires` condition was false when the function was called, an `ensures` condition was false when it returned, a loop or class `invariant` was false, or a `decreases` measure went below 0 or did not get smaller. | Fix the caller for `requires`, or the function or loop body for the others. The message names the clause. |
+| `AU4030` | module state outside freestanding execution | Hosted execution encounters a freestanding module cell. | Build the entry point with the freestanding profile. |
+| `AU4031` | fixed array index out of bounds | An inline array index lies outside its length. | Use an index from zero through length minus one. |
+| `AU4032` | invalid raw pointer value | A raw pointer operation encounters an invalid runtime value. | Check the pointer representation and validity of the access. |
+| `AU4033` | value exceeds C bit-field width | The assigned integer exceeds the bit-field width. | Store an unsigned value that fits the declared width. |
+| `AU4034` | invalid integer operation argument | A rotation receives a negative count. | Supply a nonnegative count. |
 
 Each runtime code's precise causes are listed under
 [Runtime Traps And Backtraces](#runtime-traps-and-backtraces).
@@ -523,6 +571,7 @@ commands never report them. See [Verification](/manual/verification).
 | `AU5101` | check not proved | Inputs exist that make an overflow, a zero divisor, an out-of-range index, a failed `assert`, or a false contract clause happen. The note gives a counterexample. | Fix the code, or state the missing fact as a `requires`, `invariant`, or callee `ensures`. |
 | `AU5102` | solver could not decide | The solver ran out of time or gave up, often on nonlinear arithmetic. | Raise `--timeout`, or add an `assert` or `invariant` that narrows the case. |
 | `AU5103` | solver unavailable | No Z3 or cvc5 on `PATH`, `AURA_SMT_SOLVER` or `--solver` names a missing program, or the solver stopped. | Install Z3 or cvc5, or point `--solver` at it. |
+| `AU4035` | assembly proof boundary | Verification encountered assembly whose effects it cannot prove. | Keep runtime checks around the machine operation. |
 | `AU5104` | check outside the verified subset | The check reads the result of a step the verifier does not model yet, such as `split`, a slice, a comprehension, a bit operation, a power with a large or unknown exponent, or a contract expression it cannot read. The message names the step. No counterexample is given. | Keep it as a runtime check, or restate the code or the contract with modeled operations. |
 | `AU5120` | contract can never hold | The `requires` clauses and class invariants a function assumes on entry contradict each other, so no call can meet them and every check in the function would pass for nothing. | Fix the contradictory clause. The function does not count as proved until some input meets its contract. |
 | `AU5122` | function marked verified has unproved checks | A function named with `aura verify --must-verify` has a check that failed, is not modeled, or is undecided. The note counts them, and each has its own diagnostic. | Fix or restate each open check, or drop the function from `--must-verify`. See [Functions That Must Verify](/manual/verification#functions-that-must-verify). |

@@ -1,0 +1,6 @@
+def pick(index: int64) -> uint16:
+    row: fixed[uint16, 3] = [1, 2, 3]
+    return row[index]
+
+def main():
+    print(pick(-1))
