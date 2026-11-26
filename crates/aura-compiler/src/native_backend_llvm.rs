@@ -3863,6 +3863,12 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             AliasClass::Any => return,
             AliasClass::FrameHeader => "aura frame stack header",
             AliasClass::FrameEntry => "aura frame stack entry",
+            AliasClass::BoxAccess => "aura box access code",
+            AliasClass::BoxElements => "aura box element address",
+            AliasClass::BoxLen => "aura box length",
+            AliasClass::BoxRoom => "aura box room",
+            AliasClass::ClassFields => "aura class fields",
+            AliasClass::ListElements => "aura list elements",
         };
         let zero = self.context.i64_type().const_zero().into();
         let root = self

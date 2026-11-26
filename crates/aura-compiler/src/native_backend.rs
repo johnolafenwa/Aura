@@ -426,6 +426,21 @@ pub(crate) enum AliasClass {
     FrameHeader,
     /// An entry of a task's frame stack.
     FrameEntry,
+    /// The access code of a box's list view. Each word of a box's header
+    /// that generated code reads is a class of its own, so a write of one
+    /// box's length keeps another box's access code and element address.
+    BoxAccess,
+    /// The element address of a box's list view, which is the address of
+    /// the field block of an instance kept in place.
+    BoxElements,
+    /// The length of a box's list view.
+    BoxLen,
+    /// The room of a box's list view.
+    BoxRoom,
+    /// The bytes of a class instance's fields where the instance keeps them.
+    ClassFields,
+    /// An unboxed element of a list that keeps scalars.
+    ListElements,
 }
 
 impl MemFlags {

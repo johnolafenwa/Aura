@@ -15534,7 +15534,7 @@ impl<'a> FunctionCompiler<'a> {
             self.emit_list_view_bounds_check(list, index, &layout, slow_block)
         };
         let element = self.scalar_list_element(elements, position, stride);
-        let bits = self.load_scalar_list_element(kind, element);
+        let bits = self.load_list_element(kind, element);
         self.builder.jump(join_block, &[bits]);
 
         self.builder.switch_to_block(slow_block);
@@ -15684,11 +15684,15 @@ impl<'a> FunctionCompiler<'a> {
         self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
-        let flags = MemFlags::trusted();
+        let flags = MemFlags::trusted_in(AliasClass::BoxLen);
         let len = self
             .builder
             .load(types::I64, flags, list, layout.len_offset);
-        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        let capacity = self.builder.uload32(
+            MemFlags::trusted_in(AliasClass::BoxRoom),
+            list,
+            layout.capacity_offset,
+        );
         let full = self
             .builder
             .icmp(IntCC::UnsignedGreaterThanOrEqual, len, capacity);
@@ -15696,11 +15700,14 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(room_block);
         self.builder.seal_block(room_block);
-        let elements = self
-            .builder
-            .load(types::I64, flags, list, layout.elements_offset);
+        let elements = self.builder.load(
+            types::I64,
+            MemFlags::trusted_in(AliasClass::BoxElements),
+            list,
+            layout.elements_offset,
+        );
         let element = self.scalar_list_element(elements, len, stride);
-        self.store_scalar_list_element(kind, bits, element);
+        self.store_list_element(kind, bits, element);
         let grown = self.builder.iadd_imm(len, 1);
         self.builder.store(flags, grown, list, layout.len_offset);
         self.builder.jump(join_block, &[]);
@@ -15732,11 +15739,15 @@ impl<'a> FunctionCompiler<'a> {
         self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
-        let flags = MemFlags::trusted();
+        let flags = MemFlags::trusted_in(AliasClass::BoxLen);
         let len = self
             .builder
             .load(types::I64, flags, list, layout.len_offset);
-        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        let capacity = self.builder.uload32(
+            MemFlags::trusted_in(AliasClass::BoxRoom),
+            list,
+            layout.capacity_offset,
+        );
         // Room means unshared storage, and it is at least the length, so a
         // length below it is not zero.
         let empty = self.builder.icmp_imm(IntCC::Equal, len, 0);
@@ -15747,11 +15758,14 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(pop_block);
         self.builder.seal_block(pop_block);
         let last = self.builder.iadd_imm(len, -1);
-        let elements = self
-            .builder
-            .load(types::I64, flags, list, layout.elements_offset);
+        let elements = self.builder.load(
+            types::I64,
+            MemFlags::trusted_in(AliasClass::BoxElements),
+            list,
+            layout.elements_offset,
+        );
         let element = self.scalar_list_element(elements, last, stride);
-        let bits = self.load_scalar_list_element(kind, element);
+        let bits = self.load_list_element(kind, element);
         self.builder.store(flags, last, list, layout.len_offset);
         self.builder.jump(join_block, &[bits]);
 
@@ -15801,9 +15815,11 @@ impl<'a> FunctionCompiler<'a> {
         let position = self.emit_list_view_bounds_check(list, index, &layout, slow_block);
         // Room covers every element of unshared storage, and a list with
         // shared storage has none.
-        let capacity = self
-            .builder
-            .uload32(MemFlags::trusted(), list, layout.capacity_offset);
+        let capacity = self.builder.uload32(
+            MemFlags::trusted_in(AliasClass::BoxRoom),
+            list,
+            layout.capacity_offset,
+        );
         let mut unshared = self
             .builder
             .icmp(IntCC::UnsignedLessThan, position, capacity);
@@ -15827,7 +15843,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(store_block);
         let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
         let element = self.scalar_list_element(elements, position, stride);
-        self.store_scalar_list_element(kind, bits, element);
+        self.store_list_element(kind, bits, element);
         self.builder.jump(join_block, &[]);
 
         self.builder.switch_to_block(slow_block);
@@ -15869,10 +15885,10 @@ impl<'a> FunctionCompiler<'a> {
         let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
         let left = self.scalar_list_element(elements, left, stride);
         let right = self.scalar_list_element(elements, right, stride);
-        let a = self.load_scalar_list_element(kind, left);
-        let b = self.load_scalar_list_element(kind, right);
-        self.store_scalar_list_element(kind, b, left);
-        self.store_scalar_list_element(kind, a, right);
+        let a = self.load_list_element(kind, left);
+        let b = self.load_list_element(kind, right);
+        self.store_list_element(kind, b, left);
+        self.store_list_element(kind, a, right);
         self.builder.jump(join, &[]);
 
         self.builder.switch_to_block(slow);
@@ -15898,7 +15914,22 @@ impl<'a> FunctionCompiler<'a> {
     /// extended to its exact 64-bit value, a `bool` as 0 or 1, or the bits
     /// of a float widened to `float64`.
     fn load_scalar_list_element(&mut self, kind: ScalarElement, element: Val) -> Val {
-        let flags = MemFlags::trusted();
+        self.load_scalar_element_in(kind, element, MemFlags::trusted())
+    }
+
+    /// [`Self::load_scalar_list_element`] of an element of a list that
+    /// keeps scalars, which no access of other memory classes touches.
+    fn load_list_element(&mut self, kind: ScalarElement, element: Val) -> Val {
+        let flags = MemFlags::trusted_in(AliasClass::ListElements);
+        self.load_scalar_element_in(kind, element, flags)
+    }
+
+    fn load_scalar_element_in(
+        &mut self,
+        kind: ScalarElement,
+        element: Val,
+        flags: MemFlags,
+    ) -> Val {
         match kind {
             ScalarElement::Int8 => self.builder.sload8(flags, element, 0),
             ScalarElement::Int16 => self.builder.sload16(flags, element, 0),
@@ -15922,7 +15953,23 @@ impl<'a> FunctionCompiler<'a> {
     /// Stores a `kind` scalar's `bits`, which hold a value of that kind, as
     /// the unboxed element at `element`.
     fn store_scalar_list_element(&mut self, kind: ScalarElement, bits: Val, element: Val) {
-        let flags = MemFlags::trusted();
+        self.store_scalar_element_in(kind, bits, element, MemFlags::trusted());
+    }
+
+    /// [`Self::store_scalar_list_element`] of an element of a list that
+    /// keeps scalars, which no access of other memory classes touches.
+    fn store_list_element(&mut self, kind: ScalarElement, bits: Val, element: Val) {
+        let flags = MemFlags::trusted_in(AliasClass::ListElements);
+        self.store_scalar_element_in(kind, bits, element, flags);
+    }
+
+    fn store_scalar_element_in(
+        &mut self,
+        kind: ScalarElement,
+        bits: Val,
+        element: Val,
+        flags: MemFlags,
+    ) {
         let stored = match kind {
             // A `bool` element is one byte that holds 0 or 1.
             ScalarElement::Bool => self.builder.icmp_imm(IntCC::NotEqual, bits, 0),
