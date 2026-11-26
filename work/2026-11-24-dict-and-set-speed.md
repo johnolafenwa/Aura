@@ -119,3 +119,22 @@ A faster keyed hash for integer keys would take about 80 more
 instructions off each lookup, about 10% of `lzw_compress`. John chose on
 2026-11-26 to keep SipHash for every key, as Rust does, because a faster
 hash is easier to flood with colliding keys.
+
+## Follow-up on 2026-11-26: `str` keys in small dicts
+
+On `main` after the `Result` slot work, the `interpreter` benchmark spent
+26% of its instructions in `IndexedEntries::position`: its environment is a
+`dict[str, int64]` of eight names, so each variable read scans a small
+dict, and each entry went through the general `key_equals`. A `str` key
+now scans a small dict with an inlined compare of bytes, and only a union
+entry takes the general equality. A first try that passed a new matcher
+to `lookup` was 4% slower, because the matcher was not inlined into the
+scan.
+
+Instructions (callgrind, cloud box), `main` then this change:
+`interpreter` 8,718 million to 8,404 million (3.6% fewer); `word_freq`,
+`lru_cache` and `docdb` within 0.5%. Outputs match.
+
+The rest of the `interpreter` lookup cost is the boundary around it:
+`map_index_scalar` is about 68 instructions a call and
+`aura_direct_map_probe_slot` about 72, before the scan.

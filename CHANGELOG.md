@@ -7,6 +7,9 @@ in this file.
 
 ## Unreleased
 
+- Speed: a lookup with a `str` key in a dictionary or set of eight
+  entries or fewer compares each entry's bytes in place. The
+  `interpreter` benchmark runs 3.6% fewer instructions.
 - Speed: a `Result` that a function returns and its caller matches or
   unwraps with `try` no longer allocates. `bank_ledger` runs half the
   instructions it did in 0.17.0.
