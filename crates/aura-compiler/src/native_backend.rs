@@ -160,6 +160,12 @@ pub(crate) fn host_module_backend() -> Result<Box<dyn ModuleBackend>, String> {
 /// An access the `mem` module makes at a raw address (ADR-0095).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryAccess {
+    /// Compute an address plus a displacement in units of the element size.
+    PointerOffset,
+    WideCopy {
+        volatile_read: bool,
+        volatile_write: bool,
+    },
     /// A read the optimizer may move or remove. Any alignment.
     Read,
     /// A write the optimizer may move or merge. Any alignment.
@@ -177,6 +183,11 @@ pub enum MemoryAccess {
     /// Stores the replacement if the cell holds the expected value, and
     /// gives the previous one either way.
     AtomicCompareExchange,
+    Ordered(
+        aura_core::atomic_order::AtomicOperation,
+        std::sync::atomic::Ordering,
+        std::sync::atomic::Ordering,
+    ),
     /// Orders every earlier access before every later one.
     Fence,
 }
@@ -184,9 +195,20 @@ pub enum MemoryAccess {
 impl MemoryAccess {
     /// Whether the access gives a value.
     pub fn has_result(self) -> bool {
+        if let Self::Ordered(op, _, _) = self {
+            return !matches!(
+                op,
+                aura_core::atomic_order::AtomicOperation::Store
+                    | aura_core::atomic_order::AtomicOperation::Fence
+            );
+        }
         !matches!(
             self,
-            Self::Write | Self::VolatileWrite | Self::AtomicStore | Self::Fence
+            Self::Write
+                | Self::VolatileWrite
+                | Self::AtomicStore
+                | Self::WideCopy { .. }
+                | Self::Fence
         )
     }
 }
@@ -286,6 +308,8 @@ pub fn target_os() -> &'static str {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FreestandingTarget {
     X86_64,
+    /// x86-64 with the kernel code model and integer-register soft-float ABI.
+    X86_64Kernel,
     Aarch64,
     Riscv64,
 }
@@ -297,7 +321,7 @@ impl FreestandingTarget {
     /// The name `--target` takes.
     pub fn name(self) -> &'static str {
         match self {
-            Self::X86_64 => "x86_64-unknown-none",
+            Self::X86_64 | Self::X86_64Kernel => "x86_64-unknown-none",
             Self::Aarch64 => "aarch64-unknown-none",
             Self::Riscv64 => "riscv64gc-unknown-none-elf",
         }
@@ -320,7 +344,7 @@ impl FreestandingTarget {
     /// The architecture, as `std::env::consts::ARCH` spells it.
     pub fn arch(self) -> &'static str {
         match self {
-            Self::X86_64 => "x86_64",
+            Self::X86_64 | Self::X86_64Kernel => "x86_64",
             Self::Aarch64 => "aarch64",
             Self::Riscv64 => "riscv64",
         }
@@ -377,6 +401,15 @@ pub(crate) struct SigRef(pub(crate) u32);
 /// The type of one value. A comparison yields an `I8` flag.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ScalarType {
+    Inline {
+        bytes: u32,
+        align: u8,
+    },
+    /// Byte aggregate whose C alignment exceeds the LLVM integer element widths.
+    OverAligned {
+        bytes: u32,
+        align: u16,
+    },
     I8,
     I16,
     I32,
@@ -543,16 +576,27 @@ pub(crate) enum Extension {
 pub(crate) enum Indirect {
     /// The call copies the `size` bytes the pointer names to the argument
     /// area of the stack: LLVM's `byval`.
-    ByValue { size: u32 },
+    ByValue {
+        size: u32,
+    },
+    ByValueAligned {
+        size: u32,
+        alignment: u32,
+    },
     /// The call passes the `count` values of type `element` the pointer
     /// names as one array argument. AArch64 gives an array either
     /// consecutive registers or the stack, never both, and after one goes
     /// to the stack no later argument takes a register of its kind.
-    Aggregate { element: ScalarType, count: u32 },
+    Aggregate {
+        element: ScalarType,
+        count: u32,
+    },
     /// The callee writes its `size`-byte result through the pointer, which
     /// travels where the convention puts a struct result's address: LLVM's
     /// `sret`.
-    Result { size: u32 },
+    Result {
+        size: u32,
+    },
 }
 
 /// A function signature.
@@ -603,6 +647,9 @@ pub(crate) enum DataAddress {
 /// addresses written into it, in order.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DataDescription {
+    pub(crate) placement: Option<crate::machine_data::DataPlacement>,
+    /// Retain the complete object and its address through whole-module optimization.
+    pub(crate) preserve_address: bool,
     pub(crate) bytes: Vec<u8>,
     pub(crate) align: Option<u64>,
     pub(crate) addresses: Vec<(u32, DataAddress)>,
@@ -647,6 +694,12 @@ pub(crate) type FunctionBody<'b> =
 
 /// Declares and defines the functions and data of one object.
 pub(crate) trait ModuleBackend {
+    fn mark_machine(
+        &mut self,
+        function: FuncHandle,
+        attrs: crate::machine_attributes::MachineAttributes,
+    );
+    fn set_module_asm(&mut self, fragments: &[String]);
     fn declare_function(
         &mut self,
         name: &str,
@@ -720,6 +773,12 @@ pub(crate) type VersionEntry = (Blk, Val, Option<(Val, i64)>);
 /// Builds one function body: blocks, variables, stack slots, and
 /// instructions.
 pub(crate) trait FunctionBackend {
+    fn inline_asm(
+        &mut self,
+        asm: &crate::inline_asm::MachineAsm,
+        operands: &[Val],
+        results: &[ScalarType],
+    ) -> Vec<Val>;
     /// The module the function belongs to, for declarations made while the
     /// body is built.
     fn module(&mut self) -> &mut dyn ModuleBackend;
@@ -755,6 +814,7 @@ pub(crate) trait FunctionBackend {
     fn set_cold_block(&mut self, block: Blk);
     /// The source position of the instructions built from here on, for a
     /// debug build's line table.
+    fn source_location(&self) -> Option<(u32, u32)>;
     fn set_source_location(&mut self, line: u32, column: u32);
     /// Shows `var` in a debugger as `variable`, in a debug build.
     fn describe_var(&mut self, var: Var, variable: DebugVariable);
@@ -766,6 +826,9 @@ pub(crate) trait FunctionBackend {
     fn append_block_param(&mut self, block: Blk, ty: ScalarType) -> Val;
     fn append_block_params_for_function_params(&mut self, block: Blk);
 
+    fn bind_array_parameter(&mut self, var: Var, index: usize);
+    fn borrow_array_argument(&mut self, value: Val, address: Val) -> Val;
+    fn var_addr(&mut self, var: Var) -> Val;
     fn declare_var(&mut self, var: Var, ty: ScalarType);
     fn def_var(&mut self, var: Var, value: Val);
     fn use_var(&mut self, var: Var) -> Val;
@@ -817,6 +880,13 @@ pub(crate) trait FunctionBackend {
 
     fn iconst(&mut self, ty: ScalarType, value: i64) -> Val;
     fn f64const(&mut self, value: f64) -> Val;
+    fn integer_bits(
+        &mut self,
+        method: aura_core::integer_bits::BitMethod,
+        kind: aura_core::integer::IntegerKind,
+        value: Val,
+        count: Val,
+    ) -> Val;
     fn iadd(&mut self, left: Val, right: Val) -> Val;
     /// The address `offset` bytes past the address `base`: the same word
     /// as `iadd`, which a load or a store through it reaches as an offset

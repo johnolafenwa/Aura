@@ -126,14 +126,16 @@ fn module_body_wrong_statements_still_fail() {
 
 #[test]
 fn module_body_assert_that_can_fail_is_reported() {
-    let source = "def pick(x: int64) -> int64:\n    return x\n\nn = pick(3)\nassert n == 3\n";
+    // `pick` prints, so `n` is not evaluated at build time.
+    let source =
+        "def pick(x: int64) -> int64:\n    print(x)\n    return x\n\nn = pick(3)\nassert n == 3\n";
     let Some(report) = verify(source) else {
         return;
     };
     // `pick` promises nothing about its result.
     assert_eq!(
         open_checks(&report),
-        ["5 assert in <module>"],
+        ["6 assert in <module>"],
         "{report:#?}"
     );
 }

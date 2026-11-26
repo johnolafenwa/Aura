@@ -1,0 +1,5 @@
+def observe() -> int32:
+    print("effect")
+    return 1
+
+const token = observe()

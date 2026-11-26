@@ -349,8 +349,27 @@ impl Resolver<'_, '_> {
             .operand_type(function, parts.object)
             .ok_or("its receiver has no type")?;
         let call = MemberCall {
+            owner: match callee {
+                CallTarget::TraitMember { trait_args, .. }
+                    if function.span.column >= crate::diag::GENERATED_COLUMN_STRIDE
+                        && trait_args
+                            .iter()
+                            .any(crate::sema::has_unresolved_type_params) =>
+                {
+                    function
+                        .local_types
+                        .iter()
+                        .find(|local| local.name == "self")
+                        .map(|local| &local.ty)
+                }
+                _ => None,
+            },
             field: parts.field,
             trait_name: parts.trait_name,
+            trait_args: match callee {
+                CallTarget::TraitMember { trait_args, .. } => trait_args,
+                _ => &[],
+            },
             args,
             writes_back: parts.receiver_place.is_some(),
         };
@@ -508,7 +527,7 @@ impl Resolver<'_, '_> {
             // A program's trait method on a built-in type runs, unless a
             // built-in member of that name shadows it.
             if BuiltinMember::resolve(name, call.field).is_none()
-                && self.trait_method(receiver, None, call.field).is_some()
+                && self.trait_method(receiver, None, call.field, &[]).is_some()
             {
                 return self.class_method(name, receiver, call);
             }
@@ -536,7 +555,24 @@ impl Resolver<'_, '_> {
                 return Err(format!("the runtime has no member `{name}.{}`", call.field));
             }
         }
-        let candidates = self.candidate_types(call.field, call.trait_name);
+        if let (Type::TypeParam(_), Some(owner), Some(trait_name)) =
+            (receiver, call.owner, call.trait_name)
+        {
+            let candidates = super::delegation::open_field_candidates(
+                self.context.trait_impls,
+                owner,
+                trait_name,
+                call.trait_args,
+                call.field,
+            );
+            if !candidates.is_empty() {
+                return Ok(MethodDispatch::Candidates {
+                    candidates,
+                    erased: true,
+                });
+            }
+        }
+        let candidates = self.candidate_types(call.field, call.trait_name, call.trait_args);
         let erased = matches!(receiver, Type::TypeParam(_));
         if candidates.len() == 1 && !erased {
             let ty = &candidates[0];
@@ -561,7 +597,11 @@ impl Resolver<'_, '_> {
                 else {
                     unreachable!("a class method is a static call");
                 };
-                Ok(MethodCandidate { ty, function })
+                Ok(MethodCandidate {
+                    ty,
+                    function,
+                    owner_type: None,
+                })
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(MethodDispatch::Candidates { candidates, erased })
@@ -580,15 +620,17 @@ impl Resolver<'_, '_> {
         let class_type = Type::named(class_name);
         let method = match call.trait_name {
             Some(trait_name) => self
-                .trait_method(receiver, Some(trait_name), call.field)
-                .or_else(|| self.trait_method(&class_type, Some(trait_name), call.field)),
+                .trait_method(receiver, Some(trait_name), call.field, call.trait_args)
+                .or_else(|| {
+                    self.trait_method(&class_type, Some(trait_name), call.field, call.trait_args)
+                }),
             None => self
                 .context
                 .classes
                 .get(class_name)
                 .and_then(|class| class_method_named(class, call.field))
-                .or_else(|| self.trait_method(receiver, None, call.field))
-                .or_else(|| self.trait_method(&class_type, None, call.field)),
+                .or_else(|| self.trait_method(receiver, None, call.field, &[]))
+                .or_else(|| self.trait_method(&class_type, None, call.field, &[])),
         }
         .ok_or_else(|| format!("`{class_name}` has no method `{}`", call.field))?;
         if method.receiver == Some(MirReceiverKind::BorrowMut) && !call.writes_back {
@@ -643,6 +685,7 @@ impl Resolver<'_, '_> {
         ty: &Type,
         trait_name: Option<&str>,
         field: &str,
+        trait_args: &[Type],
     ) -> Option<&super::MirMethod> {
         let mut best = None;
         let mut best_specificity = 0usize;
@@ -660,6 +703,9 @@ impl Resolver<'_, '_> {
                 &type_params,
                 &mut substitutions,
             ) {
+                continue;
+            }
+            if !trait_impl.matches_trait_args(trait_args, &substitutions) {
                 continue;
             }
             let Some(method) = trait_impl
@@ -687,7 +733,12 @@ impl Resolver<'_, '_> {
     /// Every type that declares `field`, most specific first: classes by
     /// name, then trait impls by specificity. A call through a trait bound
     /// looks only at that trait's impls.
-    fn candidate_types(&self, field: &str, trait_name: Option<&str>) -> Vec<Type> {
+    fn candidate_types(
+        &self,
+        field: &str,
+        trait_name: Option<&str>,
+        trait_args: &[Type],
+    ) -> Vec<Type> {
         let mut candidates = Vec::new();
         if trait_name.is_none() {
             for class in self.context.classes.values() {
@@ -698,6 +749,9 @@ impl Resolver<'_, '_> {
         }
         for trait_impl in self.context.trait_impls {
             if trait_name.is_some_and(|name| trait_impl.trait_name != name) {
+                continue;
+            }
+            if !trait_impl.matches_trait_args(trait_args, &HashMap::new()) {
                 continue;
             }
             // A receiver of a union type runs the union's own impl or
@@ -711,7 +765,11 @@ impl Resolver<'_, '_> {
                         &trait_impl.for_type,
                         &trait_impl.trait_args,
                     ),
-                    trait_impl.for_type.clone(),
+                    if trait_args.is_empty() {
+                        trait_impl.for_type.clone()
+                    } else {
+                        trait_impl.receiver_for_trait_args(trait_args)
+                    },
                 ));
             }
         }
@@ -885,8 +943,10 @@ pub(super) fn cleanup_method(
 
 /// One member call to resolve.
 struct MemberCall<'a> {
+    owner: Option<&'a Type>,
     field: &'a str,
     trait_name: Option<&'a str>,
+    trait_args: &'a [Type],
     args: &'a [MirArg],
     /// The call names a place its receiver writes back to.
     writes_back: bool,

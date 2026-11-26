@@ -29,6 +29,7 @@ const IMAGE_SOURCE: &str = include_str!("../std/image.au");
 
 fn module_source(name: &str) -> Option<&'static str> {
     match name {
+        "mem" => crate::freestanding_check_target().map(crate::hardware::source),
         "json" => Some(JSON_SOURCE),
         "iter" => Some(ITER_SOURCE),
         "collections" => Some(COLLECTIONS_SOURCE),
@@ -51,7 +52,12 @@ pub(crate) fn has_source_part(path: &[String]) -> bool {
     matches!(path, [name] if module_source(name).is_some())
 }
 
-/// The builtin modules with an Aura-source part that `module` imports.
+/// Source modules and the target-specific namespace are materialized on import.
+pub(crate) fn needs_registry_entry(path: &[String]) -> bool {
+    has_source_part(path) || matches!(path, [name] if name == "build")
+}
+
+/// The builtin imports whose target-specific or source definitions the registry needs.
 pub(crate) fn imported_source_parts(module: &crate::ast::Module) -> BTreeSet<String> {
     module
         .imports
@@ -60,7 +66,7 @@ pub(crate) fn imported_source_parts(module: &crate::ast::Module) -> BTreeSet<Str
             ImportKind::Module { path, .. } => path,
             ImportKind::From { module_path, .. } => module_path,
         })
-        .filter(|path| has_source_part(path))
+        .filter(|path| needs_registry_entry(path))
         .map(|path| path[0].clone())
         .collect()
 }
@@ -73,10 +79,22 @@ thread_local! {
     static CHECKED: RefCell<BTreeMap<String, ModuleNamespace>> = const { RefCell::new(BTreeMap::new()) };
 }
 
+/// Swap the checked source namespaces when entering or leaving a configuration scope.
+pub(crate) fn swap_checked_sources(cache: &mut BTreeMap<String, ModuleNamespace>) {
+    CHECKED.with_borrow_mut(|checked| std::mem::swap(checked, cache));
+}
+
 /// The exports of the Aura-source part of builtin module `name`.
 fn source_part(name: &str) -> Option<ModuleNamespace> {
     let source = module_source(name)?;
-    if let Some(namespace) = CHECKED.with(|checked| checked.borrow().get(name).cloned()) {
+    // The mem source varies by architecture. The target triple cannot collide
+    // with a builtin module name and is shared by both x86-64 profiles.
+    let key = if name == "mem" {
+        crate::freestanding_check_target()?.name()
+    } else {
+        name
+    };
+    if let Some(namespace) = CHECKED.with(|checked| checked.borrow().get(key).cloned()) {
         return Some(namespace);
     }
     let module = crate::parse_source(source)
@@ -87,8 +105,10 @@ fn source_part(name: &str) -> Option<ModuleNamespace> {
     // The registry must include the dependency's impls and associated types
     // as well as its imported names. A module's self-import names its host
     // namespace and must not recursively compile the source being checked.
-    let mut module_registry = crate::builtin_modules::builtin_module_registry();
-    for dependency in imported_source_parts(&module) {
+    let dependencies = imported_source_parts(&module);
+    let mut module_registry =
+        crate::builtin_modules::builtin_registry_for_imports(dependencies.contains("build"));
+    for dependency in dependencies {
         if dependency != name {
             if let (Some(namespace), Some(part)) = (
                 module_registry.get_mut(&dependency),
@@ -121,7 +141,7 @@ fn source_part(name: &str) -> Option<ModuleNamespace> {
     CHECKED.with(|checked| {
         checked
             .borrow_mut()
-            .insert(name.to_string(), namespace.clone())
+            .insert(key.to_string(), namespace.clone())
     });
     Some(namespace)
 }
@@ -206,8 +226,9 @@ fn merge_with(host: &mut ModuleNamespace, part: ModuleNamespace, hide_internal: 
 /// and one that imports `json` carries nothing of `tensor`: every function
 /// of a merged part is named in the program's output.
 pub(crate) fn builtin_registry(parts: &BTreeSet<String>) -> BTreeMap<String, ModuleNamespace> {
-    let mut registry = crate::builtin_modules::builtin_module_registry();
-    if !parts.is_empty() {
+    let mut registry =
+        crate::builtin_modules::builtin_registry_for_imports(parts.contains("build"));
+    if parts.iter().any(|part| part != "build") {
         for (name, namespace) in registry.iter_mut() {
             if !parts.contains(name) && !IMPLICIT_PARTS.contains(&name.as_str()) {
                 continue;

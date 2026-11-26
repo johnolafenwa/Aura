@@ -635,10 +635,13 @@ fn every_host_function_has_a_name() {
 
 #[test]
 fn digit_counts_and_powers() {
-    assert_eq!(decimal_digits(&BigInt::zero()), 1);
-    assert_eq!(decimal_digits(&BigInt::from(-999)), 3);
-    assert_eq!(decimal_digits(&BigInt::from(u64::MAX)), 20);
-    assert_eq!(decimal_digits(&HUGE.parse().expect("an integer")), 39);
+    assert_eq!(decimal_digits(&BigInt::zero()).unwrap(), 1);
+    assert_eq!(decimal_digits(&BigInt::from(-999)).unwrap(), 3);
+    assert_eq!(decimal_digits(&BigInt::from(u64::MAX)).unwrap(), 20);
+    assert_eq!(
+        decimal_digits(&HUGE.parse().expect("an integer")).unwrap(),
+        39
+    );
     assert_eq!(
         code(power_of_ten(MAX_SCALE_DIGITS + 1).map(|_| int(0))),
         "AU4005"
@@ -787,4 +790,15 @@ fn texts_over_the_string_limit_are_refused_before_they_are_built() {
         None,
     );
     assert_eq!(code(far), "AU4005");
+}
+
+#[test]
+fn decimal_digit_materialization_obeys_a_scoped_output_allowance() {
+    let integer = BigInt::from(10_u8).pow(100);
+    for result in [
+        crate::builtin_limit::with_allowance(32, || decimal_digits(&integer).map(|_| ())),
+        crate::builtin_limit::with_allowance(32, || display(&integer, -50).map(|_| ())),
+    ] {
+        assert_eq!(result.unwrap_err().code, "AU3028");
+    }
 }

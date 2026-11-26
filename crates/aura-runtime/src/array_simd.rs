@@ -512,6 +512,9 @@ const MATMUL_MAX_THREADS: usize = 16;
 /// a positive number, and otherwise the CPUs the process may run on, up
 /// to [`MATMUL_MAX_THREADS`].
 pub(crate) fn array_thread_limit() -> usize {
+    if crate::builtin_limit::allowance().is_some() {
+        return 1;
+    }
     static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *LIMIT.get_or_init(|| {
         thread_limit_for(

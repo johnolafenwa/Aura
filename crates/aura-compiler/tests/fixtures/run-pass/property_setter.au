@@ -1,0 +1,26 @@
+class Counter:
+    stored: int64
+
+    @property
+    def count(self) -> int64:
+        print("get")
+        return self.stored
+
+    @count.setter
+    def count(mut self, value: int64):
+        print("set")
+        self.stored = value
+
+def index() -> int64:
+    print("index")
+    return 0
+
+def increment() -> int64:
+    print("rhs")
+    return 1
+
+def main():
+    mut counters = [Counter(stored=0)]
+    counters[index()].count = 5
+    counters[index()].count += increment()
+    print(counters[0].stored)

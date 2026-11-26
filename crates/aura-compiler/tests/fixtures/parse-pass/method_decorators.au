@@ -1,0 +1,5 @@
+class Counter:
+    @tools.traced
+    @retry(3)
+    public def read(self, *, n: int64) -> int64:
+        return n

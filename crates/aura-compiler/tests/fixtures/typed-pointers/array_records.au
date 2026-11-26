@@ -1,0 +1,19 @@
+extern "C" class Pair:
+    left: uint16
+    right: uint16
+
+extern "C" def malloc(size: uint64) -> uint64
+extern "C" def free(address: uint64) -> None
+
+def main() -> None:
+    address = malloc(16)
+    pairs = address as ptr[fixed[Pair, 2]]
+    pairs.write([Pair(left=1, right=2), Pair(left=3, right=4)])
+    got = pairs.read()
+    assert got[1].right == 4
+    grid = address as ptr[fixed[fixed[uint16, 2], 2]]
+    row = grid.read()
+    assert row[1][0] == 3
+    grid.offset(1).write([[5, 6], [7, 8]])
+    assert pairs.offset(1).read()[0].right == 6
+    free(address)

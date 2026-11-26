@@ -1,0 +1,62 @@
+class Pair:
+    name: str
+    count: int64
+
+def join(names: list[str]) -> str:
+    mut out = ""
+    for name in names:
+        out = out + name
+    return out
+
+def total(items: list[int64]) -> int64:
+    mut sum = 0
+    mut place = 1
+    for item in items:
+        sum = sum + item * place
+        place = place * 10
+    return sum
+
+def work(n: int64) -> int64:
+    mut items = [3, 4, 5]
+    last = items.pop()
+    items.insert(0, 9)
+    items.insert(3, 7)
+    items.insert(1, 2)
+    first = items.pop(0)
+    items.reverse()
+    items.swap(0, 1)
+    items.reserve(n)
+    mut sum = last + first * 100 + total(items) * 1000
+    mut names: list[str] = ["a", "b", "c"]
+    name = names.pop()
+    names.insert(0, "z" + name)
+    names.insert(3, "end")
+    middle = names.pop(1)
+    names.reverse()
+    names.swap(0, 2)
+    names.reserve(n)
+    joined = join(names)
+    if joined == "zcbend":
+        sum = sum + 10000000
+    sum = sum + joined.len() * 100000000 + middle.len()
+    names.clear()
+    names.append("again")
+    sum = sum + names.len() + names[0].len()
+    mut pairs = [Pair(name="x", count=1), Pair(name="yy", count=2)]
+    pairs.insert(1, Pair(name="zzz", count=3))
+    taken = pairs.pop(0)
+    pairs.reverse()
+    for pair in pairs:
+        sum = sum + pair.name.len() * pair.count
+    pairs.clear()
+    mut wide: list[float64] = []
+    wide.reserve(3)
+    wide.append(1.5)
+    wide.insert(0, 2.5)
+    return sum + taken.count + pairs.len() + (wide.pop() as int64) + wide.len()
+
+export "C" def entry(n: int64) -> int64:
+    return work(n)
+
+def main() -> None:
+    print(entry(40))

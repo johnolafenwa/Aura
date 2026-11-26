@@ -411,7 +411,7 @@ A stored `TaskCallable[...]` value is also a valid target. It moves into the sta
 
 ## Decorators
 
-A decorator line above a module-level function replaces the function with the result of calling the decorator on it. Write `@` and one expression on each line above `def`.
+A decorator line above a function or class method replaces its callable with the result of applying the decorator. Write `@` and one expression on each line above `def`.
 
 ```aura
 type Step = Callable[def(n: int64) -> int64]
@@ -505,6 +505,14 @@ A decorator factory may be generic too. Its own arguments, such as the attempt c
 
 A retry calls the wrapped function again with the same argument, so it needs a shared or Copy parameter. A function that takes `own` arguments fails at the decorator with `AU2002`. Its help points to an explicit loop that builds a new argument for each attempt.
 
+### Method Decorators
+
+An instance method supplies its receiver as the first parameter of the callable. Use `self: Counter`, `self: mut Counter`, or `self: own Counter` to match the method's receiver. An associated method supplies its declared parameters only.
+
+<<< ../../examples/classes/method_decorators.au{aura}
+
+Here the decorator runs once when the module initializes. Every call to `counter.score()` uses the resulting callable. Binding `counter.score` to a local or calling the method recursively uses that same callable. Visibility and receiver access rules apply at the member use.
+
 ### Restrictions
 
 The checker rejects these with `AU2047`:
@@ -513,13 +521,14 @@ The checker rejects these with `AU2047`:
 - a decorated `main`
 - a parameter with a default, because a closure has no parameter defaults
 - a decorated function that returns a view
-- a decorator line that is not followed by a module-level `def`
+- a decorator group without a function or class method definition
+- a decorated initializer or a decorated method of a generic class
 
-A decorator inside a function body, or in a class body other than `@property`, reports `AU2005`. Decorators on classes, enums, and methods are not implemented.
+A decorator inside a function body reports `AU2005`. Classes and enums cannot themselves take decorators. The class markers `@property` and `@name.setter` declare computed properties. [Properties](/manual/classes#properties)
 
 ### Tooling
 
-Hover on a decorated function shows its decorator lines above the signature. `aura doc` lists it as a function, with its decorators and docstring. `aura fmt` keeps decorator lines directly above their definition.
+Hover on a decorated function or method shows its decorator lines above the signature. `aura doc` lists it as a function, with its decorators and docstring. `aura fmt` keeps decorator lines directly above their definition.
 
 ## Contracts
 

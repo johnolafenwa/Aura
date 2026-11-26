@@ -387,6 +387,7 @@ pub(super) fn retain_direct_values(
     ty: &DirectType,
 ) -> std::result::Result<(), String> {
     match ty {
+        DirectType::Fixed(_) => Ok(()),
         DirectType::Scalar(_) => Ok(()),
         DirectType::Opaque(_) => {
             let retain_value = builder.import_function(codegen.runtime[RuntimeFn::RetainValue]);

@@ -939,6 +939,58 @@ fn c_value_failure(symbol: &str, error: CValueError) -> ! {
     }
 }
 
+/// # Safety
+///
+/// The descriptor names one fixed array field and the slot holds its bytes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_fixed_box(
+    descriptor: *const u8,
+    length: usize,
+    slot: *const u8,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, length);
+        let kind = &layout.fields[0].kind;
+        let bytes = slice::from_raw_parts(slot, kind.size());
+        match c_values::unpack_kind(kind, bytes) {
+            Ok(value) => boxed_value(value),
+            Err(error) => c_value_failure("fixed", error),
+        }
+    })
+}
+
+/// # Safety
+///
+/// The descriptor names one fixed array field, value is live, and slot has
+/// room for the full array.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_fixed_unbox(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    length: usize,
+    slot: *mut u8,
+) {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, length);
+        let kind = &layout.fields[0].kind;
+        let bytes = slice::from_raw_parts_mut(slot, kind.size());
+        if let Err(error) = with_value(value, |value| {
+            c_values::pack_kind(value, kind, "fixed", bytes)
+        }) {
+            c_value_failure("fixed", error)
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_fixed_bounds(index: i64, length: i64, line: i64, column: i64) {
+    task_runtime_boundary(|| {
+        let message = format!("fixed array index `{index}` is out of bounds for length `{length}`");
+        let span = aura_core::diag::Span::new(line as usize, column as usize);
+        runtime_diagnostic_error(Diagnostic::coded_at("AU4031", span, message));
+    })
+}
+
 /// Writes the class instance `value` at `slot` in the C layout that
 /// `descriptor` describes. Generated code calls this for a class with an
 /// array field or a union, whose value is not one word per scalar.
@@ -1211,4 +1263,37 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_release_structs(array: *mut u8) 
     // SAFETY: only a live allocation produced by allocate_structs reaches here.
     let owner = unsafe { (*array.cast::<StructArrayHeader>().sub(1)).owner };
     unsafe { super::aura_direct_release_value(owner) };
+}
+
+/// # Safety
+/// The pointer satisfies the raw 128-bit scalar read contract.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_pointer_wide_read(
+    address: *const u128,
+    signed: i64,
+    volatile: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(unsafe { crate::raw_wide_memory::read(address, signed != 0, volatile != 0) })
+    })
+}
+
+/// # Safety
+/// The pointer satisfies the raw 128-bit scalar write contract and value is live.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_pointer_wide_write(
+    address: *mut u128,
+    value: *mut OpaqueValue,
+    volatile: i64,
+) {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |held| {
+            if !crate::raw_wide_memory::write(address, held, volatile != 0) {
+                runtime_diagnostic_error(Diagnostic::coded(
+                    "AU4032",
+                    "wide memory write needs an integer",
+                ));
+            }
+        })
+    })
 }

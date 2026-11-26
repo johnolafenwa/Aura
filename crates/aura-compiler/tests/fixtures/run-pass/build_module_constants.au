@@ -1,0 +1,10 @@
+import build as target
+from build import pointer_width as bits
+
+def main():
+    print(bits == 64)
+    print(target.hosted and not target.freestanding)
+    print(target.debug != target.release)
+    print(target.endianness == "little")
+    print(target.arch != "" and target.os != "")
+    print("unknown" in target.cfg)

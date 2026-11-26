@@ -1,0 +1,11 @@
+from conditional_support.features import available as selected
+import conditional_support.features as features
+if selected:
+    active = 1
+else:
+    import unavailable
+def main():
+    if features.available:
+        print(active)
+    else:
+        missing_call()

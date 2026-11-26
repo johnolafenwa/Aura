@@ -223,6 +223,7 @@ fn rewrite(function: &mut FunctionDecl) -> Result<FunctionDecl> {
         span,
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: Vec::new(),
         spec: false,
