@@ -28175,6 +28175,56 @@ fn a_freed_scalar_list_is_the_next_empty_list_of_its_type() {
 }
 
 #[test]
+fn a_scalar_list_extend_consumed_is_the_next_empty_list() {
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let ints = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+            let name = super::canonical_runtime_type_name(&Type::Named(
+                "list".to_string(),
+                vec![Type::named("int64")],
+            ));
+            let empty = || super::aura_direct_vec_empty_tagged(&ints, name.as_ptr(), name.len());
+            let entries =
+                || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
+            let int64 = super::DirectScalarKind::Int64 as i64;
+            let push = |list, bits| super::aura_direct_vec_push_scalar(list, bits, int64);
+
+            // An empty `out` takes `entry`'s storage, so `entry` is freed.
+            let out = empty();
+            let entry = empty();
+            push(entry, 1);
+            assert_eq!(super::aura_direct_vec_extend_in_place(out, entry), 1);
+            assert_eq!(entries(), [(out as usize, 1)]);
+            assert!(super::SPARE_LIST.with(|spare| spare.0.get().is_null()));
+
+            // A non-empty `out` copies, and `entry` becomes the spare.
+            let entry = empty();
+            push(entry, 2);
+            push(entry, 3);
+            assert_eq!(super::aura_direct_vec_extend_in_place(out, entry), 1);
+            assert_eq!(entries(), [(out as usize, 1)]);
+            assert_eq!(super::aura_direct_vec_len(out), 3);
+            let reused = empty();
+            assert_eq!(reused, entry);
+            assert_eq!(super::aura_direct_vec_len(reused), 0);
+
+            // A shared `entry` is consumed as before and leaves no spare.
+            push(reused, 4);
+            let copy = super::aura_direct_clone_value(reused);
+            assert_eq!(super::aura_direct_vec_extend_in_place(out, reused), 1);
+            assert!(super::SPARE_LIST.with(|spare| spare.0.get().is_null()));
+            assert_eq!(super::aura_direct_vec_len(copy), 1);
+            assert_eq!(super::aura_direct_vec_len(out), 4);
+            unsafe { super::aura_direct_release_value(copy) };
+            unsafe { super::aura_direct_release_value(out) };
+            assert!(entries().is_empty());
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+}
+
+#[test]
 fn a_list_made_with_room_takes_its_literal_in_place() {
     let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
     let descriptor = super::canonical_runtime_type_name(&Type::Named(
