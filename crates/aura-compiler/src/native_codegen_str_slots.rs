@@ -1745,6 +1745,8 @@ impl FunctionCompiler<'_> {
                 self.runtime[RuntimeFn::StringSplitLiteralWords],
                 &[ptr, len, separator_ptr, separator_len],
             );
+            // The new list's element type names its type, as its tag would.
+            self.shaped_boxes.extend(results.iter().copied());
             return Ok(Some(self.owned_opaque_result(
                 results,
                 Type::Named("list".to_string(), vec![Type::named("str")]),

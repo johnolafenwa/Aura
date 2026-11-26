@@ -18711,6 +18711,8 @@ impl<'a> FunctionCompiler<'a> {
                 self.runtime[RuntimeFn::StringSplitLiteral],
                 &[object.values[0], ptr, len],
             );
+            // The new list's element type names its type, as its tag would.
+            self.shaped_boxes.insert(call.results[0]);
             return Ok(self.owned_opaque_result(
                 call.results,
                 Type::Named("list".to_string(), vec![Type::named("str")]),
