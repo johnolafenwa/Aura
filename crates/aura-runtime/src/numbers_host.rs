@@ -275,10 +275,8 @@ fn normalized(mut coefficient: BigInt, mut exponent: i64) -> Result<(BigInt, i64
             removed += step;
         }
     }
-    let removed =
-        i64::try_from(removed).map_err(|_| overflow("`numbers.Decimal` exponent overflow"))?;
     exponent = exponent
-        .checked_add(removed)
+        .checked_add_unsigned(removed)
         .ok_or_else(|| overflow("`numbers.Decimal` exponent overflow"))?;
     Ok((coefficient, exponent))
 }
@@ -810,8 +808,8 @@ fn aligned(left: (BigInt, i64), right: (BigInt, i64)) -> Result<(BigInt, BigInt,
     if right_coefficient.is_zero() {
         return Ok((left_coefficient, right_coefficient, left_exponent));
     }
-    let gap = (i128::from(left_exponent) - i128::from(right_exponent)).unsigned_abs();
-    let gap = u64::try_from(gap).map_err(|_| too_large("a power of ten"))?;
+    // Two `i64` exponents are at most `u64::MAX` apart.
+    let gap = left_exponent.abs_diff(right_exponent);
     let scaled = if left_exponent >= right_exponent {
         &left_coefficient
     } else {

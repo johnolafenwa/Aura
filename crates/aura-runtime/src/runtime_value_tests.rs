@@ -21693,6 +21693,11 @@ fn a_socket_wait_leaves_the_socket_free_for_other_tasks_on_its_worker() {
     let timeout = StdDuration::from_secs(5);
     let result = super::run_lightweight_root_task_with_worker_count(1, move || {
         let error = |error: io::Error| Diagnostic::new(error.to_string());
+        let unbound = UdpSocketValue::bind("not an address").map_err(error);
+        assert!(
+            unbound.is_err(),
+            "an address that does not parse is refused"
+        );
         let socket = UdpSocketValue::bind("127.0.0.1:0").map_err(error)?;
         let receiver = socket.clone();
         let waiting = spawn_lightweight_task(move || {
@@ -21991,4 +21996,122 @@ fn a_closure_environment_still_answers_after_a_holder_of_its_lock_panicked() {
         env.into_captured_values(),
         vec![Value::Int(IntegerValue::from_i64(5))]
     );
+}
+
+#[test]
+fn only_an_accept_the_peer_gave_up_on_is_transient() {
+    for kind in [
+        io::ErrorKind::ConnectionAborted,
+        io::ErrorKind::ConnectionReset,
+        io::ErrorKind::Interrupted,
+    ] {
+        assert!(super::is_transient_accept_error(&io::Error::from(kind)));
+    }
+    for kind in [
+        io::ErrorKind::WouldBlock,
+        io::ErrorKind::PermissionDenied,
+        io::ErrorKind::OutOfMemory,
+        io::ErrorKind::Other,
+    ] {
+        assert!(!super::is_transient_accept_error(&io::Error::from(kind)));
+    }
+}
+
+/// Whether a read that waited on a peer ended because the peer went away,
+/// not because the wait ran out.
+fn ended_by_peer<T: std::fmt::Debug>(read: io::Result<Option<T>>) -> bool {
+    match read {
+        Ok(None) => true,
+        Ok(Some(value)) => panic!("the peer sent nothing, yet {value:?} was read"),
+        Err(error) => error.kind() != io::ErrorKind::TimedOut,
+    }
+}
+
+#[test]
+fn closing_a_tls_stream_in_use_shuts_its_socket_down_instead_of_waiting() {
+    let timeout = StdDuration::from_secs(10);
+    let temp = TempDir::new("aura-tls-busy-close");
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, certificate.cert.pem()).expect("certificate should write");
+    fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("key should write");
+    let cert = cert_path
+        .to_str()
+        .expect("UTF-8 certificate path")
+        .to_string();
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        &cert,
+        key_path.to_str().expect("UTF-8 key path"),
+    )
+    .expect("TLS listener should bind");
+    let address = listener.local_addr().expect("TLS address should exist");
+    let server_listener = listener.clone();
+    let server = thread::spawn(move || {
+        let stream = server_listener
+            .accept(Some(timeout), Some(&CancellationContext::default()))
+            .expect("TLS server should accept");
+        // Another operation holds the stream: `close` marks it closed and
+        // shuts the socket down under that operation rather than wait.
+        stream.inner.busy.store(true, Ordering::SeqCst);
+        let started = Instant::now();
+        stream.close();
+        assert!(started.elapsed() < StdDuration::from_secs(4));
+        assert!(stream.inner.closed.load(Ordering::SeqCst));
+        assert!(
+            lock_mutex(&stream.inner.stream).is_some(),
+            "the operation keeps its stream"
+        );
+        stream.inner.busy.store(false, Ordering::SeqCst);
+        // A second close of a closed stream does nothing.
+        stream.close();
+        server_listener.close();
+    });
+    let client = TlsStreamValue::connect(
+        &address,
+        "localhost",
+        Some(&cert),
+        Some(timeout),
+        Some(&CancellationContext::default()),
+    )
+    .expect("TLS client should connect");
+    assert!(ended_by_peer(client.read_line(
+        Some(timeout),
+        Some(&CancellationContext::default())
+    )));
+    server.join().expect("TLS server thread");
+    client.close();
+}
+
+#[test]
+fn closing_a_websocket_in_use_shuts_its_socket_down_instead_of_waiting() {
+    let timeout = StdDuration::from_secs(10);
+    let listener =
+        WebSocketListenerValue::bind("127.0.0.1:0").expect("websocket listener should bind");
+    let address = listener.local_addr().expect("websocket listener address");
+    let server = thread::spawn(move || {
+        let socket = listener
+            .accept(Some(timeout))
+            .expect("websocket server should accept");
+        socket.inner.busy.store(true, Ordering::SeqCst);
+        let started = Instant::now();
+        socket.close().expect("a close in use is not an error");
+        assert!(started.elapsed() < StdDuration::from_secs(4));
+        assert!(socket.inner.closed.load(Ordering::SeqCst));
+        socket.inner.busy.store(false, Ordering::SeqCst);
+        assert_eq!(
+            socket.close().expect_err("a closed websocket").kind(),
+            super::closed_resource_error().kind()
+        );
+    });
+    let client = super::WebSocketValue::connect(&format!("ws://{address}"), Some(timeout))
+        .expect("websocket client should connect");
+    assert!(ended_by_peer(client.recv_bytes(Some(timeout))));
+    server.join().expect("websocket server thread");
+    // The client side, whose socket may be TLS, closes the same way.
+    client.inner.busy.store(true, Ordering::SeqCst);
+    client.close().expect("a close in use is not an error");
+    assert!(client.inner.closed.load(Ordering::SeqCst));
 }

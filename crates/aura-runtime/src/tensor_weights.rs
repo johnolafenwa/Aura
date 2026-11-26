@@ -45,8 +45,9 @@ impl<'de> serde::Deserialize<'de> for RawShape {
                             "a shape has more than {MAX_SHAPE_RANK} axes"
                         )));
                     }
-                    let axis = usize::try_from(axis)
-                        .map_err(|_| serde::de::Error::custom("an axis is too long"))?;
+                    let Ok(axis) = usize::try_from(axis) else {
+                        return Err(serde::de::Error::custom("an axis is too long"));
+                    };
                     axes.push(axis);
                 }
                 Ok(RawShape(axes))
@@ -122,9 +123,9 @@ fn read_header(path: &str) -> std::result::Result<(std::fs::File, Vec<Entry>, u6
         return Err(format!("`{path}` is not a safetensors file"));
     }
     let mut header = Vec::new();
-    header
-        .try_reserve_exact(length as usize)
-        .map_err(|error| failed("read", &error))?;
+    if let Err(error) = header.try_reserve_exact(length as usize) {
+        return Err(failed("read", &error));
+    }
     header.resize(length as usize, 0);
     file.read_exact(&mut header)
         .map_err(|error| failed("read", &error))?;
@@ -219,11 +220,10 @@ pub(super) fn load(
         return Err(wrongly());
     }
     let count = byte_count / width;
-    let out_of_memory = || format!("there is not enough memory to load tensor `{name}`");
     let mut bytes = Vec::new();
-    bytes
-        .try_reserve_exact(byte_count)
-        .map_err(|_| out_of_memory())?;
+    if bytes.try_reserve_exact(byte_count).is_err() {
+        return Err(out_of_memory(name));
+    }
     bytes.resize(byte_count, 0);
     file.seek(SeekFrom::Start(data + entry.start))
         .and_then(|_| file.read_exact(&mut bytes))
@@ -260,14 +260,10 @@ pub(super) fn load(
     // are reserved fallibly too.
     let storage = match dtype {
         ArrayDType::Float32 => ArrayStorage::Float32(
-            gather(count, floats().map(|value| Ok(value as f32)), out_of_memory)?.into(),
+            gather(count, floats().map(|value| Ok(value as f32)), name)?.into(),
         ),
-        ArrayDType::Float64 => {
-            ArrayStorage::Float64(gather(count, floats().map(Ok), out_of_memory)?.into())
-        }
-        ArrayDType::Int64 => {
-            ArrayStorage::Int64(gather(count, integers().map(Ok), out_of_memory)?.into())
-        }
+        ArrayDType::Float64 => ArrayStorage::Float64(gather(count, floats().map(Ok), name)?.into()),
+        ArrayDType::Int64 => ArrayStorage::Int64(gather(count, integers().map(Ok), name)?.into()),
         _ => ArrayStorage::Int32(
             gather(
                 count,
@@ -276,7 +272,7 @@ pub(super) fn load(
                         format!("tensor `{name}` holds {value}, which `int32` cannot hold")
                     })
                 }),
-                out_of_memory,
+                name,
             )?
             .into(),
         ),
@@ -291,16 +287,22 @@ pub(super) fn load(
     ArrayValue::new(shape, storage).map_err(|error| error.message)
 }
 
-/// `count` values gathered into a slice reserved without aborting.
+/// Why tensor `name` could not be loaded when its memory cannot be had.
+fn out_of_memory(name: &str) -> String {
+    format!("there is not enough memory to load tensor `{name}`")
+}
+
+/// `count` values of tensor `name` gathered into a slice reserved without
+/// aborting.
 fn gather<T>(
     count: usize,
     values: impl Iterator<Item = std::result::Result<T, String>>,
-    out_of_memory: impl Fn() -> String,
+    name: &str,
 ) -> std::result::Result<Box<[T]>, String> {
     let mut output = Vec::new();
-    output
-        .try_reserve_exact(count)
-        .map_err(|_| out_of_memory())?;
+    if output.try_reserve_exact(count).is_err() {
+        return Err(out_of_memory(name));
+    }
     for value in values {
         output.push(value?);
     }
@@ -486,5 +488,30 @@ mod tests {
             .unwrap_err()
             .contains("is not a safetensors file"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_shape_that_is_not_a_list_and_an_unreservable_tensor_are_refused() {
+        let root = std::env::temp_dir().join(format!("aura-weights-shape-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("w.safetensors");
+        let text = path.to_str().unwrap();
+        // A shape must be a list of axis lengths, not one number.
+        write_raw(
+            &path,
+            r#"{"w":{"dtype":"F32","shape":4,"data_offsets":[0,16]}}"#,
+            &[0; 16],
+        );
+        let error = names(text).unwrap_err();
+        assert!(error.contains("describes tensor `w` wrongly"), "{error}");
+        assert!(error.contains("at most 64 axis lengths"), "{error}");
+        let _ = std::fs::remove_dir_all(&root);
+
+        // A count no vector can reserve is refused without aborting.
+        let error = gather::<f32>(usize::MAX, std::iter::empty(), "w").unwrap_err();
+        assert_eq!(error, "there is not enough memory to load tensor `w`");
+        let values = [Ok(1_i64), Err("bad".to_string())].into_iter();
+        assert_eq!(gather(2, values, "w").unwrap_err(), "bad");
+        assert_eq!(&*gather(1, [Ok(7_i32)].into_iter(), "w").unwrap(), &[7]);
     }
 }

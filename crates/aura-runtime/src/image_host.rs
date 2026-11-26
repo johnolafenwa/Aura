@@ -305,12 +305,17 @@ pub fn evaluate_image_builtin(name: &str, data: &Value, numbers: &[i64]) -> Resu
             let filter = Filter::from_code(numbers[5]).ok_or_else(|| {
                 image_error(name, format!("knows no filter numbered `{}`", numbers[5]))
             })?;
-            let resized = image_codec::resize(
+            let resized = match image_codec::resize(
                 &pixels, width, height, channels, new_width, new_height, filter,
-            )
-            .map_err(|error| {
-                Diagnostic::coded("AU4005", format!("`image.resize` failed: {error}"))
-            })?;
+            ) {
+                Ok(resized) => resized,
+                Err(error) => {
+                    return Err(Diagnostic::coded(
+                        "AU4005",
+                        format!("`image.resize` failed: {error}"),
+                    ))
+                }
+            };
             Ok(bytes_value(resized))
         }
         "image::__aura_crop" => {

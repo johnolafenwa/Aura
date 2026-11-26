@@ -8638,10 +8638,12 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`extend` requires another `list[T]` value"));
                 };
                 let mut updated = vector;
-                updated
-                    .elements
-                    .try_append(other.elements)
-                    .map_err(|_| Diagnostic::coded("AU4005", "list capacity allocation failed"))?;
+                if updated.elements.try_append(other.elements).is_err() {
+                    return Err(Diagnostic::coded(
+                        "AU4005",
+                        "list capacity allocation failed",
+                    ));
+                }
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`extend` requires a mutable list place"));
                 };

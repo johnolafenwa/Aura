@@ -756,7 +756,7 @@ fn normalizing_strips_every_trailing_zero_in_few_divisions() {
         normalized(BigInt::from(3u8) * BigInt::from(10u8).pow(200_000), 0).unwrap();
     assert_eq!((coefficient, exponent), (BigInt::from(3u8), 200_000));
     assert_eq!(
-        code(normalized(BigInt::from(10u8), i64::MAX).map(|_| int(0))),
+        normalized(BigInt::from(10u8), i64::MAX).unwrap_err().code,
         "AU4002"
     );
 }
@@ -768,7 +768,7 @@ fn texts_over_the_string_limit_are_refused_before_they_are_built() {
     assert!(digits_in_radix(64, 2) >= 64);
     assert!(digits_in_radix(64, 10) >= 20);
     assert!(text_fits(limit, "x").is_ok());
-    assert_eq!(code(text_fits(limit + 1, "x").map(|()| int(0))), "AU4005");
+    assert_eq!(text_fits(limit + 1, "x").unwrap_err().code, "AU4005");
     // 2^(64 Mi) written in base 2 is over the limit.
     let large = BigInt::one() << (limit + 8);
     let error = host_big_format(args([&[int(0)], &[wire(&large, 0)], &[int(2)]]), None);

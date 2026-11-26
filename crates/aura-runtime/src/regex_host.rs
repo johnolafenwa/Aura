@@ -376,9 +376,9 @@ fn push_bounded(output: &mut String, piece: &str) -> Result<()> {
     if output.len().saturating_add(piece.len()) > MAX_STRING_BYTES {
         return Err(replacement_too_long());
     }
-    output
-        .try_reserve(piece.len())
-        .map_err(|_| Diagnostic::coded("AU4005", "string allocation failed"))?;
+    if output.try_reserve(piece.len()).is_err() {
+        return Err(Diagnostic::coded("AU4005", "string allocation failed"));
+    }
     output.push_str(piece);
     Ok(())
 }

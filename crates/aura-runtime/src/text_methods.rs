@@ -160,19 +160,15 @@ pub fn chars(text: &str) -> Result<Value> {
         text.chars().count()
     };
     let mut parts: Vec<Value> = Vec::new();
-    parts
-        .try_reserve_exact(count)
-        .map_err(|_| string_allocation_failed())?;
+    if parts.try_reserve_exact(count).is_err() {
+        return Err(Diagnostic::coded("AU4005", "string allocation failed"));
+    }
     parts.extend(text.chars().map(|ch| Value::string(String::from(ch))));
     Ok(Value::Vec(VecValue {
         element_type: SharedType::from(str_type()),
         elements: parts.into(),
         str_view: Default::default(),
     }))
-}
-
-fn string_allocation_failed() -> Diagnostic {
-    Diagnostic::coded("AU4005", "string allocation failed")
 }
 
 fn string_too_long() -> Diagnostic {
@@ -189,9 +185,9 @@ fn reserved_string(len: Option<usize>) -> Result<String> {
         .filter(|len| *len <= MAX_STRING_BYTES)
         .ok_or_else(string_too_long)?;
     let mut output = String::new();
-    output
-        .try_reserve_exact(len)
-        .map_err(|_| string_allocation_failed())?;
+    if output.try_reserve_exact(len).is_err() {
+        return Err(Diagnostic::coded("AU4005", "string allocation failed"));
+    }
     Ok(output)
 }
 

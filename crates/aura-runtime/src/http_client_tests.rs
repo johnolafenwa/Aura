@@ -1543,3 +1543,86 @@ fn a_redirect_from_https_to_http_is_refused() {
     assert!(check_redirect_scheme(&secure, &secure, "").is_ok());
     assert!(check_redirect_scheme(&clear, &clear, "").is_ok());
 }
+
+#[test]
+fn a_finished_https_connection_is_kept_and_used_for_the_next_request() {
+    pool_test_lock::share();
+    let timeout = StdDuration::from_secs(10);
+    let root = std::env::temp_dir().join(format!(
+        "aura-https-pool-{}-{:?}",
+        std::process::id(),
+        thread::current().id()
+    ));
+    std::fs::create_dir_all(&root).expect("a temporary directory");
+    let certificate =
+        rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).expect("a certificate");
+    let cert_path = root.join("cert.pem");
+    let key_path = root.join("key.pem");
+    std::fs::write(&cert_path, certificate.cert.pem()).expect("the certificate writes");
+    std::fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("the key writes");
+    let cert = cert_path.to_str().expect("a UTF-8 path").to_string();
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        &cert,
+        key_path.to_str().expect("a UTF-8 path"),
+    )
+    .expect("a TLS listener");
+    let address = listener.local_addr().expect("an address");
+    let port: u16 = address
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse().ok())
+        .expect("a port");
+    let server = thread::spawn(move || {
+        // One connection only: a second request must come over it.
+        let stream = listener
+            .accept(Some(timeout), Some(&CancellationContext::default()))
+            .expect("a TLS connection");
+        let mut requests = 0;
+        loop {
+            let mut head_lines = 0;
+            loop {
+                // The client drops the connection without a TLS close.
+                let line = stream.read_line(Some(timeout), Some(&CancellationContext::default()));
+                let Ok(Some(line)) = line else {
+                    stream.close();
+                    listener.close();
+                    return requests;
+                };
+                if line.is_empty() {
+                    break;
+                }
+                head_lines += 1;
+            }
+            assert!(head_lines > 0);
+            requests += 1;
+            let body = format!("reply {requests}");
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(&reply, Some(timeout), Some(&CancellationContext::default()))
+                .expect("a reply");
+        }
+    });
+    let options = HttpRequestOptions {
+        ca_pem_path: cert.clone(),
+        ..options()
+    };
+    let url = format!("https://127.0.0.1:{port}/");
+    for expected in ["reply 1", "reply 2"] {
+        let mut response =
+            http_send("GET", &url, Vec::new(), b"", &options, None).expect("an HTTPS response");
+        assert_eq!(text(&mut response), expected);
+    }
+    let pooled = PoolKey {
+        tls: true,
+        host: "127.0.0.1".to_string(),
+        port,
+        ca_pem_path: cert,
+    };
+    // The connection went back to the pool after each whole body.
+    drop(pool_take(&pooled).expect("the kept TLS connection"));
+    assert_eq!(server.join().expect("the server"), 2);
+    let _ = std::fs::remove_dir_all(&root);
+}
