@@ -1,0 +1,10 @@
+def behind(xs: list[int64], n: int64) -> int64:
+    mut total: int64 = 0
+    for i in range(n):
+        for j in range(i - 4, 2):
+            total += xs[j]
+    return total
+
+def main():
+    xs: list[int64] = [1, 2, 3]
+    print(behind(xs, 3))

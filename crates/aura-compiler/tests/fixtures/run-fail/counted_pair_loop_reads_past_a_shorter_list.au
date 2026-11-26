@@ -1,0 +1,10 @@
+def pairs(xs: mut list[float64], ms: list[float64]):
+    for i in range(5):
+        for j in range(i + 1, 5):
+            xs[i] -= ms[j]
+            xs[j] += ms[i]
+
+def main():
+    mut ps = [1.0, 2.0, 3.0, 4.0, 5.0]
+    pairs(ps, [0.5, 0.25, 0.125, 2.0])
+    print(ps)

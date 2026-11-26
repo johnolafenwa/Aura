@@ -1,0 +1,10 @@
+copy class Entry:
+    dist: int64
+    node: int64
+
+def main() -> int32:
+    mut entries = [Entry(dist=1, node=2), Entry(dist=3, node=4)]
+    entries.swap(0, 1)
+    entries.swap(-3, 1)
+    print(entries[0].dist)
+    return 0

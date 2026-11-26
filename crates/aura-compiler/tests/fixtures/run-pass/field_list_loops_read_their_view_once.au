@@ -1,0 +1,122 @@
+# A loop that only reads a list in a field of an instance reads the
+# instance's layout, the field's box, and the list's view once, where the
+# loop is entered. A loop that changes the field or the list, or hands the
+# instance to a function that may, keeps reading them.
+import control
+
+class Ball:
+    weight: float64
+    size: int64
+
+class Shelf:
+    weights: list[int64]
+    balls: list[Ball]
+    seen: int64
+    best: int64
+
+    def heavy(self, weight: float64) -> bool:
+        return weight > 1.0 and self.best >= 0
+
+    def total(mut self) -> int64:
+        mut sum = 0
+        for i in range(self.weights.len()):
+            sum += self.weights[i]
+            self.seen += 1
+        return sum
+
+    def skip_zeros(mut self):
+        while self.best < self.weights.len() and self.weights[self.best] == 0:
+            self.best += 1
+
+    def count_heavy(mut self) -> int64:
+        mut n = 0
+        for i in range(self.balls.len()):
+            if self.heavy(self.balls[i].weight):
+                n += self.balls[i].size
+        return n
+
+    def grows(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            self.weights.append(i + 100)
+            sum += self.weights[self.weights.len() - 1] + self.weights[i]
+        return sum
+
+    def add(mut self, w: int64):
+        self.weights.append(w)
+
+    def calls(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            self.add(i)
+            sum += self.weights[self.weights.len() - 1]
+        return sum
+
+    def swaps(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            sum += self.weights[0]
+            self.weights = [i + 1, i + 2]
+        return sum
+
+    def past(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            sum += self.weights[i]
+            self.seen += 1
+        return sum
+
+def shelf() -> Shelf:
+    return Shelf(
+        weights=[0, 0, 3, 4, 5],
+        balls=[Ball(weight=0.5, size=1), Ball(weight=1.5, size=2), Ball(weight=2.5, size=4)],
+        seen=0,
+        best=0,
+    )
+
+def reads_past(n: int64) -> int64:
+    mut s = shelf()
+    return s.past(n)
+
+def try_past(n: int64):
+    match control.recover(reads_past, n):
+        case Ok(v):
+            print(v)
+        case Err(trap):
+            print(trap.message)
+
+def owner(n: int64) -> int64:
+    mut s = shelf()
+    mut sum = 0
+    for round in range(n):
+        for i in range(s.weights.len()):
+            sum += s.weights[i] * (round + 1)
+        s.seen += 1
+    return sum + s.seen
+
+def empty() -> int64:
+    mut s = Shelf(weights=[], balls=[], seen=0, best=0)
+    s.skip_zeros()
+    return s.total() + s.count_heavy() + s.best
+
+def main():
+    mut s = shelf()
+    print(s.total())
+    print(s.seen)
+    s.skip_zeros()
+    print(s.best)
+    print(s.count_heavy())
+    print(s.grows(3))
+    print(s.weights)
+    print(s.calls(3))
+    print(s.total())
+    print(s.swaps(3))
+    print(s.weights)
+    s.best = 0
+    s.weights = [0, 0, 0]
+    s.skip_zeros()
+    print(s.best)
+    print(owner(3))
+    print(empty())
+    try_past(5)
+    try_past(6)

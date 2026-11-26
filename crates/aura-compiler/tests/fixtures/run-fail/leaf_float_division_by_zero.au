@@ -1,0 +1,9 @@
+def ratio(a: float64, b: float64) -> float64:
+    return a / b
+
+def outer(a: float64, b: float64) -> float64:
+    return ratio(a, b) + 1.0
+
+def main():
+    print(outer(1.0, 2.0))
+    print(outer(1.0, 2.0 - 2.0))
