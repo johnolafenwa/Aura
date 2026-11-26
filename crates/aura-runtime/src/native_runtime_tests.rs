@@ -12719,6 +12719,12 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     "count",
                 );
             }
+            "i64-overflow" => {
+                super::expect_i64_value(&Value::Int(IntegerValue::from_u64(u64::MAX)), "count");
+            }
+            "scalar-kind-overflow" => {
+                let _ = super::DirectScalarKind::Int8.value(300);
+            }
             "i32-value-type" => {
                 super::expect_i32_value(&Value::String("count".to_string().into()), "count");
             }
@@ -14110,6 +14116,13 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     super::direct_list_layout().fingerprint().wrapping_add(1),
                 );
             }
+            "ownership-layout-mismatch" => {
+                super::aura_direct_check_ownership_layout(
+                    super::direct_ownership_layout()
+                        .fingerprint()
+                        .wrapping_add(1),
+                );
+            }
             "frame-stack-layout-mismatch" => {
                 super::aura_direct_check_frame_stack_layout(
                     super::direct_frame_stack_layout()
@@ -14301,6 +14314,11 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("bytes-element-range", "`bytes` expects `list[uint8]`"),
         ("bool-value-type", "`flag` expects `bool`, found `str`"),
         ("i32-overflow", "`count` expects `int32`"),
+        ("i64-overflow", "`count` expects `int64`"),
+        (
+            "scalar-kind-overflow",
+            "integer value `300` does not fit in `int8`",
+        ),
         ("i32-value-type", "`count` expects `int32`, found `str`"),
         (
             "headers-map-type",
@@ -15186,6 +15204,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "frame-stack-layout-mismatch",
+            "this executable was built for a different Aura runtime",
+        ),
+        (
+            "ownership-layout-mismatch",
             "this executable was built for a different Aura runtime",
         ),
         (
@@ -26835,6 +26857,7 @@ fn list_view_reads_scalar_elements_in_place() {
     );
     super::aura_direct_check_list_layout(layout.fingerprint());
     super::aura_direct_check_frame_stack_layout(super::direct_frame_stack_layout().fingerprint());
+    super::aura_direct_check_ownership_layout(super::direct_ownership_layout().fingerprint());
     for value in [integers, wide, floats, flags] {
         unsafe { release_value(value) };
     }
@@ -32689,4 +32712,28 @@ fn direct_case_changes_and_joins_check_the_string_limit_before_building() {
         "{}",
         diagnostic.message
     );
+}
+
+#[test]
+fn dynamic_host_abi_parameters_name_how_each_argument_is_passed() {
+    use aura_core::ops::ReceiverKind;
+
+    let parse = super::DYNAMIC_HOST_ABI
+        .iter()
+        .find(|abi| abi.name == "json::parse")
+        .expect("`json::parse` has a dynamic host ABI");
+    assert_eq!(parse.params, &[super::borrowed("text")]);
+    assert_eq!(super::borrowed("text").passing, ReceiverKind::Borrow);
+    let owned = super::owned("value");
+    assert_eq!(owned.passing, ReceiverKind::Value);
+    assert!(super::DYNAMIC_HOST_ABI
+        .iter()
+        .any(|abi| abi.params.contains(&owned)));
+}
+
+#[test]
+fn a_new_task_runtime_state_table_holds_no_task() {
+    let mut states = super::DirectTaskRuntimeStates::new();
+    assert!(states.get_mut(7).is_none());
+    assert!(states.cached.is_none());
 }

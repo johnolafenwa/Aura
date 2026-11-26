@@ -8279,10 +8279,8 @@ pub extern "C-unwind" fn aura_direct_duration_from_i64(
             | crate::runtime_value::NANOS_PER_MINUTE => i128::from(unit_nanoseconds),
             other => runtime_error(format!("unknown Duration constructor unit `{other}`")),
         };
-        let nanoseconds = i128::from(value)
-            .checked_mul(unit_nanoseconds)
-            .unwrap_or_else(|| runtime_error("duration overflow"));
-        boxed_value(Value::Duration(nanoseconds))
+        // An `int64` count of at most minutes always fits in `i128` nanoseconds.
+        boxed_value(Value::Duration(i128::from(value) * unit_nanoseconds))
     })
 }
 

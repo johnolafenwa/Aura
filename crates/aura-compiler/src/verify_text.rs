@@ -337,15 +337,6 @@ impl Exec<'_> {
             .collect()
     }
 
-    /// Whether `list` is the parts a `str` method returned, unchanged.
-    pub(super) fn is_part_list(&self, list: &Val) -> bool {
-        matches!(
-            list,
-            Val::List { data: Some(Store::Leaf(array, _)), .. }
-                if self.text.parts.contains_key(array)
-        )
-    }
-
     /// A list of the literal `parts`.
     fn literal_list(&mut self, parts: &[String]) -> Option<Val> {
         if parts.len() > MAX_PARTS {
