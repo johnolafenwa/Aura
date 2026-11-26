@@ -1166,3 +1166,15 @@ fn try_append_appends_like_append() {
         .expect("an empty list takes the other");
     assert_eq!(empty.len(), 1);
 }
+
+#[test]
+fn a_bool_byte_keeps_its_raw_byte_until_sanitized() {
+    assert_eq!(BoolByte::from_bool(true).raw(), 1);
+    assert_eq!(BoolByte::from_bool(false).raw(), 0);
+    let mut foreign = BoolByte(7);
+    assert_eq!(foreign.raw(), 7, "a C write can leave any byte");
+    assert!(foreign.as_bool());
+    assert_eq!(foreign.sanitize(), Some(7));
+    assert_eq!(foreign.raw(), 1);
+    assert_eq!(foreign.sanitize(), None);
+}

@@ -3567,6 +3567,35 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn versioned_library_files_order_equal_versions_by_path() {
+        let directory = scratch_directory("version-ties");
+        for suffix in ["1", "01", "001", "2"] {
+            std::fs::write(directory.join(format!("libtie.so.{suffix}")), b"")
+                .expect("touch versioned file");
+        }
+        let ordered = versioned_library_files(&directory, "libtie.so")
+            .into_iter()
+            .map(|path| {
+                path.file_name()
+                    .expect("file name")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        std::fs::remove_dir_all(&directory).expect("cleanup scratch directory");
+        assert_eq!(
+            ordered,
+            [
+                "libtie.so.2",
+                "libtie.so.001",
+                "libtie.so.01",
+                "libtie.so.1",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn versioned_library_files_sort_numerically_descending() {
         let directory = scratch_directory("version-order");
         for suffix in [
