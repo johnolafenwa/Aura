@@ -110,6 +110,64 @@ fn realloc_keeps_the_contents_across_size_classes_and_the_system_allocator() {
 }
 
 #[test]
+fn the_block_last_cut_from_the_chunk_grows_where_it_lies() {
+    let allocator = AuraAllocator;
+    std::thread::spawn(move || {
+        let cut = || THREAD_BLOCKS.with(|blocks| blocks.cut.get());
+        let left = || THREAD_BLOCKS.with(|blocks| blocks.end.get() as usize - cut() as usize);
+        let layout = |size: usize| Layout::from_size_align(size, 8).unwrap();
+        // A block the thread cuts from its chunk, not one another thread
+        // shared, ends at the cut.
+        let last_cut = |size: usize| loop {
+            // SAFETY: the thread owns the block, and leaves the ones it
+            // does not use to the lists when it ends.
+            let block = unsafe { allocator.alloc(layout(size)) };
+            if block.wrapping_add(size) == cut() {
+                break block;
+            }
+        };
+        // SAFETY: the thread owns every block through every move.
+        unsafe {
+            let block = last_cut(32);
+            for index in 0..32 {
+                block.add(index).write(index as u8);
+            }
+            let grown = allocator.realloc(block, layout(32), 64);
+            assert_eq!(grown, block, "the last block cut grows in place");
+            assert_eq!(cut(), block.add(64));
+            let again = allocator.realloc(grown, layout(64), 200);
+            assert_eq!(again, block);
+            assert_eq!(cut(), block.add(208));
+            // A block cut after it ends its growth in place.
+            let next = last_cut(32);
+            assert!(next as usize >= block as usize + 208);
+            let moved = allocator.realloc(again, layout(200), 400);
+            assert_ne!(moved, block);
+            assert_eq!(
+                std::slice::from_raw_parts(moved, 32),
+                (0..32).collect::<Vec<u8>>()
+            );
+            // So does a chunk with too few bytes left.
+            while left() >= 1024 {
+                last_cut(960);
+            }
+            let tail = last_cut(16);
+            let room = left();
+            assert!(room < 1008);
+            let moved_tail = allocator.realloc(tail, layout(16), 1024);
+            assert_ne!(moved_tail, tail);
+            // A block that shrinks is never extended.
+            let small = allocator.realloc(moved_tail, layout(1024), 16);
+            allocator.dealloc(small, layout(16));
+            allocator.dealloc(moved, layout(400));
+            allocator.dealloc(next, layout(32));
+        }
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
 fn a_thread_that_ends_hands_its_blocks_and_chunk_to_the_shared_lists() {
     let allocator = AuraAllocator;
     let layout = Layout::from_size_align(1000, 8).unwrap();

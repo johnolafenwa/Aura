@@ -1,0 +1,15 @@
+Result.Ok(None)
+ok None
+Result.Err(failed)
+err failed
+true
+false
+Step.Done(None)
+done None
+Step.Wait(None, 30)
+wait None 30
+Step.Fail(broken)
+fail broken
+true
+false
+{a: Result.Ok(None)}

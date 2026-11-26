@@ -10876,6 +10876,10 @@ pub fn lower_for_verification(program: &Program) -> MirModule {
 /// them, so proved checks still map onto that lowering.
 const GHOST_NUMBERING: usize = 1_000_000_000;
 
+/// The most elements of a list literal a `for` loop reads from locals. A
+/// longer literal is built as a list, which takes less code.
+const LITERAL_ITERATION_ELEMENTS: usize = 8;
+
 /// Whether a block holds `ghost` code, whose checks no run performs.
 pub(crate) fn is_ghost_label(label: &str) -> bool {
     label
@@ -20227,9 +20231,30 @@ impl<'a> Lowerer<'a> {
         let lent_list_iteration =
             self.lendable_list_iteration(for_stmt, checked_binding, iterable_ty.as_ref());
         let mut counted_range = None;
+        let mut literal_values = None;
         let iterable = if mutable_list_iteration || lent_list_iteration {
             // Each iteration lends the element in place; see
             // `lower_list_iteration_by_loan`.
+            Operand::Unit
+        } else if let Some((elements, element_ty)) =
+            self.scalar_literal_iteration(for_stmt, checked_binding)
+        {
+            // A loop over a short literal of scalars keeps each element in
+            // a local, evaluated once and in order as the literal would;
+            // no list is ever built.
+            let values = elements
+                .iter()
+                .map(|element| {
+                    let value = self.lower_expr_at_sequence_point(element, Some(&element_ty));
+                    let kept = self.new_typed_temp(element_ty.clone());
+                    self.emit(Instruction::Assign {
+                        target: kept.clone(),
+                        value: Rvalue::Use(value),
+                    });
+                    kept
+                })
+                .collect::<Vec<_>>();
+            literal_values = Some(values);
             Operand::Unit
         } else if let Some(range_args) = counted_range_args(for_stmt, iterable_ty.as_ref()) {
             // A loop over a `range(...)` call counts on int64 locals; no Range
@@ -20295,6 +20320,87 @@ impl<'a> Lowerer<'a> {
         let mut stepped_next = dispatch_block;
 
         match iterable_ty {
+            _ if literal_values.is_some() => {
+                let values = literal_values
+                    .take()
+                    .expect("the guard checked the literal's values");
+                let binding = simple_binding
+                    .clone()
+                    .expect("a literal of scalars is iterated by a simple target");
+                let int64 = Type::named("int64");
+                let index = self.new_typed_temp(int64.clone());
+                self.emit(Instruction::Assign {
+                    target: index.clone(),
+                    value: Rvalue::Use(Operand::Int(0)),
+                });
+                let stop = self.new_typed_temp(int64);
+                self.emit(Instruction::Assign {
+                    target: stop.clone(),
+                    value: Rvalue::Use(Operand::Int(values.len() as u128)),
+                });
+                self.terminate(Terminator::Goto(self.label(dispatch_block)));
+                self.switch_to(dispatch_block);
+                let fetch_block = self.new_block("for_literal_fetch");
+                self.emit_span_iteration_bound(
+                    &stop,
+                    &index,
+                    fetch_block,
+                    after_block,
+                    for_stmt.span,
+                );
+                // The element at `index` is chosen by comparing the index
+                // with each position but the last.
+                let bound_block = self.new_block("for_literal_bound");
+                let last = values.len() - 1;
+                for (position, value) in values.into_iter().enumerate() {
+                    if position < last {
+                        let chosen = self.new_typed_temp(Type::named("bool"));
+                        self.emit(Instruction::Assign {
+                            target: chosen.clone(),
+                            value: Rvalue::Binary {
+                                op: BinaryOp::Eq,
+                                left: Operand::Place(index.clone()),
+                                right: Operand::Int(position as u128),
+                                span: for_stmt.span,
+                                trap: ArithmeticTrap::None,
+                            },
+                        });
+                        let take_block = self.new_block("for_literal_take");
+                        let next_block = self.new_block("for_literal_next");
+                        self.terminate(Terminator::Branch {
+                            condition: Operand::Place(chosen),
+                            then_label: self.label(take_block),
+                            else_label: self.label(next_block),
+                        });
+                        self.switch_to(take_block);
+                        self.emit(Instruction::Assign {
+                            target: binding.clone(),
+                            value: Rvalue::Use(Operand::Place(value)),
+                        });
+                        self.terminate(Terminator::Goto(self.label(bound_block)));
+                        self.switch_to(next_block);
+                    } else {
+                        self.emit(Instruction::Assign {
+                            target: binding.clone(),
+                            value: Rvalue::Use(Operand::Place(value)),
+                        });
+                        self.terminate(Terminator::Goto(self.label(bound_block)));
+                    }
+                }
+                self.switch_to(bound_block);
+                self.emit(Instruction::Assign {
+                    target: index.clone(),
+                    value: Rvalue::Binary {
+                        op: BinaryOp::Add,
+                        left: Operand::Place(index),
+                        right: Operand::Int(1),
+                        span: for_stmt.span,
+                        trap: ArithmeticTrap::None,
+                    },
+                });
+                self.terminate(Terminator::Goto(self.label(body_block)));
+                self.switch_to(body_block);
+            }
             Some(ref ty) if ty.as_fixed_array().is_some() => {
                 self.fixed_iteration(
                     ty,
@@ -20856,6 +20962,37 @@ impl<'a> Lowerer<'a> {
     /// they happen, so a later trap cannot discard an earlier write, and a
     /// non-Copy element is never cloned. The loan ends on every edge out of
     /// the body: fallthrough, `continue`, `break`, and `return`.
+    /// The elements and element type of a `for` loop's iterable when it is
+    /// a short list literal of `int64`, `float64` or `bool` values: such a
+    /// loop reads its elements from locals.
+    fn scalar_literal_iteration<'e>(
+        &self,
+        for_stmt: &'e crate::ast::ForStmt,
+        checked_binding: Option<&ComprehensionClauseInfo>,
+    ) -> Option<(&'e [Expr], Type)> {
+        if checked_binding.is_some()
+            || for_stmt.borrow_mode.is_some()
+            || !for_stmt.contracts.is_empty()
+        {
+            return None;
+        }
+        let ExprKind::List(elements) = &grouped_mir_expr(&for_stmt.iterable).kind else {
+            return None;
+        };
+        if elements.is_empty() || elements.len() > LITERAL_ITERATION_ELEMENTS {
+            return None;
+        }
+        let element_ty = self.infer_expr_type(&elements[0])?;
+        let scalar = ["int64", "float64", "bool"]
+            .iter()
+            .any(|name| element_ty == Type::named(*name));
+        (scalar
+            && elements[1..]
+                .iter()
+                .all(|element| self.infer_expr_type(element).as_ref() == Some(&element_ty)))
+        .then_some((elements.as_slice(), element_ty))
+    }
+
     /// Whether a shared loop lends each element of its list instead of
     /// copying it out: the iterable is a local list, not a view or a
     /// constant, and the body only reads the binding in place (see

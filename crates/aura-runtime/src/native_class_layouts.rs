@@ -17,10 +17,12 @@
 //! The block is reached only through its instance, under the instance's
 //! access, so a field box takes no lock of its own and records no thread.
 //! Generated code changes the block and the field boxes only while the
-//! instance is confined to its thread, and it appends to or pops from a
-//! list in a field box only through the runtime, so the box's list view
-//! never runs ahead of the list and a reader on another thread writes
-//! nothing.
+//! instance is confined to its thread. It appends to a list in a field box
+//! in place while the list has room, so the box's list view may run ahead
+//! of the list, and the runtime takes the appended elements in when it
+//! next reaches the box through the instance (see
+//! `OpaqueValue::held_value`). It pops from such a list only through the
+//! runtime.
 
 use std::alloc::Layout as AllocLayout;
 use std::any::Any;

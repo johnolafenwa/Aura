@@ -1,0 +1,69 @@
+# Functions whose only calls are of leaves nothing can stop keep no frame
+# record, and their own failures still name them (see the run-fail
+# fixtures beside this one).
+import control
+
+copy class Vec2:
+    x: float64
+    y: float64
+
+    def dot(self, other: Vec2) -> float64:
+        return self.x * other.x + self.y * other.y
+
+    def scale(self, k: float64) -> Vec2:
+        return Vec2(x=self.x * k, y=self.y * k)
+
+    def normalized(self) -> Vec2:
+        return self.scale(1.0 / sqrt(self.dot(self)))
+
+class Scene:
+    light: Vec2
+    count: int64
+
+    def lit(self, point: Vec2, k: float64) -> float64:
+        return point.scale(k).dot(point)
+
+    def nearest(mut self, points: list[Vec2]) -> int64:
+        mut best = -1
+        mut least = 0.0
+        for i in range(points.len()):
+            d = self.lit(points[i], 0.5)
+            if best < 0 or d < least:
+                least = d
+                best = i
+        self.count += 1
+        return best
+
+def twice(a: float64) -> float64:
+    return a * 2.0
+
+def ratio(a: float64, b: float64) -> float64:
+    return twice(a) / twice(b)
+
+def summed(n: int64) -> float64:
+    mut total = 0.0
+    mut i = 0
+    while i < n:
+        total = total + twice(total + 1.0)
+        i = i + 1
+    return total
+
+def recovered(b: float64) -> str:
+    match control.recover(ratio, 1.0, b):
+        case Ok(value):
+            return f"{value}"
+        case Err(trap):
+            return f"{trap.code} {trap.message}"
+
+def main():
+    v = Vec2(x=3.0, y=4.0).normalized()
+    print(v.x)
+    print(v.y)
+    mut scene = Scene(light=v, count=0)
+    print(scene.lit(v, 2.0))
+    print(scene.nearest([Vec2(x=1.0, y=2.0), Vec2(x=0.5, y=0.25), v]))
+    print(scene.count)
+    print(ratio(1.0, 4.0))
+    print(summed(5))
+    print(recovered(2.0))
+    print(recovered(0.0))

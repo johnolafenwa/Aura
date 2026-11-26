@@ -1,0 +1,102 @@
+# Swapping two elements of a list of copy classes exchanges the records
+# where they lie. A list that shares its storage, a list held in a field,
+# and negative or equal indices all give the same result.
+copy class Entry:
+    dist: int64
+    node: int64
+
+copy class Pixel:
+    red: uint8
+    level: int8
+    count: uint16
+    delta: int16
+    total: uint32
+
+copy class Point:
+    x: int32
+    y: float32
+    on: bool
+
+copy class Segment:
+    start: Point
+    end: Point
+    weight: float64
+    id: int64
+
+
+class Waiting:
+    heap: list[Entry]
+
+    def lift(mut self, index: int64):
+        self.heap.swap(index, 0)
+
+
+def sift(heap: mut list[Entry], start: int64):
+    mut i = start
+    while i > 0:
+        parent = (i - 1) // 2
+        if heap[parent].dist <= heap[i].dist:
+            break
+        heap.swap(parent, i)
+        i = parent
+
+
+def main():
+    mut heap: list[Entry] = []
+    for i in range(8):
+        heap.append(Entry(dist=(i * 5) % 8, node=i))
+        sift(heap, i)
+    print(heap)
+    heap.swap(0, -1)
+    print(f"{heap[0].dist} {heap[0].node} {heap[7].dist} {heap[7].node}")
+    heap.swap(3, 3)
+    heap.swap(-2, -2)
+    print(f"{heap[3].dist} {heap[3].node} {heap[6].dist} {heap[6].node}")
+
+    # A copy shares the storage until one of the two lists changes.
+    kept = heap.copy()
+    heap.swap(1, 2)
+    print(f"{kept[1].node} {kept[2].node} {heap[1].node} {heap[2].node}")
+    heap.swap(-8, 7)
+    print(f"{kept[0].node} {kept[7].node} {heap[0].node} {heap[7].node}")
+
+    mut pixels: list[Pixel] = []
+    for i in range(4):
+        pixels.append(
+            Pixel(
+                red=(200 + i) as uint8,
+                level=(-3 + i) as int8,
+                count=(60000 + i) as uint16,
+                delta=(-300 - i) as int16,
+                total=(4000000000 + i) as uint32,
+            )
+        )
+    pixels.swap(0, 3)
+    pixels.swap(-3, 2)
+    print(pixels)
+
+    mut segments: list[Segment] = []
+    for i in range(3):
+        segments.append(
+            Segment(
+                start=Point(x=i as int32, y=(i as float32) * 0.5, on=i % 2 == 0),
+                end=Point(x=(i + 1) as int32, y=1.25, on=false),
+                weight=(i as float64) / 4.0,
+                id=i * 1000,
+            )
+        )
+    segments.swap(0, 2)
+    print(
+        f"{segments[0].id} {segments[0].start.x} {segments[0].start.y} {segments[0].start.on} {segments[0].weight}"
+    )
+    print(
+        f"{segments[2].id} {segments[2].start.x} {segments[2].start.y} {segments[2].start.on} {segments[2].weight}"
+    )
+    print(segments[1] == segments[1])
+
+    mut queue = Waiting(
+        heap=[Entry(dist=1, node=10), Entry(dist=2, node=20), Entry(dist=3, node=30)]
+    )
+    queue.lift(2)
+    queue.heap.swap(-1, 1)
+    print(queue.heap)
