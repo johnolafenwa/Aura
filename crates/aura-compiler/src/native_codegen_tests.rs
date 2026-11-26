@@ -19298,13 +19298,13 @@ copy class Stamp:
         return self.seconds + 60
 
 def total(value: int64) -> int64:
-    return value // 2
+    return value
 
-def sum(value: int64) -> int64:
+def plus(value: int64) -> int64:
     return value + 1
 
 def nested(value: int64) -> int64:
-    return sum(value) * total(value)
+    return plus(value) * total(value)
 
 def method(stamp: Stamp) -> int64:
     return stamp.local() - 1
@@ -19326,7 +19326,7 @@ def countdown(n: int64) -> int64:
 
 def printed(value: int64) -> int64:
     print(value)
-    return sum(value)
+    return plus(value)
 
 def main():
     mut acc = 0
@@ -19348,10 +19348,53 @@ fn chain_callees_trap_only_and_call_only_each_other() {
         .collect::<HashMap<_, _>>();
     let total = super::total_leaves(&mir, &classes);
     let chained = super::caller_chains::chain_callees(&mir, &classes, &total, &recursive);
-    for name in ["Stamp.local", "sum", "nested", "method"] {
+    for name in ["Stamp.local", "plus", "nested", "method"] {
         assert!(chained.contains(name), "{name}: {chained:?}");
     }
     for name in ["total", "looped", "bump", "countdown", "printed", "main"] {
         assert!(!chained.contains(name), "{name}: {chained:?}");
     }
+}
+
+/// A frame-free function's enum parameter is passed untagged when the
+/// function only matches on it and reads its payloads; a copy of it, or a
+/// parameter of another type, keeps the tag.
+#[test]
+fn match_only_params_only_match_and_read_payloads() {
+    let source = r#"
+enum Value:
+    Int(value: int64)
+    Text(value: str)
+
+def same(left: Value, right: Value) -> bool:
+    match left:
+        case Value.Int(a):
+            match right:
+                case Value.Int(b):
+                    return a == b
+                case Value.Text(_):
+                    return false
+        case Value.Text(_):
+            return false
+
+def copied(value: Value, flag: bool) -> bool:
+    other = value
+    match other:
+        case Value.Int(_):
+            return flag
+        case Value.Text(_):
+            return false
+
+def main():
+    print(same(Value.Int(1), Value.Int(1)))
+    print(copied(Value.Int(1), true))
+"#;
+    let mir = lower_source_to_mir(source).expect("the source should lower");
+    let recursive = crate::mir::recursion::recursive_functions(&mir);
+    let free = super::frame_free_callees(&mir, &recursive);
+    let params = super::untagged_args::match_only_params(&mir, &free);
+    assert!(params.contains(&("same".to_string(), 0)), "{params:?}");
+    assert!(params.contains(&("same".to_string(), 1)), "{params:?}");
+    assert!(!params.contains(&("copied".to_string(), 0)), "{params:?}");
+    assert!(!params.contains(&("copied".to_string(), 1)), "{params:?}");
 }
