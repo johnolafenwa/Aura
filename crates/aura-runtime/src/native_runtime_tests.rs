@@ -13385,6 +13385,35 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     0,
                 );
             }
+            "map-index-scalar-missing" => {
+                let map = super::aura_direct_map_empty();
+                expect_lookup_missing(super::aura_direct_map_set_in_place(
+                    map,
+                    string_value("name"),
+                    float_value(1.5),
+                ));
+                super::aura_direct_map_index_f64(map, string_value("missing"), 2, 7);
+            }
+            "map-index-scalar-missing-no-span" => {
+                super::aura_direct_map_index_int64(
+                    super::aura_direct_map_empty(),
+                    string_value("missing"),
+                    0,
+                    0,
+                );
+            }
+            "map-index-int64-pair-missing" => {
+                super::aura_direct_map_index_int64_pair(super::aura_direct_map_empty(), -3, 2, 7);
+            }
+            "map-index-scalar-type" => {
+                let map = super::aura_direct_map_empty();
+                expect_lookup_missing(super::aura_direct_map_set_in_place(
+                    map,
+                    string_value("name"),
+                    string_value("text"),
+                ));
+                super::aura_direct_map_index_f64(map, string_value("name"), 2, 7);
+            }
             "vec-extend-type" => {
                 super::aura_direct_vec_extend_in_place(
                     super::aura_direct_vec_empty(),
@@ -14670,6 +14699,22 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "map-index-missing-no-span",
             "dict key `missing` was not present",
+        ),
+        (
+            "map-index-scalar-missing",
+            "dict key `missing` was not present",
+        ),
+        (
+            "map-index-scalar-missing-no-span",
+            "dict key `missing` was not present",
+        ),
+        (
+            "map-index-int64-pair-missing",
+            "dict key `-3` was not present",
+        ),
+        (
+            "map-index-scalar-type",
+            "direct backend expected `float64`, found `str`",
         ),
         (
             "vec-extend-type",
@@ -26937,6 +26982,202 @@ fn pop_like_generated_code(list: *mut OpaqueValue) -> (i64, bool) {
 }
 
 #[test]
+fn a_shared_list_of_lists_takes_in_place_appends_in_for_two_readers_at_once() {
+    use super::DirectListAccess;
+    for _ in 0..64 {
+        // A list of two lists, each held in a box of the outer list.
+        let outer = super::aura_direct_vec_empty();
+        for _ in 0..2 {
+            super::aura_direct_vec_push_in_place(outer, super::aura_direct_vec_empty());
+        }
+        // Generated code appends to each inner list through its box: the
+        // first append by call, the rest in place, which only the box's
+        // list view records.
+        for index in 0..2 {
+            let lent = super::aura_direct_vec_lend(outer, index, 1, 1);
+            assert_eq!(lent as usize & 1, 1, "the outer list lends its boxes");
+            let inner = lent.wrapping_byte_sub(1);
+            assert!(!append_like_generated_code(
+                inner,
+                10,
+                DirectListAccess::Int64
+            ));
+            for bits in 11..14 {
+                assert!(append_like_generated_code(
+                    inner,
+                    bits,
+                    DirectListAccess::Int64
+                ));
+            }
+            assert_ne!(list_view_capacity(inner), 0);
+        }
+        // The outer list goes to two tasks, which read it at once.
+        unsafe { super::share_direct_value(outer) };
+        let address = outer as usize;
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(move || {
+                    let outer = address as *mut OpaqueValue;
+                    for index in 0..2 {
+                        let inner = super::aura_direct_vec_index(outer, index, 1, 1);
+                        assert_eq!(super::aura_direct_vec_len(inner), 4);
+                        assert_eq!(super::aura_direct_vec_index_scalar(inner, 3, 0), 13);
+                        unsafe { release_value(inner) };
+                    }
+                });
+            }
+        });
+        unsafe { release_value(outer) };
+    }
+}
+
+#[test]
+fn a_list_of_lists_takes_each_new_list_in_its_box_with_no_general_write() {
+    use super::DirectListAccess;
+    let list_of = |element: Type| Type::Named("list".to_string(), vec![element]);
+    let outer_cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let inner_cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let inner_type = super::canonical_runtime_type_name(&list_of(Type::named("int64")));
+    let outer_type = super::canonical_runtime_type_name(&list_of(list_of(Type::named("int64"))));
+    let new_inner =
+        || super::aura_direct_vec_empty_tagged(&inner_cell, inner_type.as_ptr(), inner_type.len());
+    let outer =
+        super::aura_direct_vec_empty_tagged(&outer_cell, outer_type.as_ptr(), outer_type.len());
+    let shape = |list: *mut OpaqueValue| unsafe { &*list }.shape_tag.load(Ordering::Relaxed);
+    let tagged = shape(outer);
+    assert!(!tagged.is_null());
+    // The first list gives the outer list its boxes through the general
+    // write, which clears the shape.
+    let first = new_inner();
+    super::aura_direct_vec_push_in_place(outer, first);
+    assert_eq!(list_view_access(outer), DirectListAccess::Boxes as u32);
+    assert!(shape(outer).is_null());
+    unsafe { &*outer }
+        .shape_tag
+        .store(tagged, Ordering::Relaxed);
+    // The rest join in their own boxes and leave the shape as it is.
+    let mut boxes = vec![first];
+    for _ in 0..20 {
+        let inner = new_inner();
+        super::aura_direct_vec_push_in_place(outer, inner);
+        boxes.push(inner);
+    }
+    assert_eq!(shape(outer), tagged);
+    assert_eq!(list_view_len(outer), 21);
+    assert!(list_view_capacity(outer) >= 21);
+    for (index, inner) in boxes.iter().enumerate() {
+        let lent = super::aura_direct_vec_lend(outer, index as i64, 1, 1);
+        assert_eq!(lent.wrapping_byte_sub(1), *inner);
+    }
+    assert_eq!(super::aura_direct_vec_len(outer), 21);
+    // A copy shares the boxes, so the next list takes the general write,
+    // and the copy keeps its length.
+    let copy = super::aura_direct_clone_value(outer);
+    super::aura_direct_vec_push_in_place(outer, new_inner());
+    assert_eq!(super::aura_direct_vec_len(copy), 21);
+    assert_eq!(super::aura_direct_vec_len(outer), 22);
+    // A list another thread may read takes its lock.
+    unsafe { super::share_direct_value(copy) };
+    super::aura_direct_vec_push_in_place(copy, new_inner());
+    assert_eq!(super::aura_direct_vec_len(copy), 22);
+    for value in [outer, copy] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn a_full_scalar_list_grows_from_what_generated_code_left() {
+    use super::DirectListAccess;
+    let header = |list: *mut OpaqueValue| unsafe { &*list };
+    let values = |list: *mut OpaqueValue| -> Vec<i64> {
+        (0..super::aura_direct_vec_len(list))
+            .map(|index| super::aura_direct_vec_index_scalar(list, index, 0))
+            .collect()
+    };
+    let list = super::aura_direct_vec_empty();
+    // The first append gives the list its form and its room.
+    assert!(!append_like_generated_code(
+        list,
+        0,
+        DirectListAccess::Int64
+    ));
+    let room = list_view_capacity(list);
+    for bits in 1..room as i64 {
+        assert!(append_like_generated_code(
+            list,
+            bits,
+            DirectListAccess::Int64
+        ));
+    }
+    // The list is full, so the call grows it after taking in the appends.
+    let shape = header(list).shape_tag.load(Ordering::Relaxed);
+    assert!(!append_like_generated_code(
+        list,
+        room as i64,
+        DirectListAccess::Int64
+    ));
+    assert_eq!(list_view_len(list), room + 1);
+    assert!(list_view_capacity(list) > room + 1);
+    assert_eq!(list_view_access(list), DirectListAccess::Int64 as u32);
+    assert_eq!(header(list).shape_tag.load(Ordering::Relaxed), shape);
+    // It left room, so the next append needs no call.
+    assert!(append_like_generated_code(
+        list,
+        99,
+        DirectListAccess::Int64
+    ));
+    let mut expected: Vec<i64> = (0..=room as i64).collect();
+    expected.push(99);
+    assert_eq!(values(list), expected);
+    // Elements popped in place are dropped before the next is added.
+    super::aura_direct_vec_push_scalar(list, 5, 0);
+    assert_eq!(pop_like_generated_code(list), (5, true));
+    assert_eq!(pop_like_generated_code(list), (99, true));
+    super::aura_direct_vec_push_scalar(list, 7, 0);
+    expected.pop();
+    expected.push(7);
+    assert_eq!(values(list), expected);
+    // A list that shares its storage takes the general path, which copies.
+    let copy = super::aura_direct_clone_value(list);
+    super::aura_direct_vec_push_scalar(list, 8, 0);
+    assert_eq!(values(copy), expected);
+    expected.push(8);
+    assert_eq!(values(list), expected);
+    // Every scalar kind grows the same way.
+    for (kind, bits) in [(1, 2.5f64.to_bits() as i64), (2, 1), (5, -7), (6, 200)] {
+        let other = super::aura_direct_vec_empty();
+        for _ in 0..40 {
+            super::aura_direct_vec_push_scalar(other, bits, kind);
+        }
+        assert_eq!(super::aura_direct_vec_len(other), 40);
+        assert_eq!(super::aura_direct_vec_index_scalar(other, 39, kind), bits);
+        unsafe { release_value(other) };
+    }
+    // A list made empty with its type takes its first storage with its
+    // first element: room for four, or for a small block of narrow ones.
+    for (name, kind, room) in [("int64", 0, 4), ("float32", 10, 4), ("uint8", 6, 16)] {
+        let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+        let descriptor = super::canonical_runtime_type_name(&Type::Named(
+            "list".to_string(),
+            vec![Type::named(name)],
+        ));
+        let typed =
+            super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+        assert_eq!(list_view_capacity(typed), 0);
+        super::aura_direct_vec_push_scalar(typed, 1, kind);
+        assert_eq!((list_view_len(typed), list_view_capacity(typed)), (1, room));
+        unsafe { release_value(typed) };
+    }
+    // A kind the list does not keep, and a value that is no list, take the
+    // general path.
+    super::aura_direct_vec_push_scalar(list, 1, 2);
+    assert_eq!(super::aura_direct_vec_len(list), expected.len() as i64 + 1);
+    for value in [list, copy] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
 fn scalar_pops_in_place_are_dropped_at_the_next_access() {
     use super::DirectListAccess;
     let list = super::aura_direct_vec_empty();
@@ -27847,6 +28088,148 @@ fn value_debug(value: *mut OpaqueValue) -> String {
 
 fn payload_debug(payload: *mut OpaqueValue) -> Option<String> {
     (!payload.is_null()).then(|| format!("{:?}", unsafe { take_value(payload) }))
+}
+
+#[test]
+fn direct_map_index_reads_scalars_without_a_box() {
+    let map = super::aura_direct_map_empty();
+    for (name, value) in [
+        ("int", int_value(-41)),
+        ("float", float_value(2.5)),
+        ("yes", bool_value(true)),
+        ("no", bool_value(false)),
+    ] {
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            map,
+            string_value(name),
+            value,
+        ));
+    }
+    let index = |read: &dyn Fn(*mut OpaqueValue) -> i64, name: &str| {
+        let key = string_value(name);
+        let found = read(key);
+        unsafe { release_value(key) };
+        found
+    };
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_int64(map, key, 1, 1),
+            "int"
+        ),
+        -41
+    );
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_i64(map, key, 1, 1),
+            "int"
+        ),
+        -41
+    );
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_bool(map, key, 1, 1),
+            "yes"
+        ),
+        1
+    );
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_bool(map, key, 1, 1),
+            "no"
+        ),
+        0
+    );
+    let key = string_value("float");
+    assert_eq!(super::aura_direct_map_index_f64(map, key, 1, 1), 2.5);
+    unsafe { release_value(key) };
+
+    let wide = super::aura_direct_map_empty();
+    super::aura_direct_map_set_index_int64_pair(wide, 7, i64::MIN);
+    super::aura_direct_map_set_index_int64_pair(wide, -7, 0);
+    assert_eq!(
+        super::aura_direct_map_index_int64_pair(wide, 7, 1, 1),
+        i64::MIN
+    );
+    assert_eq!(super::aura_direct_map_index_int64_pair(wide, -7, 1, 1), 0);
+    let key = int_value(7);
+    assert_eq!(
+        super::aura_direct_map_index_u64(wide, int_value(-7), 1, 1),
+        0
+    );
+    assert_eq!(
+        super::aura_direct_map_index_int64(wide, key, 1, 1),
+        i64::MIN
+    );
+    unsafe { release_value(key) };
+    for value in [map, wide] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn direct_lookup_word_gets_write_the_found_int64() {
+    let names = super::aura_direct_map_empty();
+    let codes = super::aura_direct_map_empty();
+    for (name, code, value) in [
+        ("zero", -4_i64, 0_i64),
+        ("low", 9, i64::MIN),
+        ("high", 0, i64::MAX),
+    ] {
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            names,
+            string_value(name),
+            int_value(value),
+        ));
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            codes,
+            int_value(code),
+            int_value(value),
+        ));
+    }
+    for (name, code, expected) in [
+        ("zero", -4_i64, Some(0_i64)),
+        ("low", 9, Some(i64::MIN)),
+        ("high", 0, Some(i64::MAX)),
+        ("missing", 5, None),
+    ] {
+        let found = i64::from(expected.is_some());
+        let value = expected.unwrap_or(0);
+        let boxed_name = string_value(name);
+        let boxed_code = int_value(code);
+        // Each call overwrites the word, a missing key with zero.
+        let mut word = 77_i64;
+        assert_eq!(
+            unsafe {
+                super::aura_direct_map_get_str_word(names, name.as_ptr(), name.len(), &mut word)
+            },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_word(names, boxed_name, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_int64_word(codes, code, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_word(codes, boxed_code, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        for value in [boxed_name, boxed_code] {
+            unsafe { release_value(value) };
+        }
+    }
+    for value in [names, codes] {
+        unsafe { release_value(value) };
+    }
 }
 
 #[test]

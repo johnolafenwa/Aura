@@ -52,7 +52,7 @@ use crate::mir::{
     instruction_place_mentions, terminator_place_mentions, CallTarget, Instruction, MirFunction,
     Operand, Rvalue,
 };
-use crate::runtime_ops::{ArrayOp, ListOp, RuntimeOp};
+use crate::runtime_ops::{ArrayOp, ListOp, RuntimeOp, ScalarElement};
 
 /// One loop that reads the view of `list` once.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,9 +66,12 @@ pub(super) struct ListSnapshotRegion {
     /// Whether an operation in the loop may write the list through the
     /// runtime, so the view is read once only when the list has room.
     pub(super) writes: bool,
+    /// The temporaries the loop lends the list to, when the list is a
+    /// field of an instance (see `field_list_snapshot_regions`).
+    pub(super) temps: HashSet<String>,
 }
 
-fn root(place: &str) -> &str {
+pub(super) fn root(place: &str) -> &str {
     place.split(['.', '[']).next().unwrap_or(place)
 }
 
@@ -238,6 +241,42 @@ pub(super) fn array_region_rank(
     rank
 }
 
+/// The kind of scalar the element reads and writes of `region`'s list
+/// name, when the loop has such accesses. A list has one element type, so
+/// they all name one kind, and each checks the view for that kind's access
+/// code.
+pub(super) fn region_scalar_element(
+    function: &MirFunction,
+    region: &ListSnapshotRegion,
+) -> Option<ScalarElement> {
+    function
+        .blocks
+        .iter()
+        .filter(|block| region.blocks.contains(&block.label))
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op:
+                                    RuntimeOp::List(
+                                        ListOp::IndexScalar(kind)
+                                        | ListOp::IndexScalarUnchecked(kind)
+                                        | ListOp::SetIndexScalar(kind),
+                                    ),
+                                receiver: Some(Operand::Place(receiver)),
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } if *receiver == region.list => Some(*kind),
+            _ => None,
+        })
+}
+
 /// Whether `instruction` lets something other than this function's own
 /// instructions on `list` reach it: a closure or a task that captures it,
 /// a loan of the whole list or of a place in it, or a cleanup action.
@@ -376,6 +415,235 @@ pub(super) fn list_snapshot_regions(
                 blocks: component.iter().map(|label| label.to_string()).collect(),
                 entries,
                 writes,
+                temps: HashSet::new(),
+            });
+        }
+    }
+    regions
+}
+
+/// What `field_list_snapshot_regions` asks about a function.
+pub(super) struct FieldListRules<'a> {
+    /// The temporaries that take a field's box as it is (see
+    /// `classes::field_lend_temps`).
+    pub(super) lend_temps: &'a HashSet<String>,
+    /// Whether the field place holds a list native code may read this way
+    /// through the temporary a lend names.
+    pub(super) candidate: &'a dyn Fn(&str, &str) -> bool,
+    /// Whether an index read through the temporary only reads the list.
+    pub(super) pure_index: &'a dyn Fn(&str) -> bool,
+    /// Whether the field place holds a scalar, which lies in the
+    /// instance's block.
+    pub(super) scalar_field: &'a dyn Fn(&str) -> bool,
+    /// Whether a direct call of the function only reads scalar fields of
+    /// an instance it is passed.
+    pub(super) keeps_instances: &'a dyn Fn(&str) -> bool,
+}
+
+/// Whether `instruction`, which names the instance `root`, leaves the
+/// instance in its layout and the list in its field `list` as it is: it
+/// reads or writes a scalar field in the block, lends another field's box
+/// as it is, or passes the instance to a function that only reads scalar
+/// fields.
+fn keeps_field_list(
+    instruction: &Instruction,
+    root_name: &str,
+    list: &str,
+    rules: &FieldListRules<'_>,
+) -> bool {
+    let mut mentions = Vec::new();
+    instruction_place_mentions(instruction, &mut mentions);
+    mentions.extend(
+        instruction_accesses(instruction)
+            .into_iter()
+            .map(|(place, _)| place),
+    );
+    let of_root = || {
+        mentions
+            .iter()
+            .copied()
+            .filter(|place| root(place) == root_name)
+    };
+    match instruction {
+        Instruction::Lend { place, temp, .. } | Instruction::EndLend { place, temp, .. } => {
+            place != list
+                && !place.contains('[')
+                && place.matches('.').count() == 1
+                && rules.lend_temps.contains(temp)
+        }
+        Instruction::Assign {
+            value: Rvalue::Use(_) | Rvalue::Binary { .. } | Rvalue::Unary { .. },
+            ..
+        } => of_root().all(|place| (rules.scalar_field)(place)),
+        Instruction::Assign {
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Name(function)
+                        | CallTarget::Member {
+                            dispatch: Some(crate::mir::MethodDispatch::Static { function }),
+                            ..
+                        },
+                    args,
+                    type_args,
+                },
+            ..
+        } => {
+            (rules.keeps_instances)(function)
+                && type_args.is_empty()
+                && args.iter().all(|arg| arg.writeback_place.is_none())
+                && of_root().all(|place| place == root_name || (rules.scalar_field)(place))
+        }
+        _ => false,
+    }
+}
+
+/// The loops of `function` that read the view of a list in a field of an
+/// instance once: `region.list` is the field place, as `self.items`.
+///
+/// Each access of such a list is a lend of the field's box to one list
+/// operation. A loop qualifies when its every lend of the field is to an
+/// operation that only reads the list, and every other instruction that
+/// names the instance keeps its layout and the field (see
+/// `keeps_field_list`). Nothing else reaches the instance while the loop
+/// runs: `exclusive` says the function holds it alone, as a local or a
+/// `mut` parameter, and no closure, task, or loan of this function names
+/// it. So while the instance is in its typed layout and the field holds
+/// its box alone when the loop is entered, both stay so, and the box's
+/// view stays as the reads left it.
+pub(super) fn field_list_snapshot_regions(
+    function: &MirFunction,
+    exclusive: impl Fn(&str) -> bool,
+    rules: &FieldListRules<'_>,
+) -> Vec<ListSnapshotRegion> {
+    let mut lists = Vec::<&str>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if let Instruction::Lend { place, temp, .. } = instruction {
+                if !place.contains('[')
+                    && place.matches('.').count() == 1
+                    && rules.lend_temps.contains(temp)
+                    && exclusive(root(place))
+                    && (rules.candidate)(place, temp)
+                    && !lists.contains(&place.as_str())
+                {
+                    lists.push(place);
+                }
+            }
+        }
+    }
+    let successors = function
+        .blocks
+        .iter()
+        .map(|block| {
+            (
+                block.label.as_str(),
+                super::direct_terminator_successors(&block.terminator),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut regions = Vec::new();
+    for list in lists {
+        let instance = root(list);
+        // A loan of an element of the list, begun anywhere, may write the
+        // list while the loop runs.
+        let loans_element = |instruction: &Instruction| {
+            matches!(instruction, Instruction::BeginElementLoan { source, .. }
+                if source.strip_prefix(list).is_some_and(|rest| !rest.starts_with(char::is_alphanumeric)))
+        };
+        if function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| reaches_list(instruction, instance) || loans_element(instruction))
+        {
+            continue;
+        }
+        // The blocks that keep the instance and the list, with the
+        // temporaries each lends the list to.
+        let mut clean = HashMap::<&str, Vec<&str>>::new();
+        'blocks: for block in &function.blocks {
+            let mut temps = Vec::new();
+            let mut lent = None::<&str>;
+            for instruction in &block.instructions {
+                match instruction {
+                    Instruction::Lend { place, temp, .. }
+                        if place == list && rules.lend_temps.contains(temp) =>
+                    {
+                        lent = Some(temp);
+                        temps.push(temp.as_str());
+                    }
+                    Instruction::EndLend { place, temp, .. }
+                        if place == list && lent == Some(temp.as_str()) =>
+                    {
+                        lent = None;
+                    }
+                    // The one operation a lent box goes to, and the facts
+                    // about its index.
+                    _ if lent.is_some_and(|temp| mentioned_roots(instruction).contains(temp)) => {
+                        let temp = lent.expect("checked above");
+                        if view_use(instruction, temp, (rules.pure_index)(temp))
+                            != Some(ViewUse::Reads)
+                        {
+                            continue 'blocks;
+                        }
+                    }
+                    _ if mentioned_roots(instruction).contains(instance)
+                        && !keeps_field_list(instruction, instance, list, rules) =>
+                    {
+                        continue 'blocks;
+                    }
+                    _ => {}
+                }
+            }
+            if terminator_place_mentions(&block.terminator)
+                .into_iter()
+                .any(|place| root(place) == instance)
+            {
+                continue;
+            }
+            clean.insert(block.label.as_str(), temps);
+        }
+        for component in strongly_connected(&clean, &successors) {
+            let cyclic = component.len() > 1
+                || component.iter().any(|label| {
+                    successors
+                        .get(label)
+                        .is_some_and(|next| next.contains(label))
+                });
+            if !cyclic || component.contains(function.entry.as_str()) {
+                continue;
+            }
+            let temps = component
+                .iter()
+                .flat_map(|label| clean[label].iter().map(|temp| temp.to_string()))
+                .collect::<HashSet<_>>();
+            if temps.is_empty() {
+                continue;
+            }
+            let mut entries = Vec::new();
+            for block in &function.blocks {
+                if component.contains(block.label.as_str()) {
+                    continue;
+                }
+                for next in &successors[block.label.as_str()] {
+                    if component.contains(next) {
+                        let edge = (block.label.clone(), next.to_string());
+                        if !entries.contains(&edge) {
+                            entries.push(edge);
+                        }
+                    }
+                }
+            }
+            if entries.is_empty() {
+                continue;
+            }
+            regions.push(ListSnapshotRegion {
+                list: list.to_string(),
+                blocks: component.iter().map(|label| label.to_string()).collect(),
+                entries,
+                writes: false,
+                temps,
             });
         }
     }
@@ -500,12 +768,19 @@ pub(super) struct ListSnapshot {
     /// The element accesses that stay in range while the guards hold
     /// (see `native_codegen_range_loops`).
     pub(super) range: Option<super::range_loops::RangeProof>,
+    /// The kind of scalar the loop's element accesses name (see
+    /// `region_scalar_element`). The loop's copy runs only for that
+    /// kind's access code, which the copy then knows.
+    pub(super) scalar: Option<ScalarElement>,
     /// The call slot of the mutable parameter that holds the list, whose
     /// write-through sink must be absent for the loop's copy to run.
     pub(super) sink: Option<usize>,
     /// Set when the local is an `Array`: what the loop's copy knows about
     /// its layout.
     pub(super) array: Option<ArraySnapshot>,
+    /// Set when the list is a field of an instance: the variable that
+    /// holds the field's box inside the loop.
+    pub(super) field_box: Option<Var>,
 }
 
 /// The layout of an `Array` a loop reads once (ADR-0091). The loop's copy
@@ -520,6 +795,16 @@ pub(super) struct ArraySnapshot {
     pub(super) extents: [Var; aura_runtime::native_runtime::DIRECT_ARRAY_MAX_RANK],
 }
 
+impl ListSnapshot {
+    /// The kind of scalar whose access code the loop's copy runs for.
+    fn scalar_element(&self) -> Option<ScalarElement> {
+        self.range
+            .as_ref()
+            .map(|proof| proof.element)
+            .or(self.scalar)
+    }
+}
+
 impl FunctionCompiler<'_> {
     /// The loops that block `label` belongs to, as indexes into
     /// `list_snapshots`, to read in place of the views of their lists.
@@ -532,12 +817,104 @@ impl FunctionCompiler<'_> {
     /// compiled.
     pub(super) fn snapshot_of_root(&self, name: &str) -> Option<usize> {
         self.list_snapshots.iter().position(|snapshot| {
-            snapshot.region.list == name
+            (snapshot.region.list == name || snapshot.region.temps.contains(name))
                 && snapshot
                     .region
                     .blocks
                     .contains(&self.current_snapshot_label)
         })
+    }
+
+    /// The loop the block being compiled is in that reads the view of the
+    /// list in the field `place` once.
+    pub(super) fn field_snapshot(&self, place: &str) -> Option<usize> {
+        self.list_snapshots.iter().position(|snapshot| {
+            snapshot.field_box.is_some()
+                && snapshot.region.list == place
+                && snapshot
+                    .region
+                    .blocks
+                    .contains(&self.current_snapshot_label)
+        })
+    }
+
+    /// A loop the block being compiled is in that reads the view of a list
+    /// in a field of the instance `instance` once. Its copy runs only
+    /// while the instance is in its typed layout with no write-through
+    /// sink.
+    pub(super) fn instance_snapshot(&self, instance: &str) -> Option<usize> {
+        self.list_snapshots.iter().position(|snapshot| {
+            snapshot.field_box.is_some()
+                && root(&snapshot.region.list) == instance
+                && snapshot
+                    .region
+                    .blocks
+                    .contains(&self.current_snapshot_label)
+        })
+    }
+
+    /// `holds`, a check that passes in the copy of loop `index`.
+    pub(super) fn holds_in_copy(&mut self, index: usize, holds: Val) -> Val {
+        let holds = self.builder.uextend(types::I64, holds);
+        let one = self.builder.iconst(types::I64, 1);
+        let holds = self.keep_in_copy(index, one, holds);
+        self.builder.icmp_imm(IntCC::NotEqual, holds, 0)
+    }
+
+    /// The box the field of snapshot `index` holds, or 0 when the instance
+    /// is not in its typed layout, or the field's box is absent or has
+    /// another holder.
+    fn emit_field_box(&mut self, index: usize) -> std::result::Result<Val, String> {
+        let place = self.list_snapshots[index].region.list.clone();
+        let zero = self.builder.iconst(types::I64, 0);
+        // A class native code does not keep in place has no such box.
+        let Some((instance, slot, _)) = self
+            .class_place(&place)?
+            .filter(|(_, slot, _)| matches!(slot.kind, super::classes::SlotKind::Handle))
+        else {
+            return Ok(zero);
+        };
+        let var = self.local_vars(&instance)?[0];
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let ownership = super::ownership_layout();
+        let flags = MemFlags::trusted();
+        let object = self.builder.use_var(var);
+        let check_block = self.builder.create_block();
+        let block_block = self.builder.create_block();
+        let count_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder
+            .brif(object, check_block, &[], join_block, &[zero]);
+
+        self.builder.switch_to_block(check_block);
+        self.builder.seal_block(check_block);
+        let access = self.builder.uload32(flags, object, layout.access_offset);
+        let typed = self.builder.icmp_imm(IntCC::Equal, access, slot.access);
+        self.builder
+            .brif(typed, block_block, &[], join_block, &[zero]);
+
+        self.builder.switch_to_block(block_block);
+        self.builder.seal_block(block_block);
+        let block = self.class_block(object);
+        let boxed = self.builder.load(types::I64, flags, block, slot.offset);
+        self.builder
+            .brif(boxed, count_block, &[], join_block, &[zero]);
+
+        self.builder.switch_to_block(count_block);
+        self.builder.seal_block(count_block);
+        // The end of each lend finds the box with one holder, as the
+        // loop's copy takes it to be.
+        let count = self
+            .builder
+            .uload32(flags, boxed, ownership.ref_count_offset);
+        let alone = self.builder.icmp_imm(IntCC::Equal, count, 1);
+        let held = self.builder.select(alone, boxed, zero);
+        self.builder.jump(join_block, &[held]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(self.builder.block_params(join_block)[0])
     }
 
     /// `handle`, the box root `name` holds, as a value of its own that the
@@ -749,14 +1126,23 @@ impl FunctionCompiler<'_> {
         }
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let flags = MemFlags::trusted();
-        let vars = self.local_vars(&snapshot.region.list)?;
-        let [var] = vars.as_slice() else {
-            return Err(format!(
-                "direct backend read the view of `{}`, which is not one box",
-                snapshot.region.list
-            ));
+        let handle = match snapshot.field_box {
+            Some(field_box) => {
+                let boxed = self.emit_field_box(index)?;
+                self.builder.def_var(field_box, boxed);
+                boxed
+            }
+            None => {
+                let vars = self.local_vars(&snapshot.region.list)?;
+                let [var] = vars.as_slice() else {
+                    return Err(format!(
+                        "direct backend read the view of `{}`, which is not one box",
+                        snapshot.region.list
+                    ));
+                };
+                self.builder.use_var(*var)
+            }
         };
-        let handle = self.builder.use_var(*var);
         let read_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         for _ in 0..4 {
@@ -780,33 +1166,43 @@ impl FunctionCompiler<'_> {
         let elements = self
             .builder
             .load(types::I64, flags, handle, layout.elements_offset);
-        // A list of scalars other than `str` views, of boxes, or of plain
-        // records.
-        let scalar_form = self
-            .builder
-            .iadd_imm(access, -(DirectListAccess::Int64 as i64));
-        let scalar = self.builder.icmp_imm(
-            IntCC::UnsignedLessThan,
-            scalar_form,
-            DirectListAccess::Float32 as i64 - DirectListAccess::Int64 as i64 + 1,
-        );
-        let not_str = self
-            .builder
-            .icmp_imm(IntCC::NotEqual, access, DirectListAccess::Str as i64);
-        let scalar = self.builder.band(scalar, not_str);
-        let boxes = self
-            .builder
-            .icmp_imm(IntCC::Equal, access, DirectListAccess::Boxes as i64);
-        let typed_form = self
-            .builder
-            .iadd_imm(access, -i64::from(FIRST_PLAIN_ACCESS));
-        let typed = self.builder.icmp_imm(
-            IntCC::UnsignedLessThan,
-            typed_form,
-            i64::from(FIRST_CLASS_ACCESS - FIRST_PLAIN_ACCESS),
-        );
-        let form = self.builder.bor(scalar, boxes);
-        let mut qualifies = self.builder.bor(form, typed);
+        let mut qualifies = match snapshot.scalar_element() {
+            // The loop's scalar accesses check for one access code, a
+            // scalar form, and the copy runs for that one.
+            Some(element) => {
+                let (code, _) = super::scalar_list_slot(element);
+                self.builder.icmp_imm(IntCC::Equal, access, code as i64)
+            }
+            None => {
+                // A list of scalars other than `str` views, of boxes, or
+                // of plain records.
+                let scalar_form = self
+                    .builder
+                    .iadd_imm(access, -(DirectListAccess::Int64 as i64));
+                let scalar = self.builder.icmp_imm(
+                    IntCC::UnsignedLessThan,
+                    scalar_form,
+                    DirectListAccess::Float32 as i64 - DirectListAccess::Int64 as i64 + 1,
+                );
+                let not_str =
+                    self.builder
+                        .icmp_imm(IntCC::NotEqual, access, DirectListAccess::Str as i64);
+                let scalar = self.builder.band(scalar, not_str);
+                let boxes =
+                    self.builder
+                        .icmp_imm(IntCC::Equal, access, DirectListAccess::Boxes as i64);
+                let typed_form = self
+                    .builder
+                    .iadd_imm(access, -i64::from(FIRST_PLAIN_ACCESS));
+                let typed = self.builder.icmp_imm(
+                    IntCC::UnsignedLessThan,
+                    typed_form,
+                    i64::from(FIRST_CLASS_ACCESS - FIRST_PLAIN_ACCESS),
+                );
+                let form = self.builder.bor(scalar, boxes);
+                self.builder.bor(form, typed)
+            }
+        };
         if snapshot.region.writes {
             let room = self.builder.uload32(flags, handle, layout.capacity_offset);
             let has_room = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
@@ -820,9 +1216,6 @@ impl FunctionCompiler<'_> {
             qualifies = self.builder.band(qualifies, direct);
         }
         if let Some(proof) = &snapshot.range {
-            let (code, _) = super::scalar_list_slot(proof.element);
-            let exact = self.builder.icmp_imm(IntCC::Equal, access, code as i64);
-            qualifies = self.builder.band(qualifies, exact);
             for guard in &proof.guards {
                 use super::range_loops::{RangeBound, RangeGuard};
                 let holds = match guard {
@@ -996,13 +1389,12 @@ impl FunctionCompiler<'_> {
                 .collect::<Vec<_>>();
             // A loop over one list whose operations all check for one
             // access code runs its copy only for that code, which the copy
-            // then knows. A loop with a range proof checked the code where
-            // it was entered.
+            // then knows. A loop with scalar element accesses checked the
+            // code where it was entered.
             let code_of = |snapshot: &ListSnapshot| {
                 snapshot
-                    .range
-                    .as_ref()
-                    .map(|proof| super::scalar_list_slot(proof.element).0 as i64)
+                    .scalar_element()
+                    .map(|element| super::scalar_list_slot(element).0 as i64)
             };
             let expected = match group.as_slice() {
                 [only] if code_of(&self.list_snapshots[*only]).is_none() => {

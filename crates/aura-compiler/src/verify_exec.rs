@@ -3103,7 +3103,12 @@ impl<'a> Exec<'a> {
                     let Some(k) = key_term(&k) else {
                         return fresh_target(self);
                     };
-                    let stored = self.operand(state, &entry.value, IntTy::of(value_type));
+                    // A `float64` literal stored in a dict of `float32`
+                    // rounds to the value type, as a list element does.
+                    let stored = fit(
+                        self.operand(state, &entry.value, IntTy::of(value_type)),
+                        value_type,
+                    );
                     values = match (values, scalar_term(&stored), value_sort) {
                         (Some(array), Some(term), Some(value_sort)) => Some(self.define(
                             &format!("(Array {sort} {value_sort})"),
