@@ -534,3 +534,59 @@ fn erased_trait_object_union_members_keep_distinct_tags() {
     let both_as_b = union_value(&ab, &dyn_b, both);
     assert!(!union_values_equal(&both_as_a, &both_as_b));
 }
+
+#[test]
+fn untagged_trait_object_payloads_never_downcast_to_a_concrete_member() {
+    let dyn_a = Type::TypeParam("dyn A".to_string());
+    let dyn_b = Type::TypeParam("dyn B".to_string());
+    let param = Type::TypeParam("T".to_string());
+    let concrete = Type::named("Concrete");
+    let object = Value::TraitObject(Box::new(crate::runtime_value::TraitObjectValue {
+        held: Arc::new(concrete.clone()),
+        value: Value::Instance(InstanceValue {
+            class_name: crate::runtime_value::RuntimeName::from("Concrete".to_string()),
+            fields: Default::default(),
+        }),
+    }));
+
+    // A single erased trait-object member takes the payload, not `Concrete`.
+    let with_dyn = union(vec![concrete.clone(), dyn_a.clone(), Type::Unit]);
+    assert_eq!(
+        plan_union_alignment(&object, &with_dyn, "lift"),
+        Ok(UnionAlignment::Lift(index_of(&with_dyn, &dyn_a)))
+    );
+    let lifted = coerce_union_boundary(object.clone(), &Type::Union(Box::new(with_dyn.clone())));
+    let Value::Union(lifted) = lifted else {
+        panic!("a trait object lifts into the union");
+    };
+    assert_eq!(lifted.member_index, index_of(&with_dyn, &dyn_a));
+
+    // A wildcard type parameter is preferred over any trait-object member.
+    let with_param = union(vec![concrete.clone(), param.clone(), dyn_a.clone()]);
+    assert_eq!(
+        plan_union_alignment(&object, &with_param, "lift"),
+        Ok(UnionAlignment::Lift(index_of(&with_param, &param)))
+    );
+
+    // Two trait-object members are ambiguous, and a concrete-only union has
+    // no admissible member: both fail closed.
+    let ambiguous = union(vec![concrete.clone(), dyn_a.clone(), dyn_b]);
+    assert_eq!(
+        plan_union_alignment(&object, &ambiguous, "pick"),
+        Err("pick type identity mismatch".to_string())
+    );
+    let concrete_only = union(vec![concrete.clone(), Type::Unit]);
+    assert_eq!(
+        plan_union_alignment(&object, &concrete_only, "pick"),
+        Err("pick type identity mismatch".to_string())
+    );
+
+    // A symbolic union holding a trait object stays wrapped at a concrete
+    // boundary instead of unwrapping to the held class.
+    let symbolic = union(vec![param.clone(), Type::Unit]);
+    let held = union_value(&symbolic, &param, object);
+    assert!(matches!(
+        coerce_union_boundary(held, &concrete),
+        Value::Union(_)
+    ));
+}

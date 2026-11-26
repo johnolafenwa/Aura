@@ -5752,3 +5752,737 @@ def main():
         "`assert false` in the else branch must fail when `d[1] = 2` only runs in the then branch: {report:#?}"
     );
 }
+
+/// A list nested deeper than the verifier models is opaque: each op on it that can
+/// trap is reported as not modeled, and a capacity is still checked.
+#[test]
+fn ops_on_a_list_the_verifier_does_not_model_stay_open() {
+    let source = r#"
+class D:
+    xs: list[int64]
+    m: dict[int64, int64]
+    t: set[int64]
+    arr: Array[float64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def put(a: mut A, i: int64):
+    a.b.c.d.xs[i] = 5
+
+def cut(a: A) -> list[int64]:
+    return a.b.c.d.xs[1:2]
+
+def skip(a: A) -> list[int64]:
+    return a.b.c.d.xs[0:4:2]
+
+def drop(a: mut A):
+    a.b.c.d.xs.remove(3)
+
+def find(a: A) -> int64:
+    return a.b.c.d.xs.index(3)
+
+def grow(a: mut A, n: int64):
+    a.b.c.d.xs.reserve(n)
+
+def grow_some(a: mut A):
+    a.b.c.d.xs.reserve(4)
+
+def window(a: A) -> int64:
+    view s = a.b.c.d.xs[1:3]
+    return s[0] + 0
+
+def mean(a: A) -> float64:
+    return a.b.c.d.arr.mean()
+
+def main():
+    pass
+"#;
+    assert_open(
+        source,
+        &[
+            "15 index in range unsupported",
+            "18 index in range unsupported",
+            "21 index in range unsupported",
+            "24 key present unsupported",
+            "27 key present unsupported",
+            "30 overflow failed",
+            "36 index in range failed",
+            "40 index in range unsupported",
+        ],
+    );
+}
+
+/// A `dict` or `set` nested too deep to model still has its capacity checked, and a
+/// key the solver cannot spell (a string past U+2FFFF) leaves the lookup open.
+#[test]
+fn dict_and_set_ops_the_verifier_does_not_model_stay_open() {
+    let source = r#"
+class D:
+    xs: list[int64]
+    m: dict[int64, int64]
+    t: set[int64]
+    arr: Array[float64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def grow_map(a: mut A, n: int64):
+    a.b.c.d.m.reserve(n)
+
+def grow_map_some(a: mut A):
+    a.b.c.d.m.reserve(2)
+
+def grow_set(a: mut A, n: int64):
+    a.b.c.d.t.reserve(n)
+
+def grow_set_some(a: mut A):
+    a.b.c.d.t.reserve(2)
+
+def lookup(m: dict[str, int64]) -> int64:
+    return m["WIDE"]
+
+def lookup_view(m: dict[str, int64]) -> bool:
+    view v = m["WIDE"]
+    return v == 0
+
+def forget(t: mut set[str]):
+    t.remove("WIDE")
+
+def main():
+    pass
+"#
+    .replace("WIDE", "\u{30000}");
+    assert_open(
+        &source,
+        &[
+            "15 overflow failed",
+            "21 overflow failed",
+            "27 key present unsupported",
+            "30 key present unsupported",
+            "34 key present unsupported",
+        ],
+    );
+}
+
+/// A string literal the solver cannot spell is opaque: its slices are open, and a
+/// repeat count is still checked.
+#[test]
+fn ops_on_a_string_the_verifier_cannot_spell_stay_open() {
+    let source = r#"
+def cut() -> str:
+    return "WIDEab"[0:1]
+
+def skip() -> str:
+    return "WIDEab"[0:4:2]
+
+def many(n: int64) -> str:
+    return "WIDE".repeat(n)
+
+def twice() -> str:
+    return "WIDE".repeat(2)
+
+def main():
+    pass
+"#
+    .replace("WIDE", "\u{30000}");
+    assert_open(
+        &source,
+        &[
+            "3 index in range unsupported",
+            "6 index in range unsupported",
+            "9 overflow failed",
+        ],
+    );
+}
+
+/// Stepped slices, searches and `reserve` on a list the verifier models.
+#[test]
+fn stepped_slices_searches_and_reserve_on_a_modeled_list() {
+    let source = r#"
+def skip(xs: list[int64]) -> list[int64]:
+    return xs[0:4:2]
+
+def skip_safe(xs: list[int64]) -> list[int64]:
+    requires len(xs) >= 4
+    return xs[0:4:2]
+
+def back(xs: list[int64]) -> list[int64]:
+    return xs[::-1]
+
+def drop(xs: mut list[int64]):
+    xs.remove(3)
+
+def find(xs: list[int64]) -> int64:
+    return xs.index(3)
+
+def grow(xs: mut list[int64], n: int64):
+    xs.reserve(n)
+
+def grow_some(xs: mut list[int64]):
+    xs.reserve(8)
+
+def main():
+    pass
+"#;
+    assert_open(
+        source,
+        &[
+            "3 index in range failed",
+            "13 key present unsupported",
+            "16 key present unsupported",
+            "19 overflow failed",
+        ],
+    );
+}
+
+/// Indexing through a view of a whole collection checks the key or index of the
+/// collection the view borrows.
+#[test]
+fn element_reborrows_through_a_view_of_a_collection() {
+    let source = r#"
+class D:
+    m: dict[int64, int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def known(m: dict[int64, int64], k: int64) -> int64:
+    view mm = m
+    view v = mm[k]
+    return v + 0
+
+def present(m: dict[int64, int64], k: int64) -> int64:
+    requires k in m
+    view mm = m
+    view v = mm[k]
+    return v + 0
+
+def odd_key(m: dict[str, int64]) -> int64:
+    view mm = m
+    view v = mm["WIDE"]
+    return v + 0
+
+def deep(a: A) -> int64:
+    view mm = a.b.c.d.m
+    view v = mm[1]
+    return v + 0
+
+def nested(xs: list[list[int64]]) -> int64:
+    view row = xs[0]
+    view v = row[1]
+    return v + 0
+
+def main():
+    pass
+"#
+    .replace("WIDE", "\u{30000}");
+    assert_open(
+        &source,
+        &[
+            "13 key present failed",
+            "24 key present unsupported",
+            "29 key present unsupported",
+            "33 index in range failed",
+            "34 index in range unsupported",
+        ],
+    );
+}
+
+/// A recursive `spec def` returning `bool` or `str` cut off under a quantifier is
+/// a fresh function of the bound variables.
+#[test]
+fn a_scalar_spec_def_cut_off_under_a_binder_is_not_modeled() {
+    let source = r#"
+spec def even(n: int64) -> bool:
+    requires 0 <= n and n <= 1000
+    return true if n == 0 else not even(n - 1)
+
+spec def word(n: int64) -> str:
+    requires 0 <= n and n <= 1000
+    return "" if n == 0 else word(n - 1) + "a"
+
+def f(xs: list[int64]) -> int64:
+    requires forall(x in xs, 0 <= x and x <= 1000)
+    ensures forall(x in xs, even(x) or not even(x))
+    ensures forall(x in xs, len(word(x)) >= 0)
+    return 0
+
+def main():
+    pass
+"#;
+    assert_open(
+        source,
+        &[
+            "12 ensures unsupported",
+            "13 ensures unsupported",
+            "14 assert unsupported",
+            "14 assert unsupported",
+        ],
+    );
+}
+
+/// A float `abs` needs no check, and `with` blocks over a generic manager
+/// prove, also in a function that makes a closure over a local.
+#[test]
+fn float_abs_and_generic_managers_prove() {
+    assert_proved(
+        r#"
+class D:
+    f: float64
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+class Guard[T]:
+    v: T
+
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        pass
+
+def size(a: A) -> float64:
+    return abs(a.b.c.d.f)
+
+def guarded() -> int64:
+    mut n = 0
+    with g = Guard[int64](v=1):
+        n = 1
+    return n
+
+def captured() -> int64:
+    mut n = 0
+    bump = lambda: n + 1
+    with g = Guard[int64](v=1):
+        n = 2
+    return bump()
+
+def main():
+    pass
+"#,
+    );
+}
+
+/// A write through a view of an element's field checks the contract of a
+/// callable field, writes a tuple item in place, and a view taken in either
+/// branch of an `if` is still a view into the same list after it.
+#[test]
+fn writes_through_element_views_keep_field_contracts() {
+    assert_open(
+        r#"
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+def inc(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+    return n + 1
+
+def stay(n: int64) -> int64:
+    return n
+
+class Holder:
+    f: Step
+    k: int64
+
+def set_good(hs: mut list[Holder]):
+    requires len(hs) > 0
+    view mut h = hs[0].f
+    h = inc
+
+def set_bad(hs: mut list[Holder]):
+    requires len(hs) > 0
+    view mut h = hs[0].f
+    h = stay
+
+def set_pair(ps: mut list[(int64, int64)]):
+    requires len(ps) > 0
+    view mut p = ps[0][1]
+    p = 5
+    assert ps[0][1] == 5
+
+def set_k(hs: mut list[Holder]):
+    requires len(hs) > 0
+    view mut k = hs[0].k
+    k = 5
+
+def either(xs: list[int64], c: bool) -> int64:
+    requires len(xs) > 1
+    mut t = 0
+    if c:
+        view v = xs[0]
+        t = v + 0
+    else:
+        view v = xs[1]
+        t = v + 0
+    return t
+
+def main():
+    pass
+"#,
+        &["26 ensures failed"],
+    );
+}
+
+/// The cleanup of a `with` block runs the resource's `close`, generic or not,
+/// and a closure that changes a captured local still counts after the block.
+#[test]
+fn with_blocks_close_generic_resources_and_keep_captured_writes() {
+    assert_proved(
+        r#"
+class Res[T]:
+    v: T
+
+    def close(mut self) -> None:
+        pass
+
+class Plain:
+    v: int64
+
+    def close(mut self) -> None:
+        pass
+
+def captured() -> int64:
+    mut n = 0
+    def bump[mut n]() -> None:
+        n += 1
+    with r = Plain(v=1):
+        bump()
+    return n
+
+def generic() -> int64:
+    with r = Res[int64](v=1):
+        pass
+    return 0
+
+def main():
+    print(captured())
+    print(generic())
+"#,
+    );
+}
+
+/// Recursive `spec def`s returning a float or a list under a quantifier: the
+/// float clause holds without the cut-off value, the list one stays open.
+#[test]
+fn float_and_list_spec_defs_under_a_binder() {
+    assert_open(
+        r#"
+spec def half(n: int64) -> float64:
+    requires 0 <= n and n <= 1000
+    return 0.0 if n == 0 else half(n - 1) + 0.5
+
+spec def ones(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 1000
+    return [] if n == 0 else ones(n - 1) + [1]
+
+def f(xs: list[int64]) -> int64:
+    requires forall(x in xs, 0 <= x and x <= 1000)
+    ensures forall(x in xs, x >= 0 or half(x) > 0.0)
+    return 0
+
+def g(xs: list[int64]) -> int64:
+    requires forall(x in xs, 0 <= x and x <= 1000)
+    ensures forall(x in xs, len(ones(x)) >= 0)
+    return 0
+
+def main():
+    pass
+"#,
+        &["17 ensures unsupported"],
+    );
+}
+
+/// The payload of a generic class's `V | None` field, once narrowed, is a
+/// value the verifier does not model. Every check that reads such an index,
+/// bound, count or capacity is reported as not modeled instead of proved.
+#[test]
+fn checks_on_an_integer_the_verifier_does_not_model_stay_open() {
+    let source = r#"
+class Slot[V]:
+    value: V | None
+
+class D:
+    xs: list[int64]
+    m: dict[int64, int64]
+    t: set[int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def get(xs: list[int64], slot: Slot[int64]) -> int64:
+    if slot.value is not None:
+        i = slot.value
+        return xs[i]
+    return 0
+
+def put(xs: mut list[int64], slot: Slot[int64]):
+    if slot.value is not None:
+        i = slot.value
+        xs[i] = 1
+
+def swap(xs: mut list[int64], slot: Slot[int64]):
+    if slot.value is not None:
+        i = slot.value
+        xs.swap(i, 0)
+
+def cut(xs: list[int64], slot: Slot[int64]) -> list[int64]:
+    if slot.value is not None:
+        i = slot.value
+        return xs[i:2]
+    return []
+
+def skip(xs: list[int64], slot: Slot[int64]) -> list[int64]:
+    if slot.value is not None:
+        i = slot.value
+        return xs[0:i:2]
+    return []
+
+def grow(xs: mut list[int64], a: mut A, slot: Slot[int64]):
+    if slot.value is not None:
+        i = slot.value
+        xs.reserve(i)
+        a.b.c.d.xs.reserve(i)
+        a.b.c.d.m.reserve(i)
+        a.b.c.d.t.reserve(i)
+
+def grow_maps(m: mut dict[int64, int64], t: mut set[int64], slot: Slot[int64]):
+    if slot.value is not None:
+        i = slot.value
+        m.reserve(i)
+        t.reserve(i)
+
+def loan(xs: list[int64], slot: Slot[int64]) -> int64:
+    if slot.value is not None:
+        i = slot.value
+        view v = xs[i]
+        return v + 0
+    return 0
+
+def reborrow(xs: list[int64], slot: Slot[int64]) -> int64:
+    if slot.value is not None:
+        i = slot.value
+        view ys = xs
+        view v = ys[i]
+        return v + 0
+    return 0
+
+def text(s: str, slot: Slot[int64]) -> str:
+    if slot.value is not None:
+        i = slot.value
+        return s[i:2] + s.repeat(i) + "WIDE".repeat(i)
+    return ""
+
+def window(xs: list[int64], slot: Slot[int64]) -> int64:
+    if slot.value is not None:
+        i = slot.value
+        view s = xs[i:3]
+        return s[0] + 0
+    return 0
+
+def window_index(xs: list[int64], slot: Slot[int64]) -> int64:
+    requires len(xs) >= 3
+    if slot.value is not None:
+        i = slot.value
+        view s = xs[0:3]
+        return s[i] + 0
+    return 0
+
+def numbers(slot: Slot[int64]) -> Duration:
+    if slot.value is not None:
+        i = slot.value
+        xs = list[int64].with_capacity(i)
+        y = abs(i)
+        z = i as float64
+        w = i + 1
+        return Duration.ms(i)
+    return Duration.ms(0)
+
+def floats(slot: Slot[float64]) -> float64:
+    if slot.value is not None:
+        f = slot.value
+        return abs(f)
+    return 0.0
+
+def main():
+    pass
+"#
+    .replace("WIDE", "\u{30000}");
+    assert_open(
+        &source,
+        &[
+            "19 index in range unsupported",
+            "25 index in range unsupported",
+            "30 index in range unsupported",
+            "35 index in range unsupported",
+            "41 index in range unsupported",
+            "47 overflow unsupported",
+            "48 overflow unsupported",
+            "49 overflow unsupported",
+            "50 overflow unsupported",
+            "55 overflow unsupported",
+            "56 overflow unsupported",
+            "61 index in range unsupported",
+            "69 index in range unsupported",
+            "76 overflow unsupported",
+            "76 index in range unsupported",
+            "82 overflow unsupported",
+            "82 index in range unsupported",
+            "83 index in range unsupported",
+            "91 index in range unsupported",
+            "91 index in range unsupported",
+            "97 overflow unsupported",
+            "98 overflow unsupported",
+            "99 overflow unsupported",
+            "100 overflow unsupported",
+            "101 overflow unsupported",
+        ],
+    );
+}
+
+/// Ops the verifier passes over on values it does not model, a division and
+/// a branch on such values, a tuple `spec def` cut off under a binder, loop
+/// counters stepped through temporaries, and an element view rebound on each
+/// pass of a loop.
+#[test]
+fn unmodeled_values_loop_counters_and_rebound_views() {
+    let source = r#"
+class Slot[V]:
+    value: V | None
+
+class D:
+    xs: list[int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def push(a: mut A):
+    a.b.c.d.xs.append(1)
+
+def size() -> int64:
+    return len("WIDE")
+
+def compare(slot: Slot[int64]) -> bool:
+    if slot.value is not None:
+        i = slot.value
+        j = i // 2
+        return i < 3
+    return false
+
+def branch(slot: Slot[bool]) -> int64:
+    if slot.value is not None:
+        b = slot.value
+        if b:
+            return 1
+    return 0
+
+spec def pairs(n: int64) -> (int64, int64):
+    requires 0 <= n and n <= 1000
+    return (0, 0) if n == 0 else pairs(n - 1)
+
+def spec_pairs(xs: list[int64]) -> int64:
+    requires forall(x in xs, 0 <= x and x <= 1000)
+    ensures forall(x in xs, pairs(x)[0] == 0)
+    return 0
+
+def up(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    mut i = 0
+    mut t = 0
+    while i < n:
+        t = i + 1
+        i = t
+        t = 0
+    return i
+
+def down(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    mut i = n
+    mut k = 1
+    while i > 0:
+        k = 1
+        i = i - k
+        k = 2
+    return i
+
+def pick(xs: list[int64]) -> int64:
+    requires len(xs) > 2
+    mut t = 0
+    for i in range(2):
+        view v = xs[i]
+        t = v + 0
+    return t
+
+def minmax(n: int64):
+    min(1, 2)
+    max(n, 3)
+
+def main():
+    pass
+"#
+    .replace("WIDE", "\u{30000}");
+    assert_open(
+        &source,
+        &["23 division by zero unsupported", "40 ensures unsupported"],
+    );
+}
+
+/// A loop whose counter is copied through a temporary that the same block
+/// sets again later does not count as stepping that counter: `gcd` still
+/// proves, and the Fibonacci loop's sums and counter may overflow `int32`.
+#[test]
+fn loop_counters_read_through_temporaries_set_again_later() {
+    assert_open(
+        r#"
+def gcd(a: int32, b: int32) -> int32:
+    mut x: int32 = a
+    mut y: int32 = b
+    while y != 0:
+        mut temp: int32 = y
+        y = x % y
+        x = temp
+    return x
+
+class Fib:
+    n: int32
+
+    def compute(self) -> int32:
+        mut prev2: int32 = 0
+        mut prev1: int32 = 1
+        mut i: int32 = 2
+        mut current: int32 = 0
+        while i <= self.n:
+            current = prev1 + prev2
+            prev2 = prev1
+            prev1 = current
+            i += 1
+        return current
+
+def main():
+    print(gcd(12, 8))
+    print(Fib(n=10).compute())
+"#,
+        &["20 overflow failed", "23 overflow failed"],
+    );
+}

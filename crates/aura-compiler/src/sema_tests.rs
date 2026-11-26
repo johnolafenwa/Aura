@@ -34530,3 +34530,93 @@ def main():
         assert_eq!(error.code, "AU3010", "{label}: {error:?}");
     }
 }
+
+#[test]
+fn extern_c_layouts_beyond_the_size_and_scalar_bounds_are_rejected() {
+    let size = "exceeds the maximum C layout size of 16777216 bytes";
+    let leaves = "exceeds the maximum C layout scalar count of 1048576";
+    for (source, owner, reason) in [
+        // Nested array lengths multiply past the byte bound.
+        (
+            "extern \"C\" class P:\n    v: array[array[uint64, 4096], 4096]\n",
+            "class `P`",
+            size,
+        ),
+        // Nested array lengths multiply past the scalar bound.
+        (
+            "extern \"C\" class P:\n    v: array[array[uint8, 2048], 1024]\n",
+            "class `P`",
+            leaves,
+        ),
+        // Fields that fit alone add up past the scalar bound.
+        (
+            "extern \"C\" class P:\n    a: array[uint8, 1048576]\n    b: uint8\n",
+            "class `P`",
+            leaves,
+        ),
+        // Overlapping union members still count every scalar.
+        (
+            "extern \"C\" union U:\n    a: array[uint8, 1048576]\n    b: uint8\n",
+            "union `U`",
+            leaves,
+        ),
+        // A nested class carries its scalars into its holder.
+        (
+            "extern \"C\" class Q:\n    v: array[uint8, 1048576]\nextern \"C\" class P:\n    q: Q\n    w: uint8\n",
+            "class `P`",
+            leaves,
+        ),
+    ] {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the oversized layout must fail");
+        assert_eq!(diagnostic.code, "AU2002", "{source}: {}", diagnostic.message);
+        assert_eq!(
+            diagnostic.message,
+            format!("`extern \"C\"` {owner} {reason}"),
+            "{source}"
+        );
+        assert!(diagnostic
+            .help
+            .iter()
+            .any(|help| help.contains("at most 16777216 bytes and 1048576 scalar")));
+    }
+    check_ffi_source_for_test("extern \"C\" class P:\n    v: array[array[uint64, 1024], 1024]\n")
+        .expect("a layout at both bounds is accepted");
+}
+
+#[test]
+fn a_mutable_callable_called_through_a_mutable_view_respects_the_view_lock() {
+    let prelude = r#"
+class Count:
+    value: int64
+
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+class Counter:
+    cb: Callable[mut def() -> int64]
+
+def make_counter() -> Counter:
+    count = Count(value=0)
+    return Counter(cb=lambda [own count]: count.bump())
+"#;
+    for body in [
+        "def main():\n    mut c = make_counter()\n    view mut v = c\n    _ = v.cb()\n",
+        "def run(c: mut Counter) -> int64:\n    view mut v = c\n    return v.cb()\n\ndef main():\n    pass\n",
+    ] {
+        crate::check_source(&format!("{prelude}\n{body}"))
+            .unwrap_or_else(|error| panic!("{body}: {error:?}"));
+    }
+    for body in [
+        "def main():\n    mut c = make_counter()\n    view mut v = c\n    view w = v\n    _ = v.cb()\n    _ = w\n",
+        "def main():\n    mut c = make_counter()\n    view v = c\n    _ = v.cb()\n",
+    ] {
+        let error = crate::check_source(&format!("{prelude}\n{body}"))
+            .expect_err("calling the callable must not bypass a view");
+        assert!(
+            matches!(error.code.as_str(), "AU3002" | "AU3003"),
+            "{body}: {error:?}"
+        );
+    }
+}
