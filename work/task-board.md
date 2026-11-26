@@ -67,6 +67,9 @@ Field delegation, property setters, destructor hooks and method decorators passe
   instructions to 252.
 - Done: a `str` key read from a list is looked
   up where the list holds it (`keys[i] in table` 4.2 to 1.4 times Rust).
+- Done: fused `int64` lookups and inserts (SipHash kept, John's choice),
+  and `str` keys in small dicts compared in place (`interpreter` 3.6%
+  fewer instructions).
 - Next: one probe and no copy for the counting idiom on a viewed key.
 
 ## Verification in the documentation (complete)
