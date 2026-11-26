@@ -210,6 +210,7 @@ runtime_functions! {
         [I64, I64, I64, I64, I64, I64],
         Some(I64)
     ),
+    ConcatStrParts => ("aura_direct_concat_str_parts", [I64, I64, I64, I64], Some(I64)),
     VecStrElementWords => (
         "aura_direct_vec_str_element_words",
         [I64, I64, I64, I64, I64],

@@ -1,0 +1,65 @@
+# A run of `+` on `str`s joins every part at once: literals, parameters,
+# locals, call results, loaned elements and the result of an earlier run,
+# in a function, a method, a loop and a branch. The parts outside the run
+# are released after it, and runs with a field or a call between their
+# steps are joined one step at a time.
+
+class Greeter:
+    name: str
+    marks: list[str]
+
+    def greet(self, other: str) -> str:
+        return "hello " + other + " from " + self.name + "!"
+
+    def framed(self) -> str:
+        mut out = ""
+        for mark in self.marks:
+            out = out + "[" + mark + "]"
+        return out
+
+def hex(value: int64) -> str:
+    digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+    if value == 0:
+        return "0"
+    mut rest = value
+    mut text = ""
+    while rest > 0:
+        text = digits[rest % 16] + text
+        rest = rest // 16
+    return text
+
+def chunk(piece: str) -> str:
+    return hex(piece.byte_len()) + "\r\n" + piece + "\r\n"
+
+def shout(text: str) -> str:
+    return text.to_upper()
+
+def pair(left: str, right: str) -> str:
+    return left + right
+
+def main():
+    print(chunk("hello world").replace("\r\n", "|"))
+    print(chunk("").replace("\r\n", "|"))
+    base = "http://" + "127.0.0.1" + ":" + "80"
+    print(base + "/item/" + "7")
+    greeter = Greeter(name="aura", marks=["a", "bb", ""])
+    print(greeter.greet("you"))
+    print(greeter.framed())
+    words = ["alpha", "beta", "gamma"]
+    mut before = "start"
+    for index in range(words.len()):
+        view word = words[index]
+        before = before + " " + word
+        if index % 2 == 0:
+            before = before + "," + shout(word) + ";"
+    print(before)
+    same = "ab"
+    print(same + same + same)
+    print(pair("x", "y") + "-" + pair("", "z") + "-" + "")
+    mut kept: list[str] = []
+    for word in words:
+        kept.append(word + "=" + word.to_upper() + "." + hex(word.byte_len()))
+    print(kept)
+    _ = shout("drop") + " " + "me"
+    text = "é" + "ü" + "ß"
+    print(f"{text} {text.byte_len()} {text.len()}")

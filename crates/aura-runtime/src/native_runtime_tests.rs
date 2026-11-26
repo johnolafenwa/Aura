@@ -30420,6 +30420,35 @@ fn literal_affix_tests_and_str_element_copies_read_text_in_place() {
     });
     assert!(message.contains("allocation limit"), "{message}");
 
+    // A chain of `+` joins every part in one box, and the first step over
+    // the limit stops the program at the chain's span.
+    let chain = |parts: Vec<String>| {
+        let words = parts
+            .iter()
+            .flat_map(|part| [part.as_ptr() as usize, part.len()])
+            .collect::<Vec<_>>();
+        expect_string(super::aura_direct_concat_str_parts(
+            words.as_ptr(),
+            parts.len(),
+            3,
+            7,
+        ))
+    };
+    let parts = |parts: &[&str]| parts.iter().map(|part| part.to_string()).collect();
+    assert_eq!(chain(parts(&["a", ", ", "b", "!"])), "a, b!");
+    assert_eq!(chain(parts(&[&long, "é", ""])), format!("{long}é"));
+    assert_eq!(chain(Vec::new()), "");
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        let half = "x".repeat(crate::runtime_value::MAX_STRING_BYTES / 2);
+        chain(vec![half.clone(), "-".to_string(), half]);
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert!(
+        diagnostic.message.contains("allocation limit"),
+        "{diagnostic:?}"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(3, 7)));
+
     let limit = crate::runtime_value::MAX_STRING_BYTES;
     let left = crate::text::Text::from("x".repeat(limit));
     let right = crate::text::Text::from("y");
