@@ -2,7 +2,7 @@ use super::*;
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::runtime_value::{InstanceValue, TupleValue, UnionValue};
 use aura_core::types::Type;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 fn int(value: i64) -> Value {
     Value::Int(IntegerValue::from_i64(value))
@@ -1094,4 +1094,65 @@ fn union_drops_right_snapshots_with_excluded_owned_payloads() {
     assert!(union
         .iter()
         .eq((0..24).map(record).collect::<Vec<_>>().iter()));
+}
+
+/// The `int64` fast paths of a large dict find what the general lookup
+/// finds: keys of other integer widths, keys after holes, and keys read in
+/// order, and a write through a shared handle leaves the other alone.
+#[test]
+fn int64_fast_paths_agree_with_value_lookups_on_large_dicts() {
+    let mut entries = DictEntries::new();
+    for key in 0..40i64 {
+        let stored = if key % 3 == 0 {
+            Value::Int(IntegerValue::from_u64(key as u64))
+        } else {
+            int(key)
+        };
+        entries.insert(stored, int(key * 10));
+    }
+    entries.remove_i64(7);
+    entries.remove_i64(8);
+    let shared = entries.clone();
+    for key in (-2..45i64).chain((0..40).rev()) {
+        let general = entries.position(&int(key));
+        assert_eq!(entries.position_i64(key), general, "position of {key}");
+        assert_eq!(
+            entries.value_of_i64(key),
+            entries.value_of(&int(key)),
+            "value of {key}"
+        );
+    }
+    assert_eq!(entries.insert_i64(9, int(-9)), Some(int(90)));
+    assert_eq!(entries.insert_i64(7, int(-7)), None);
+    assert_eq!(entries.insert_i64(3, int(-3)), Some(int(30)));
+    assert_eq!(entries.value_of_i64(3), Some(&int(-3)));
+    assert_eq!(entries.value_of_i64(7), Some(&int(-7)));
+    assert_eq!(entries.len(), 39);
+    // The handle taken before the writes still holds the old entries.
+    assert_eq!(shared.value_of_i64(9), Some(&int(90)));
+    assert_eq!(shared.value_of_i64(7), None);
+    assert_eq!(shared.len(), 38);
+}
+
+/// The integer hash spreads near keys over the whole word: no two of a
+/// run of small keys, multiples of a power of two, or negative keys share
+/// a hash, and their top seven bits, which the table compares first, take
+/// many values.
+#[test]
+fn integer_hashes_spread_near_keys() {
+    let keys = (0..4096i64)
+        .chain((1..4096).map(|key| key << 12))
+        .chain((1..4096).map(|key| -key))
+        .collect::<Vec<_>>();
+    let hashes = keys
+        .iter()
+        .map(|&key| hash_i64(key))
+        .collect::<HashSet<_>>();
+    assert_eq!(hashes.len(), keys.len());
+    let tops = hashes.iter().map(|hash| hash >> 57).collect::<HashSet<_>>();
+    assert_eq!(tops.len(), 128);
+    let lows = (0..4096i64)
+        .map(|key| hash_i64(key) & 0xfff)
+        .collect::<HashSet<_>>();
+    assert!(lows.len() > 2400, "{} distinct low bits", lows.len());
 }

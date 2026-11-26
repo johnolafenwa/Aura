@@ -397,10 +397,36 @@ pub fn hash_str(text: &str) -> u64 {
 
 /// [`hash_value`] of an integer value equal to `integer`, of any width,
 /// without building one.
+///
+/// An integer key takes two keyed folded multiplies, the mix `foldhash`
+/// and `hashbrown`'s default hasher use, instead of SipHash: about ten
+/// instructions instead of ninety. The keys are this process's secret
+/// keys, so colliding keys cannot be chosen without them, though the mix
+/// gives weaker guarantees than SipHash against an attacker who can
+/// measure lookups. `str` keys, which more often come from outside the
+/// program, keep SipHash.
 #[inline]
 pub fn hash_i64(integer: i64) -> u64 {
     let (k0, k1) = hash_keys();
-    KeyedHasher::hash_word(k0, k1, integer as u64)
+    mix_word(k0, k1, integer as u64)
+}
+
+/// The high and low halves of the full product of `x` and `y`, folded.
+#[inline(always)]
+fn folded_multiply(x: u64, y: u64) -> u64 {
+    let full = u128::from(x) * u128::from(y);
+    (full as u64) ^ ((full >> 64) as u64)
+}
+
+/// A keyed hash of one word in two folded multiplies. The second spreads
+/// the first's bits into the top seven, which the table compares first.
+#[inline(always)]
+fn mix_word(k0: u64, k1: u64, word: u64) -> u64 {
+    // Fractional digits of pi, so neither factor is zero for the zero key.
+    const C0: u64 = 0x243f_6a88_85a3_08d3;
+    const C1: u64 = 0x1319_8a2e_0370_7344;
+    let first = folded_multiply(word ^ k0, k1 ^ C0);
+    folded_multiply(first ^ k1, k0 ^ C1)
 }
 
 /// Writes an integer key as one word. Integers of different widths compare
@@ -671,6 +697,32 @@ impl LookupCursor {
 }
 
 impl<T: Keyed> Large<T> {
+    /// The slot and entry of an integer key equal to `integer`, by the same
+    /// steps as [`Self::lookup`] written out for that key, so nothing is
+    /// called through a closure and the hash is computed in place.
+    #[inline(always)]
+    fn lookup_i64(&self, integer: i64) -> Option<(usize, &T)> {
+        let start = self.cursor.get().wrapping_add(1);
+        for slot in start..self.slots.len().min(start.saturating_add(3)) {
+            if let Some(entry) = &self.slots[slot] {
+                if key_is_i64(entry.key(), integer) {
+                    self.cursor.set(slot);
+                    return Some((slot, entry));
+                }
+                break;
+            }
+        }
+        let hash = hash_i64(integer);
+        let &(_, slot) = self.index.find(hash, |&(entry_hash, slot)| {
+            entry_hash == hash
+                && self.slots[slot]
+                    .as_ref()
+                    .is_some_and(|entry| key_is_i64(entry.key(), integer))
+        })?;
+        self.cursor.set(slot);
+        self.slots[slot].as_ref().map(|entry| (slot, entry))
+    }
+
     /// The slot of the entry whose key `matches`, where `hash` is the hash
     /// of every such key. It first tries the entry after the one the last
     /// lookup found, skipping a hole or two, and remembers the slot it
@@ -1285,6 +1337,9 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// [`Self::position`] of an integer key equal to `integer`, without
     /// building it.
     pub fn position_i64(&self, integer: i64) -> Option<usize> {
+        if let Storage::Large(large) = &self.storage {
+            return large.lookup_i64(integer).map(|(slot, _)| slot);
+        }
         self.lookup(
             || hash_i64(integer),
             |candidate| key_is_i64(candidate, integer),
@@ -1566,6 +1621,9 @@ impl DictEntries {
 
     /// [`Self::value_of`] an integer key equal to `integer`.
     pub fn value_of_i64(&self, integer: i64) -> Option<&Value> {
+        if let Storage::Large(large) = &self.storage {
+            return large.lookup_i64(integer).map(|(_, entry)| &entry.1);
+        }
         self.position_i64(integer).map(|slot| &self.at_slot(slot).1)
     }
 
@@ -1577,6 +1635,32 @@ impl DictEntries {
     /// [`Self::insert`] under an `int64` key, which is hashed once and
     /// becomes a value only when the key is new.
     pub fn insert_i64(&mut self, key: i64, value: Value) -> Option<Value> {
+        // A large dict, nearly every one an `int64` key reaches often,
+        // hashes the key in place and probes and writes its table once.
+        if let Storage::Large(large) = &mut self.storage {
+            let large = EntriesArc::make_mut(large);
+            let hash = hash_i64(key);
+            let found = large
+                .index
+                .find(hash, |&(entry_hash, slot)| {
+                    entry_hash == hash
+                        && large.slots[slot]
+                            .as_ref()
+                            .is_some_and(|entry| key_is_i64(entry.key(), key))
+                })
+                .map(|&(_, slot)| slot);
+            if let Some(entry) = found.and_then(|slot| large.slots[slot].as_mut()) {
+                return Some(std::mem::replace(&mut entry.1, value));
+            }
+            let slot = large.slots.len();
+            large
+                .slots
+                .push(Some((Value::Int(IntegerValue::from_i64(key)), value)));
+            large
+                .index
+                .insert_unique(hash, (hash, slot), |&(hash, _)| hash);
+            return None;
+        }
         match self.probe(|| hash_i64(key), |candidate| key_is_i64(candidate, key)) {
             (Some(slot), _) => Some(std::mem::replace(self.value_at_mut(slot), value)),
             (None, hash) => {
