@@ -3535,6 +3535,7 @@ impl<'a> NativeCodegen<'a> {
         compiler.json_nests = Some(std::mem::take(&mut compiler.json_nests))
             .filter(|_| tapes)
             .unwrap_or_default();
+        let before_stamps = compiler.builder.current_block();
         compiler.prepare_raw_cells(function)?;
         for param in &function.params {
             if param.passing == MirReceiverKind::Value {
@@ -3543,6 +3544,15 @@ impl<'a> NativeCodegen<'a> {
         }
         if function.receiver == Some(MirReceiverKind::Value) {
             compiler.stamp_lexical_owner("self")?;
+        }
+        // A runtime call of the raw cells or the stamps may push a deferred
+        // frame record first, which ends the entry block in a branch. The
+        // body then starts in a block of its own after them.
+        if compiler.builder.current_block() != before_stamps {
+            let body = compiler.builder.create_block();
+            compiler.builder.jump(body, &[]);
+            compiler.builder.switch_to_block(body);
+            compiler.blocks.insert(function.entry.clone(), body);
         }
         compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;

@@ -19650,3 +19650,39 @@ def main():
         .iter()
         .all(|name| !name.contains("class_drop") && !name.contains("stamp_owner")));
 }
+
+#[test]
+fn an_owned_parameter_stamp_that_pushes_a_deferred_frame_starts_the_body_after_it() {
+    // `receive` defers its frame record, and the stamp of its owned
+    // parameter is the first call that needs the record, so the stamp's
+    // push ends the entry block.
+    let source = r#"
+class Ticket:
+    label: str
+
+    def __drop__(mut self):
+        print("drop " + self.label)
+
+def receive(ticket: own Ticket):
+    print("received " + ticket.label)
+
+def main():
+    receive(Ticket("x"))
+"#;
+    let mir = lower_source_to_mir(source).expect("the owner should lower");
+    emit_host_object(&mir).expect("the stamp should compile directly");
+    let object = emit_unoptimized_object(&mir).expect("the stamp should emit");
+    let referenced = object_function_referenced_symbols(&object, "aura_fn_receive");
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_stamp_owner")),
+        "{referenced:?}"
+    );
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_enter_frame")),
+        "{referenced:?}"
+    );
+}
