@@ -2023,13 +2023,17 @@ fn nested_field_list_reads_follow_the_field_s_boxes() {
     let source = include_str!("../tests/fixtures/run-pass/nested_field_lists_read_in_place.au");
     let mir = lower_source_to_mir(source).expect("nested field list reads lower");
     let object = emit_unoptimized_object(&mir).expect("nested field list reads emit");
-    // A copied string comes from the inner list's view, and a checked
-    // position from the inner list itself, with the runtime walk kept for
-    // every other shape.
-    for name in ["aura_fn_Mailboxes_first", "aura_fn_Mailboxes_gather"] {
+    // A copied string comes from the inner list's view, an appended one
+    // goes from its words to the list, and a checked position comes from
+    // the inner list itself, with the runtime walk kept for every other
+    // shape.
+    for (name, copy) in [
+        ("aura_fn_Mailboxes_first", "aura_direct_string_from_view"),
+        ("aura_fn_Mailboxes_gather", "aura_direct_vec_push_str_view"),
+    ] {
         let symbols = object_function_referenced_symbols(&object, name);
         for expected in [
-            "aura_direct_string_from_view",
+            copy,
             "aura_direct_vec_check_index",
             "aura_direct_element_path_load",
         ] {

@@ -1,0 +1,49 @@
+# A `str` element of a list that a list of lists holds, such as
+# `self.boxes[c][i]`, is read where the inner list keeps it: a copy
+# appended to another list takes its bytes, and a comparison or a length
+# reads them without a copy.
+
+class Mail:
+    boxes: list[list[str]]
+
+    def take(self, client: int64, start: int64) -> list[str]:
+        mut lines: list[str] = []
+        for index in range(start, self.boxes[client].len()):
+            lines.append(self.boxes[client][index].clone())
+        return lines
+
+    def count(self, client: int64, word: str) -> int64:
+        mut found = 0
+        for index in range(self.boxes[client].len()):
+            if self.boxes[client][index] == word:
+                found += 1
+        return found
+
+    def bytes(self, client: int64) -> int64:
+        mut total = 0
+        for index in range(self.boxes[client].len()):
+            total += self.boxes[client][index].byte_len()
+        return total
+
+def gather(groups: list[list[str]]) -> list[str]:
+    mut out: list[str] = []
+    for group in range(groups.len()):
+        for index in range(groups[group].len()):
+            out.append(groups[group][index].clone())
+    return out
+
+def main():
+    mut mail = Mail(boxes=[["a", "bc", "a"], [], ["déf"]])
+    mail.boxes[1].append("late")
+    print(mail.take(0, 1))
+    print(mail.take(1, 0))
+    print(mail.take(2, 0))
+    print(mail.count(0, "a"))
+    print(mail.bytes(2))
+    kept = mail.take(0, 0)
+    mail.boxes[0][0] = "changed"
+    print(kept)
+    print(mail.take(0, 0))
+    print(gather(mail.boxes))
+    print(gather([["x"], ["y", "z"]]))
+    print(mail.take(1, 0)[0])

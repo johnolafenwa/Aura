@@ -1,0 +1,137 @@
+# Results whose `Ok` payload is an optional value travel between a function
+# and its caller as a tag and the union's words: a class instance, a `str`
+# or a number, or `None`. They are built, moved, matched, unwrapped with
+# `try`, discarded, and boxed again where they escape.
+import control
+
+class Item:
+    name: str
+    count: int64
+
+class Shelf:
+    items: list[Item]
+
+    def find(self, name: str) -> Result[Item | None, str]:
+        if name == "":
+            return Result.Err("empty name")
+        for item in self.items:
+            if item.name == name:
+                return Result.Ok(Item(name=item.name.clone(), count=item.count))
+        return Result.Ok(None)
+
+    def count_of(self, name: str) -> Result[int64, str]:
+        found = try self.find(name)
+        if found is None:
+            return Result.Ok(-1)
+        return Result.Ok(found.count)
+
+    def first_of(self, left: str, right: str) -> Result[Item | None, str]:
+        found = try self.find(left)
+        if found is not None:
+            return Result.Ok(found)
+        return self.find(right)
+
+def label(value: int64) -> Result[str | None, int64]:
+    if value < 0:
+        return Result.Err(-value)
+    if value == 0:
+        return Result.Ok(None)
+    return Result.Ok(f"label {value}")
+
+def small(value: int64) -> Result[int64 | None, str]:
+    if value > 100:
+        return Result.Err(f"too big {value}")
+    if value % 2 == 1:
+        return Result.Ok(None)
+    return Result.Ok(value // 2)
+
+def labels(values: list[int64]) -> Result[list[str], int64]:
+    mut found = list[str]()
+    for value in values:
+        text = try label(value)
+        if text is None:
+            found.append("-")
+        else:
+            found.append(text)
+    return Result.Ok(found)
+
+def halves(values: list[int64]) -> Result[int64, str]:
+    mut total = 0
+    for value in values:
+        half = try small(value)
+        if half is not None:
+            total += half
+    return Result.Ok(total)
+
+def trapping(value: int64) -> int64:
+    match label(value):
+        case Result.Ok(text):
+            assert value != 2, f"trap with {text}"
+            if text is None:
+                return 0
+            return text.len()
+        case Result.Err(code):
+            return code
+
+def recovered(value: int64) -> str:
+    match control.recover(trapping, value):
+        case Ok(number):
+            return f"ok {number}"
+        case Err(trap):
+            return f"trapped {trap.message}"
+
+def main():
+    shelf = Shelf(items=[Item(name="apple", count=3), Item(name="pear", count=5)])
+    for name in ["apple", "plum", ""]:
+        match shelf.find(name):
+            case Result.Ok(item):
+                if item is None:
+                    print(f"find {name}: none")
+                else:
+                    print(f"find {name}: {item.name} {item.count}")
+            case Result.Err(message):
+                print(f"find {name}: err {message}")
+        match shelf.count_of(name):
+            case Result.Ok(count):
+                print(f"count {name}: {count}")
+            case Result.Err(message):
+                print(f"count {name}: err {message}")
+    for (left, right) in [("plum", "pear"), ("apple", "pear"), ("plum", "fig"), ("plum", "")]:
+        match shelf.first_of(left, right):
+            case Result.Ok(item):
+                if item is None:
+                    print("first none")
+                else:
+                    print(f"first {item.name}")
+            case Result.Err(message):
+                print(f"first err {message}")
+    for value in [-3, 0, 4]:
+        match label(value):
+            case Result.Ok(text):
+                print(f"label {value}: {text}")
+            case Result.Err(code):
+                print(f"label {value}: err {code}")
+        kept = label(value)
+        print(kept)
+    match labels([1, 0, 2]):
+        case Result.Ok(found):
+            print(found)
+        case Result.Err(code):
+            print(f"labels err {code}")
+    match labels([1, -7, 2]):
+        case Result.Ok(found):
+            print(found)
+        case Result.Err(code):
+            print(f"labels err {code}")
+    for values in [[2, 3, 8], [4, 200]]:
+        match halves(values):
+            case Result.Ok(total):
+                print(f"halves {total}")
+            case Result.Err(message):
+                print(f"halves err {message}")
+    _ = shelf.find("pear")
+    _ = label(5)
+    stored: list[Result[int64 | None, str]] = [small(4), small(3), small(500)]
+    print(stored)
+    for value in [1, 2, 0, -4]:
+        print(recovered(value))

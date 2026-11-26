@@ -1745,6 +1745,8 @@ impl FunctionCompiler<'_> {
                 self.runtime[RuntimeFn::StringSplitLiteralWords],
                 &[ptr, len, separator_ptr, separator_len],
             );
+            // The new list's element type names its type, as its tag would.
+            self.shaped_boxes.extend(results.iter().copied());
             return Ok(Some(self.owned_opaque_result(
                 results,
                 Type::Named("list".to_string(), vec![Type::named("str")]),
@@ -1777,7 +1779,9 @@ impl FunctionCompiler<'_> {
     }
 
     /// The selection the loan `place` makes when it selects one element of
-    /// a `list[str]` that generated code can read where the list keeps it.
+    /// a `list[str]` that generated code can read where the list keeps it:
+    /// a list the loan's place holds, or one a list of lists there holds,
+    /// as in `self.mailboxes[c][i]`.
     fn loaned_str_element(&self, place: &str) -> Option<DirectViewAlternative> {
         if place.contains('.')
             || !self.view_places.contains_key(place)
@@ -1790,14 +1794,20 @@ impl FunctionCompiler<'_> {
         let [alternative] = resolved.alternatives.as_slice() else {
             return None;
         };
-        let [selector] = alternative.elements.as_slice() else {
-            return None;
+        let plain = |selector: &DirectElementSelector| {
+            selector.projection.is_empty() && matches!(selector.kind, DirectElementKind::List)
         };
-        (alternative.conditions.is_empty()
-            && selector.projection.is_empty()
-            && matches!(selector.kind, DirectElementKind::List)
-            && is_str(&selector.element_type))
-        .then(|| alternative.clone())
+        let selects = match alternative.elements.as_slice() {
+            [selector] => plain(selector) && is_str(&selector.element_type),
+            [outer, inner] => {
+                plain(outer)
+                    && plain(inner)
+                    && is_str(&inner.element_type)
+                    && matches!(&outer.element_type, Type::Named(name, _) if name == "list")
+            }
+            _ => false,
+        };
+        (alternative.conditions.is_empty() && selects).then(|| alternative.clone())
     }
 
     /// Jumps to `join_block` with the words of element `index` of the
@@ -1923,12 +1933,40 @@ impl FunctionCompiler<'_> {
         &mut self,
         selection: &DirectViewAlternative,
     ) -> std::result::Result<(Val, Val, Val), String> {
-        let selector = &selection.elements[0];
+        let selector = selection
+            .elements
+            .last()
+            .expect("a loan selects an element");
         let index = self.builder.use_var(selector.variable);
         let slow_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         for _ in 0..3 {
             self.builder.append_block_param(join_block, types::I64);
+        }
+        if selection.elements.len() == 2 {
+            // An element of a list a list of lists holds: the inner list is
+            // read where the instance and the outer list keep it, or the
+            // runtime walks to the element and copies it.
+            if let Some(nested) = self.nested_field_list_selector(selection)? {
+                let list = self.load_nested_field_list(&nested, slow_block)?;
+                let miss_block = self.builder.create_block();
+                self.emit_str_view_entry(list, index, miss_block, join_block);
+                self.builder.switch_to_block(miss_block);
+                self.builder.seal_block(miss_block);
+                let (line, column) = self.span_operands(selector.span);
+                self.jump_with_element_words(list, index, line, column, join_block);
+            } else {
+                self.builder.jump(slow_block, &[]);
+            }
+            self.builder.switch_to_block(slow_block);
+            self.builder.seal_block(slow_block);
+            let (collection, projection) = self.load_element_path_root(&selection.place)?;
+            let copy = self.element_path_load(collection.values[0], &projection, selection)?;
+            self.jump_with_owned_str(copy, join_block);
+            self.builder.switch_to_block(join_block);
+            self.builder.seal_block(join_block);
+            let words = self.builder.block_params(join_block);
+            return Ok((words[0], words[1], words[2]));
         }
         let field = match self.class_place(&selection.place)? {
             Some((root, slot, _)) if matches!(slot.kind, classes::SlotKind::Handle) => {

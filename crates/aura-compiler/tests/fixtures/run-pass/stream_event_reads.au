@@ -1,6 +1,6 @@
 # `stream.read_event()` on the stream a `with` keeps reads the stream
 # where it lies, and the fields of each event read where the event keeps
-# them.
+# them. One helper reads each event's fields into words.
 import http
 import io
 import net
@@ -50,6 +50,14 @@ def run() -> Result[None, io.Error]:
                                 print(f"{event.id}: {event.data} retry {wait.to_ms()}")
                             case None:
                                 print(f"{event.id}: {event.data}")
+                    # A closed stream's read fails, and the `try` in
+                    # `read_event` returns the error.
+                    stream.close()
+                    match stream.read_event():
+                        case Result.Ok(_):
+                            print("read after close")
+                        case Result.Err(error):
+                            print(f"closed: {error}")
             case _:
                 return Result.Err(io.Error.TimedOut)
         match own server.result():
