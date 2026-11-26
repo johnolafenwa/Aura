@@ -33237,3 +33237,38 @@ fn padded_int64_parts_match_the_general_formatter() {
     super::aura_direct_format_push_i64_formatted(builder, 255, "x".as_ptr(), 1);
     assert_eq!(expect_string(builder), "[-007ff");
 }
+
+#[test]
+fn a_pushed_str_box_moves_its_text_into_the_list() {
+    let list = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(list, string_value("first"));
+    super::aura_direct_vec_push_in_place(list, string_value("a text too long to keep inline"));
+    // A box another holder shares is copied, not moved.
+    let shared = string_value("shared");
+    unsafe { super::aura_direct_retain_value(shared) };
+    super::aura_direct_vec_push_in_place(list, shared);
+    assert_eq!(
+        unsafe { super::value_ref(shared) },
+        Value::String("shared".into())
+    );
+    unsafe { release_value(shared) };
+    match unsafe { super::value_ref(list) } {
+        Value::Vec(vector) => {
+            assert_eq!(*vector.element_type, Type::named("str"));
+            assert_eq!(
+                vector
+                    .elements
+                    .value_refs()
+                    .expect("a list of values")
+                    .collect::<Vec<_>>(),
+                [
+                    &Value::String("first".into()),
+                    &Value::String("a text too long to keep inline".into()),
+                    &Value::String("shared".into()),
+                ]
+            );
+        }
+        other => panic!("expected a list, found {other:?}"),
+    }
+    unsafe { release_value(list) };
+}

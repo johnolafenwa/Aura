@@ -10141,17 +10141,18 @@ unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> b
     if !matches!(cell, Value::String(_)) || named.is_some() {
         return false;
     }
-    let text = std::mem::replace(cell, Value::Unit);
+    // The text moves out of the box where the list takes it, so its words
+    // are copied once instead of through each call on the way.
     with_vector_mut(vec, |vector| {
         if is_unknown_runtime_type(&vector.element_type) {
-            let inferred = inferred_collection_type(&text);
+            let inferred = inferred_collection_type(cell);
             if !is_unknown_runtime_type(&inferred) {
                 vector.element_type = SharedType::from(inferred);
             }
         }
         match &mut vector.elements {
-            ListElements::Values(values) => values.push(text),
-            elements => elements.push(text),
+            ListElements::Values(values) => values.push(std::mem::replace(cell, Value::Unit)),
+            elements => elements.push(std::mem::replace(cell, Value::Unit)),
         }
     });
     let unlinked = current_direct_frame_stack().is_some_and(|stack| {
