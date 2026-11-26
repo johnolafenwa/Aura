@@ -1,0 +1,60 @@
+# A function that only matches on its enum parameters and reads their
+# payloads takes list elements and fields as they are, untagged.
+enum Value:
+    Int(value: int64)
+    Text(value: str)
+
+
+class Condition:
+    column: int64
+    value: Value
+
+
+def same(cell: Value, value: Value) -> bool:
+    match cell:
+        case Value.Int(a):
+            match value:
+                case Value.Int(b):
+                    return a == b
+                case Value.Text(_):
+                    return false
+        case Value.Text(a):
+            match value:
+                case Value.Text(b):
+                    return a == b
+                case Value.Int(_):
+                    return false
+
+
+def kept(cell: Value, value: Value) -> int64:
+    if same(cell, value):
+        return 1
+    return 0
+
+
+def matches(row: list[Value], conditions: list[Condition]) -> bool:
+    for condition in conditions:
+        if not same(row[condition.column], condition.value):
+            return false
+    return true
+
+
+def main():
+    rows = [
+        [Value.Int(1), Value.Text("a")],
+        [Value.Int(2), Value.Text("b")],
+        [Value.Int(1), Value.Text("b")],
+    ]
+    conditions = [
+        Condition(column=0, value=Value.Int(1)),
+        Condition(column=1, value=Value.Text("b")),
+    ]
+    mut count = 0
+    for row in rows:
+        if matches(row, conditions):
+            count += 1
+    print(count)
+    print(same(rows[0][1], Value.Text("a")))
+    print(kept(rows[1][0], Value.Int(2)))
+    view last = rows[2]
+    print(last)

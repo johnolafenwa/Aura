@@ -748,6 +748,9 @@ struct NativeCodegen<'a> {
     /// The functions a caller may call without pushing its deferred frame
     /// record (see `frame_free_callees`).
     frame_free_callees: HashSet<String>,
+    /// The enum parameters their callers pass untagged (see
+    /// `untagged_args`).
+    untagged_params: HashSet<(String, usize)>,
     /// The functions that only read scalar fields of an instance they are
     /// passed: a leaf's body with calls of total leaves, and no `mut`
     /// parameter.
@@ -1117,6 +1120,7 @@ impl<'a> NativeCodegen<'a> {
         let total_leaves = total_leaves(module, &classes);
         let block_params = element_loans::block_params(module, &classes);
         let frame_free_callees = frame_free_callees(module, &recursive_functions);
+        let untagged_params = untagged_args::match_only_params(module, &frame_free_callees);
         let instance_keepers = module
             .functions
             .iter()
@@ -1392,6 +1396,7 @@ impl<'a> NativeCodegen<'a> {
             total_leaves,
             block_params,
             frame_free_callees,
+            untagged_params,
             instance_keepers,
             layout_keepers,
             debug_info: false,
@@ -3188,6 +3193,7 @@ impl<'a> NativeCodegen<'a> {
             function_refs,
             sinkless_refs,
             quiet_sinks: &self.quiet_sinks,
+            untagged_params: &self.untagged_params,
             unpublished_store: false,
             recovery_refs,
             result_twin_refs,
@@ -4716,6 +4722,8 @@ struct FunctionCompiler<'a> {
     sinkless_refs: HashMap<String, FuncRef>,
     /// The `mut` call slots of each function that it never changes.
     quiet_sinks: &'a HashMap<String, HashSet<usize>>,
+    /// See `untagged_args`.
+    untagged_params: &'a HashSet<(String, usize)>,
     /// Whether the store being emitted brings back a value its place
     /// already holds, which publishes nothing (see `quiet_sinks`).
     unpublished_store: bool,
@@ -11560,6 +11568,13 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 operand => self.load_operand_for_target(operand, &semantic_expected)?,
             };
+            // A parameter its function only matches on takes the box as it is.
+            if let (DirectType::Opaque(_), [word]) = (&loaded.ty, loaded.values.as_slice()) {
+                if type_args.is_empty() && self.untagged_params.contains(&(name.to_string(), index))
+                {
+                    self.shaped_boxes.insert(*word);
+                }
+            }
             let semantic_coerced = self.coerce_value(loaded, &semantic_expected)?;
             let coerced = self.coerce_value(semantic_coerced, abi_expected)?;
             if let Some(place) = &argument.writeback_place {
@@ -25346,6 +25361,8 @@ mod sync;
 #[cfg(test)]
 #[path = "native_codegen_tests.rs"]
 mod tests;
+#[path = "native_codegen_untagged_args.rs"]
+mod untagged_args;
 
 fn is_comparison_op(op: BinaryOp) -> bool {
     matches!(
