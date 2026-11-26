@@ -19,8 +19,8 @@
 //!
 //! Only a slow way after which warm code reads again a word that the way
 //! to it read leaves the copy: elsewhere the second body would only add
-//! code. A body that calls itself, or whose copy would add too much code,
-//! keeps one body.
+//! code. A body whose copy would add too much code keeps one body, and so
+//! does one that calls itself, unless a slow way leaves the copy in a loop.
 //!
 //! Every block of the copy computes what its block computes, from the
 //! copy's values, and the variables are the same memory in both, so a
@@ -50,8 +50,15 @@ impl FunctionIr {
     /// continue in the body as it was (see the module documentation).
     /// Returns whether the copy was made: a body with no slow path that
     /// rejoins a warm block which reads again, or one too large, stays as
-    /// it is.
-    pub(super) fn continue_slow_paths(&mut self) -> bool {
+    /// it is. So does a `recursive` body, one that calls itself, unless a
+    /// slow way leaves the copy in a loop: elsewhere each of its calls
+    /// ends what the copy's checks found, and the larger body only costs
+    /// the recursion registers.
+    pub(super) fn continue_slow_paths(
+        &mut self,
+        recursive: bool,
+        imported: &dyn Fn(FuncHandle) -> bool,
+    ) -> bool {
         let Some((&entry, members)) = self.layout.split_first() else {
             return false;
         };
@@ -93,7 +100,7 @@ impl FunctionIr {
         let slow = self.slow_blocks();
         let leaves = exits
             .into_iter()
-            .filter(|exit| self.reads_again_after(*exit, &idom, &slow))
+            .filter(|exit| self.reads_again_after(*exit, &idom, &slow, imported))
             .collect::<HashSet<_>>();
         if leaves.is_empty() {
             return false;
@@ -122,7 +129,9 @@ impl FunctionIr {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        if self.copy_growth(entry, &leaves, &back_edges) > MOST_GROWTH {
+        if recursive && back_edges.is_empty()
+            || self.copy_growth(entry, &leaves, &back_edges) > MOST_GROWTH
+        {
             return false;
         }
         let before = self.insts.len();
@@ -234,11 +243,18 @@ impl FunctionIr {
     }
 
     /// Whether warm code after the slow way `exit` rejoins reads again,
-    /// before a call or a write of any memory, a word a block dominating
+    /// before a call of an `imported` function, an indirect call, or a
+    /// write of any memory, a word a block dominating
     /// `exit` read, or a word through a variable the slow way sets. The
     /// frame stack's words do not count, since every return reads them,
     /// and neither do a list's elements.
-    fn reads_again_after(&self, exit: u32, idom: &HashMap<u32, u32>, slow: &HashSet<u32>) -> bool {
+    fn reads_again_after(
+        &self,
+        exit: u32,
+        idom: &HashMap<u32, u32>,
+        slow: &HashSet<u32>,
+        imported: &dyn Fn(FuncHandle) -> bool,
+    ) -> bool {
         let mut read = HashSet::new();
         let mut block = exit;
         for _ in 0..READ_BLOCKS {
@@ -290,7 +306,9 @@ impl FunctionIr {
                             return true;
                         }
                     }
-                    Op::Call(..) | Op::CallIndirect(..) => break,
+                    // A call of a function of this module may be inlined.
+                    Op::Call(callee, _) if imported(self.func_refs[callee.0 as usize]) => break,
+                    Op::CallIndirect(..) => break,
                     Op::Store(flags, ..) if flags.alias == AliasClass::Any => break,
                     Op::Memory(access, ..) if *access != MemoryAccess::Read => break,
                     Op::Brif(..) | Op::Jump(..) => {

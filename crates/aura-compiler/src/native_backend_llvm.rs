@@ -342,11 +342,13 @@ impl ModuleBackend for LlvmModule {
             return Err(DefineError::Body(error));
         }
         let mut ir = builder.ir;
-        // A debug build keeps one body, as written. So does a body that
-        // calls itself: each call ends what the copy's checks found, and
-        // the larger body only costs the hot recursion registers.
-        if super::optimizes() && !self.debug_info && !ir.calls(function) {
-            ir.continue_slow_paths();
+        // A debug build keeps one body, as written.
+        if super::optimizes() && !self.debug_info {
+            let recursive = ir.calls(function);
+            let functions = &self.functions;
+            ir.continue_slow_paths(recursive, &|callee| {
+                functions[callee.0 as usize].linkage == Linkage::Import
+            });
         }
         let decl = &self.functions[function.0 as usize];
         if decl.linkage == Linkage::Import {

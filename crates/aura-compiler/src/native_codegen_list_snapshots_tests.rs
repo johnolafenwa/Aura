@@ -568,7 +568,10 @@ fn a_loop_that_only_measures_a_list_in_a_field_reads_its_view_once_only_where_en
     assert_eq!(found[0].entries.len(), 1, "{found:?}");
     // The part of a loop that skips its call is entered again after each
     // call: checking the view there costs more than the length it reads.
-    assert_eq!(field_regions("Shelf.measures_between", false, true), Vec::new());
+    assert_eq!(
+        field_regions("Shelf.measures_between", false, true),
+        Vec::new()
+    );
     // A loop entered so that reads elements keeps reading the view once.
     let found = field_regions("Shelf.reads_between", false, true);
     assert_eq!(found.len(), 1, "{found:?}");

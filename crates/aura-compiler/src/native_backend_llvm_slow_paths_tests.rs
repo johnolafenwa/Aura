@@ -179,46 +179,49 @@ fn a_body_without_optimization_or_without_a_cold_rejoin_keeps_one_copy() {
     lowered(&module);
 }
 
+/// A loop whose iteration takes a cold way that calls `slow`.
+fn looped_body(builder: &mut dyn FunctionBackend, slow: FuncHandle) {
+    let entry = builder.create_block();
+    builder.append_block_params_for_function_params(entry);
+    let header = builder.create_block();
+    let count = builder.append_block_param(header, types::I64);
+    let fast = builder.create_block();
+    let cold = builder.create_block();
+    let latch = builder.create_block();
+    let exit = builder.create_block();
+    builder.switch_to_block(entry);
+    builder.seal_block(entry);
+    let input = builder.block_params(entry)[0];
+    builder.jump(header, &[input]);
+    builder.switch_to_block(header);
+    builder.load(types::I64, access(), input, 0);
+    let odd = builder.band_imm(count, 1);
+    builder.set_cold_block(cold);
+    builder.brif(odd, cold, &[], fast, &[]);
+    builder.switch_to_block(fast);
+    builder.seal_block(fast);
+    builder.jump(latch, &[]);
+    builder.switch_to_block(cold);
+    builder.seal_block(cold);
+    let callee = builder.import_function(slow);
+    builder.call(callee, &[count]);
+    builder.jump(latch, &[]);
+    builder.switch_to_block(latch);
+    builder.seal_block(latch);
+    builder.load(types::I64, access(), input, 0);
+    let next = builder.iadd_imm(count, -1);
+    let more = builder.icmp_imm(IntCC::SignedGreaterThan, next, 0);
+    builder.brif(more, header, &[next], exit, &[]);
+    builder.seal_block(header);
+    builder.switch_to_block(exit);
+    builder.seal_block(exit);
+    builder.return_(&[next]);
+}
+
 #[test]
 fn a_loop_of_the_first_body_goes_back_to_the_copy() {
     let mut module = LlvmModule::for_host().expect("the host should have an LLVM target");
-    let function = define(&mut module, "looped", true, |builder, slow| {
-        let entry = builder.create_block();
-        builder.append_block_params_for_function_params(entry);
-        let header = builder.create_block();
-        let count = builder.append_block_param(header, types::I64);
-        let fast = builder.create_block();
-        let cold = builder.create_block();
-        let latch = builder.create_block();
-        let exit = builder.create_block();
-        builder.switch_to_block(entry);
-        builder.seal_block(entry);
-        let input = builder.block_params(entry)[0];
-        builder.jump(header, &[input]);
-        builder.switch_to_block(header);
-        builder.load(types::I64, access(), input, 0);
-        let odd = builder.band_imm(count, 1);
-        builder.set_cold_block(cold);
-        builder.brif(odd, cold, &[], fast, &[]);
-        builder.switch_to_block(fast);
-        builder.seal_block(fast);
-        builder.jump(latch, &[]);
-        builder.switch_to_block(cold);
-        builder.seal_block(cold);
-        let callee = builder.import_function(slow);
-        builder.call(callee, &[count]);
-        builder.jump(latch, &[]);
-        builder.switch_to_block(latch);
-        builder.seal_block(latch);
-        builder.load(types::I64, access(), input, 0);
-        let next = builder.iadd_imm(count, -1);
-        let more = builder.icmp_imm(IntCC::SignedGreaterThan, next, 0);
-        builder.brif(more, header, &[next], exit, &[]);
-        builder.seal_block(header);
-        builder.switch_to_block(exit);
-        builder.seal_block(exit);
-        builder.return_(&[next]);
-    });
+    let function = define(&mut module, "looped", true, looped_body);
     let ir = body(&module, function);
     assert!(ir.slow_copy_insts > 0, "{}", ir.display());
     // The latch of the first body (block 4) branches back to the copy's
@@ -323,7 +326,7 @@ fn a_frame_push_rejoins_in_the_copy_and_a_block_parameter_goes_through_a_variabl
 #[test]
 fn an_empty_body_keeps_one_copy() {
     let mut ir = super::super::FunctionIr::new(signature(&[], &[]));
-    assert!(!ir.continue_slow_paths());
+    assert!(!ir.continue_slow_paths(false, &|_| true));
 }
 
 #[test]
@@ -504,10 +507,14 @@ fn only_a_slow_way_after_which_a_word_is_read_again_leaves_the_copy() {
     assert!(reread_copied(access(), access(), |_, _, _| {}));
     // A call, an indirect call, a write of any memory, or a fence between
     // the join and the read ends what the check found anyway.
-    assert!(!reread_copied(access(), access(), |builder, input, slow| {
-        let callee = builder.import_function(slow);
-        builder.call(callee, &[input]);
-    }));
+    assert!(!reread_copied(
+        access(),
+        access(),
+        |builder, input, slow| {
+            let callee = builder.import_function(slow);
+            builder.call(callee, &[input]);
+        }
+    ));
     assert!(!reread_copied(access(), access(), |builder, input, _| {
         let signature = builder.import_signature(signature(&[types::I64], &[types::I64]));
         builder.call_indirect(signature, input, &[input]);
@@ -560,7 +567,7 @@ fn a_word_is_the_same_through_added_offsets_and_copies() {
         panic!("the join reads the word: {}", ir.display());
     };
     ir.insts[read].op = Op::Load(kind, flags, copy, 0);
-    assert!(ir.continue_slow_paths(), "{}", ir.display());
+    assert!(ir.continue_slow_paths(false, &|_| true), "{}", ir.display());
 }
 
 #[test]
@@ -605,8 +612,9 @@ fn a_word_read_through_a_variable_the_slow_way_sets_is_read_again() {
     lowered(&module);
 }
 
-#[test]
-fn a_body_that_calls_itself_keeps_one_copy() {
+/// Whether `build`, given the function itself as the slow callee, gets
+/// a copy.
+fn recursive_copied(build: fn(&mut dyn FunctionBackend, FuncHandle)) -> bool {
     let mut module = LlvmModule::for_host().expect("the host should have an LLVM target");
     let sig = signature(&[types::I64], &[types::I64]);
     let function = module
@@ -617,12 +625,18 @@ fn a_body_that_calls_itself_keeps_one_copy() {
             function,
             &sig,
             Box::new(move |builder| {
-                checked_body(builder, function);
+                build(builder, function);
                 builder.verify()
             }),
         )
         .expect("the function should define");
-    assert_eq!(body(&module, function).slow_copy_insts, 0);
+    body(&module, function).slow_copy_insts > 0
+}
+
+#[test]
+fn a_body_that_calls_itself_keeps_one_copy_unless_a_loop_leaves_it() {
+    assert!(!recursive_copied(checked_body));
+    assert!(recursive_copied(looped_body));
 }
 
 #[test]
@@ -637,4 +651,42 @@ fn a_copy_that_would_add_too_much_code_is_not_made() {
         });
     });
     assert_eq!(body(&module, function).slow_copy_insts, 0);
+}
+
+#[test]
+fn a_call_of_a_function_of_the_module_may_be_inlined_so_the_word_is_read_again() {
+    let mut module = LlvmModule::for_host().expect("the host should have an LLVM target");
+    let sig = signature(&[types::I64], &[types::I64]);
+    let local = module
+        .declare_function("local", Linkage::Local, &sig)
+        .expect("the callee should declare");
+    module
+        .define_function(
+            local,
+            &sig,
+            Box::new(|builder| {
+                let entry = builder.create_block();
+                builder.append_block_params_for_function_params(entry);
+                builder.switch_to_block(entry);
+                builder.seal_block(entry);
+                let word = builder.block_params(entry)[0];
+                builder.return_(&[word]);
+                builder.verify()
+            }),
+        )
+        .expect("the callee should define");
+    let function = define(&mut module, "inlinable", true, move |builder, slow| {
+        reread_body(
+            builder,
+            slow,
+            access(),
+            access(),
+            &move |builder, input, _| {
+                let callee = builder.import_function(local);
+                builder.call(callee, &[input]);
+            },
+        );
+    });
+    assert!(body(&module, function).slow_copy_insts > 0);
+    lowered(&module);
 }
