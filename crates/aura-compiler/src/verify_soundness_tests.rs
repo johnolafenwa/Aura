@@ -213,7 +213,7 @@ def main():
 // ----- B-HIGH-19: integers the encoding has no range for --------------
 
 #[test]
-fn wide_integer_arithmetic_is_reported_not_modeled() {
+fn wide_integer_arithmetic_failures_are_found_not_proved() {
     assert_open(
         r#"
 def f(x: int128) -> int128:
@@ -229,9 +229,9 @@ def main():
     pass
 "#,
         &[
-            "3 division by zero unsupported",
-            "6 overflow unsupported",
-            "9 overflow unsupported",
+            "3 division by zero failed",
+            "6 overflow failed",
+            "9 overflow failed",
         ],
     );
 }
