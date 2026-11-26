@@ -6,16 +6,56 @@
 //! lowerer, whose state cannot change during it. An entry is keyed by the
 //! expression's whole contents, its source position included, because the
 //! inference also builds expressions of its own, each a new value.
+//!
+//! Building that key costs the size of the expression, so a chain would
+//! still cost a power of its length. The calls and member reads that the
+//! outermost expression holds through receivers and arguments stay alive
+//! and unchanged at their addresses for the whole outermost inference, so
+//! they are keyed by address instead. Only expressions the inference built
+//! itself are keyed by contents.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{Expr, ExprKind};
 use crate::sema::Type;
 
 struct Memo {
     lowerer: usize,
-    entries: HashMap<String, Option<Type>>,
+    /// Addresses of the calls and member reads inside the outermost
+    /// expression, reached through callees, arguments and member objects.
+    stable: HashSet<usize>,
+    entries: HashMap<Key, Option<Type>>,
+}
+
+#[derive(PartialEq, Eq, Hash)]
+enum Key {
+    Stable(usize),
+    Contents(String),
+}
+
+fn address(expr: &Expr) -> usize {
+    expr as *const Expr as usize
+}
+
+/// The calls and member reads `outermost` holds, other than itself.
+fn stable_parts(outermost: &Expr) -> HashSet<usize> {
+    let mut stable = HashSet::new();
+    let mut pending = vec![outermost];
+    while let Some(expr) = pending.pop() {
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                pending.push(callee);
+                pending.extend(args.iter().map(|arg| &arg.value));
+            }
+            ExprKind::Member { object, .. } => pending.push(object),
+            _ => continue,
+        }
+        if !std::ptr::eq(expr, outermost) {
+            stable.insert(address(expr));
+        }
+    }
+    stable
 }
 
 thread_local! {
@@ -51,6 +91,7 @@ pub(super) fn memoized(
         }
         *memo = Some(Memo {
             lowerer,
+            stable: stable_parts(expr),
             entries: HashMap::new(),
         });
         true
@@ -72,8 +113,18 @@ pub(super) fn memoized(
         // its own state: its results are not reused.
         return infer();
     }
-    let Some(key) = contents(expr) else {
-        return infer();
+    let stable = MEMO.with(|memo| {
+        memo.borrow()
+            .as_ref()
+            .is_some_and(|memo| memo.stable.contains(&address(expr)))
+    });
+    let key = if stable {
+        Key::Stable(address(expr))
+    } else {
+        let Some(contents) = contents(expr) else {
+            return infer();
+        };
+        Key::Contents(contents)
     };
     let hit = MEMO.with(|memo| {
         memo.borrow()
