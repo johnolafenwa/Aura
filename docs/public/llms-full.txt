@@ -28426,9 +28426,59 @@ there.
 
 ## Dtypes
 
-`T` is `float32`, `int32`, `int64`, or `bool` on every device, and also
-`float64` on the CPU and CUDA devices. A mask, the result of a
-comparison, is a `Tensor[bool]`.
+`T` is `float32`, `float16`, `int32`, `int64`, or `bool` on every
+device, and also `float64` on the CPU and CUDA devices. A mask, the
+result of a comparison, is a `Tensor[bool]`.
+
+### Half Precision
+
+`tensor.float16` names the dtype of a `Tensor[float16]`: IEEE
+half-precision floats, 16 bits each, with about three decimal digits and
+a largest value of 65,504. On a GPU a half tensor takes half the memory of a
+`float32` one, and its matrix products are faster: GPT-2 runs 2.8 times
+faster in half precision on an NVIDIA A40.
+
+Aura has no `float16` number. A `Tensor[float16]` takes and gives
+`float32` numbers and arrays, and keeps each element as the nearest
+half:
+
+```aura
+from tensor import Device, Tensor, float16
+
+def main():
+    device = Device.cpu()
+    values = Array[float32].from_list([0.1, 2048.0, 60000.0], [3])
+    x = Tensor[float16].from_array(values, device)
+    print(x.to_array())
+    print((x + 1.0).to_array())
+    print((x + x).to_array())
+```
+
+```console
+Array[float32](shape=[3], values=[0.099975586, 2048.0, 60000.0])
+Array[float32](shape=[3], values=[1.0996094, 2048.0, 60000.0])
+Array[float32](shape=[3], values=[0.19995117, 4096.0, inf])
+```
+
+Every operation rounds its result to the nearest half, ties to the even
+one, so `2048.0 + 1.0` is `2048.0`, and a result past 65,504 is an
+infinity. A `float16` tensor and a `float32` tensor do not mix in one
+operation: convert one with `to_float16()` or `to_float32()`. A sum, a
+mean, a softmax or a matrix product of halves adds in `float32` and
+rounds once at the end, on every device. `layer_norm` computes in
+`float32` throughout, because the square of an element overflows a half
+long before the result does. Keep that in mind when writing your own
+arithmetic on halves: `x * x` is an infinity for an element past 255.
+
+A gradient of a `float16` tensor is a `float16` tensor. The layers and
+optimizers of this module hold `float32` parameters, so training stays
+in `float32`. The functions `linear`, `layer_norm` and
+`scaled_dot_product_attention` take float tensors of any dtype, which is
+enough to run a trained transformer in half precision.
+
+On the CUDA device a `float16` tensor is stored as halves and its
+products are cuBLAS half products. On the Metal device it is kept in
+host memory for now, and its operations run on the CPU.
 
 Metal has no `float64`. Making a `Tensor[float64]` on the Metal device, or
 converting one to `float64` there, is error `AU4007`. A tensor never
@@ -28500,7 +28550,7 @@ one.
 | `index_add(indices, size, dim=0)` | The reverse of `index_select`: a tensor with `size` entries along `dim`, where entry `k` is the sum of this tensor's entries whose index is `k`. |
 | `cat(tensors, dim=0)` | A module function: the tensors of a list, one after another along `dim`. |
 | `expand(shape)` | This tensor repeated to a shape that its own broadcasts to. |
-| `to_int32()`, `to_int64()`, `to_float32()`, `to_float64()` | Each element converted. A float that does not fit the integer type is an error. |
+| `to_int32()`, `to_int64()`, `to_float16()`, `to_float32()`, `to_float64()` | Each element converted. A float that does not fit the integer type is an error. A value that no half holds is rounded to the nearest one. |
 | `to(device)` | This tensor on another device. |
 | `shape()`, `len()`, `device()` | The shape as `list[int64]`, the element count, and the device. |
 | `clone()` | Another handle to the same memory. Nothing is copied. |
@@ -28682,7 +28732,9 @@ fields are layers. See [Modules](#modules).
 | `one_hot(indices, num_classes)` | A mask with one more axis, of length `num_classes`, that holds at the place each index names. |
 | `top_indices(x, count)` | The places of the `count` largest elements of each lane along the last axis, largest first. |
 | `top_mask(x, count)` | A mask in the shape of `x` that holds at the `count` largest elements of each lane along the last axis. |
-| `scaled_dot_product_attention(query, key, value, is_causal=false)` | Attention over the last two axes. With `is_causal`, row `i` attends to rows `0` to `i` only. |
+| `scaled_dot_product_attention(query, key, value, is_causal=false)` | Attention over the last two axes, for float tensors of any dtype. With `is_causal`, row `i` attends to rows `0` to `i` only. |
+| `linear(x, weight, bias)` | What a `Linear` layer computes, for float tensors of any dtype: the last axis of `x` times the `[in, out]` matrix `weight`, plus `bias`. |
+| `layer_norm(x, weight, bias, eps=0.00001)` | What a `LayerNorm` layer computes, for float tensors of any dtype. |
 | `cross_entropy(logits, targets)` | The mean over the rows of `logits` of the negative logarithm of the softmax entry the row's target names. |
 | `SGD(params, lr)` | `step()` moves each parameter against its gradient. |
 | `AdamW(params, lr=0.001, weight_decay=0.01)` | `step()` takes one Adam step with weight decay. |
@@ -28845,10 +28897,12 @@ Hugging Face libraries read and write.
 | `save(path, names, tensors) -> Result[int64, str]` | Writes a list of tensors of one dtype under a list of names. Gives the file's length in bytes. |
 | `weight_names(path) -> Result[list[str], str]` | The names of the tensors in a file, in the file's order. |
 | `load_float32(path, name, device) -> Result[Tensor[float32], str]` | One float tensor of a file. A tensor stored as `float16`, `bfloat16`, or `float64` is converted. |
+| `load_float16(path, name, device) -> Result[Tensor[float16], str]` | One float tensor of a file as halves. A tensor stored at another width is rounded. |
 | `load_int64(path, name, device) -> Result[Tensor[int64], str]` | One integer tensor of a file. |
 
 The error is a message that names the file and what is wrong with it. A
-tensor the file stores with no axes loads with shape `[1]`.
+tensor the file stores with no axes loads with shape `[1]`. `save`
+writes a `Tensor[float16]` as the format's `F16`, two bytes an element.
 
 ## When the Work Runs
 
@@ -28901,7 +28955,14 @@ On a GPU device these run on the GPU:
 - conversions from an integer dtype to a float dtype, and from `int32` to
   `int64`
 
-A float tensor is `float32` on Metal and `float32` or `float64` on CUDA.
+A float tensor is `float32` on Metal and `float16`, `float32` or
+`float64` on CUDA. `index_add` on a `float16` tensor runs on the CPU.
+
+An attention splits `[batch, length, width]` rows into heads with a
+`reshape` and a `permute`. On CUDA the products of the attention read
+each head where it lies in the rows, so the split copies nothing.
+Setting `AURA_TENSOR_HEADS_IN_PLACE=0` turns this off, which is useful
+only for measuring it.
 
 Every other operation on a GPU tensor runs on the CPU and gives a tensor
 on the same device: integer reductions and `abs`, which are checked for
@@ -28935,6 +28996,9 @@ The directory can be deleted at any time.
 | `sum`, `mean`, `matmul` | Within a few units in the last place. The GPU adds in a different order. |
 | `exp`, `log`, `sin`, `cos`, `pow`, `tanh`, `sigmoid`, `erf`, `randn` | Within a few units in the last place. |
 | `slice`, `index_select`, `cat`, `expand`, `argmax`, `argmin`, `rand` | Equal. |
+| `+`, `-`, `*`, `/`, `sqrt` and the conversions on `float16` | Equal. |
+| `sum`, `mean` and the functions on `float16` | Within a few half-precision steps. |
+| `matmul` on `float16` | Close. Both devices add the terms of a product in `float32` and round the sum once. |
 | `index_add` | Within a few units in the last place. The GPU adds in a different order, and the order can differ from one run to the next. |
 
 The test suite checks these on a machine with a GPU. The hosted CI
@@ -28957,7 +29021,9 @@ CI run.
 - Convolution and pooling take square kernels over two dimensions, with
   one stride and one padding for both. There is no dilation, no groups,
   and no one- or three-dimensional form.
-- No `float16` tensors. A `float16` file loads as `float32`.
+- No `float16` number, array, layer or optimizer: `float16` is a
+  tensor dtype for inference. No `bfloat16` tensors: a `bfloat16` file
+  loads as `float32` or `float16`.
 - One GPU. A tensor does not span devices or machines.
 - No way yet to write your own GPU operation. That is the planned kernel
   layer, which will work on these same tensors without copying them.
@@ -72083,6 +72149,16 @@ data.
 The last row is a model of the shape of Chapter 25's: twelve blocks of
 width 768. Each step reads eight windows of 256 tokens and takes about 28
 ms. Our CPU took most of a second for one window of a few dozen tokens.
+
+The benchmarks also run GPT-2 itself, with the weights of Chapter 25.
+A batch of eight windows of 256 tokens, ten times over, takes 279 to 286
+ms in Aura and 369 to 372 in PyTorch. Converting the weights with
+`to_float16()` and running the model through `tensor.linear`,
+`tensor.layer_norm` and `tensor.scaled_dot_product_attention` brings
+that to 100 ms, against PyTorch's 126, and the model names the same
+tokens. Not every program is ahead. Writing text one token at a time is
+about twice as slow as PyTorch, and training a character model like
+Chapter 24's at a larger size is 1.2 times slower.
 
 The CPU device is a different story, and you have felt it in the last two
 chapters. It is the reference for what every operation means. It runs one
