@@ -10030,7 +10030,9 @@ unsafe fn grow_scalar_list(vec: *mut OpaqueValue, bits: i64, kind: i64) -> bool 
     match (&mut vector.elements, kind) {
         (ListElements::Int64(values), K::Int64) => grow!(values, bits),
         (ListElements::Float64(values), K::Float64) => grow!(values, f64::from_bits(bits as u64)),
-        (ListElements::Bool(values), K::Bool) => grow!(values, bits != 0),
+        (ListElements::Bool(values), K::Bool) => {
+            grow!(values, crate::list_elements::BoolByte::from_bool(bits != 0))
+        }
         (ListElements::Int8(values), K::Int8) => grow!(values, bits as i8),
         (ListElements::Int16(values), K::Int16) => grow!(values, bits as i16),
         (ListElements::Int32(values), K::Int32) => grow!(values, bits as i32),
