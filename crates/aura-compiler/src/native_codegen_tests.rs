@@ -15556,6 +15556,37 @@ fn str_append_root_needs_the_ownership_pass_form() {
 }
 
 #[test]
+fn str_literal_reads_share_a_frozen_box() {
+    // A literal a field, a local or a return takes is the literal's one
+    // frozen box, so no read of it allocates.
+    let source = r#"
+class Node:
+    tag: str
+
+def make(flag: bool) -> Node:
+    mut tag = ""
+    if flag:
+        tag = "p"
+    return Node(tag=tag)
+
+def main() -> int32:
+    print(make(true).tag)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the literals should lower");
+    let object = emit_host_object(&mir).expect("the literals should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_string_literal_cell"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_string_literal"),
+        "{referenced:?}"
+    );
+}
+
+#[test]
 fn str_append_root_takes_a_plus_on_the_root() {
     let plus = |left: Operand, right: Operand| {
         vec![

@@ -1,0 +1,88 @@
+# Every read of a `str` literal shares one frozen box: in fields, locals,
+# lists, maps, returns, payloads, appends and a task's message. Whatever
+# changes or keeps a literal's text works on its own copy, so a literal
+# reads the same each time.
+
+class Node:
+    tag: str
+    text: str
+    children: list[str]
+
+def label(flag: bool) -> str:
+    if flag:
+        return "on"
+    return ""
+
+def tagged(text: str) -> Result[str, str]:
+    if text == "":
+        return Result.Err("empty")
+    return Result.Ok(text.clone())
+
+def source(out: Queue[str]):
+    _ = out.put("hi")
+    _ = out.put("")
+    out.close()
+
+
+def shout(lines: Queue[str], out: Queue[str]):
+    for line in lines:
+        _ = out.put(line + "!")
+    out.close()
+
+def main():
+    mut nodes: list[Node] = []
+    for index in range(3):
+        mut node = Node(tag="", text="item", children=[])
+        node.children.append("leaf")
+        node.children.append("")
+        if index == 1:
+            node.tag = "p"
+            node.text += " one"
+        nodes.append(node)
+    for node in nodes:
+        print(f"{node.tag}|{node.text}|{node.children}")
+    mut out = ""
+    for _ in range(3):
+        out += "ab"
+        out = out + "-"
+    print(out)
+    mut rest = ""
+    rest = rest + "x"
+    print(rest)
+    mut counts: dict[str, int64] = {}
+    for word in ["a", "b", "a"]:
+        match counts.get("seen"):
+            case Lookup.Found(seen):
+                counts["seen"] = seen + 1
+            case Lookup.Missing:
+                counts["seen"] = 1
+        counts[word.clone()] = 1
+    counts["b"] = 7
+    print(counts)
+    print(label(true) + label(false) + "|")
+    match tagged("ok"):
+        case Result.Ok(text):
+            print(text.to_upper())
+        case Result.Err(error):
+            print(error)
+    match tagged(""):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(error):
+            print(error)
+    mut words: list[str] = ["x", "y"]
+    words[0] = "z"
+    words.append("x")
+    words.sort()
+    print(words)
+    mut grown = "same"
+    grown += "r"
+    print(grown)
+    print("same")
+    with TaskGroup() as group:
+        lines = Queue[str](capacity=2)
+        replies = Queue[str](capacity=2)
+        group.start_soon(source, lines)
+        group.start_soon(shout, lines, replies)
+        for reply in replies:
+            print(reply)

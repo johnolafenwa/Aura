@@ -13100,13 +13100,11 @@ impl<'a> FunctionCompiler<'a> {
                 values: vec![self.builder.f64const(*value)],
                 ty: DirectType::Scalar(ScalarKind::Float64),
             }),
-            Operand::String(value) => {
-                let (ptr, len) = self.string_constant(value.as_bytes())?;
-                let inst = self
-                    .builder
-                    .call(self.runtime[RuntimeFn::StringLiteral], &[ptr, len]);
-                Ok(self.owned_opaque_result(inst.results, Type::named("str")))
-            }
+            // Every read of a literal shares its one frozen box, which
+            // anything that changes or takes its text copies first, as for
+            // a module constant: a literal only read or dropped allocates
+            // nothing.
+            Operand::String(value) => self.load_borrowed_string_literal(value),
             Operand::Duration(value) => {
                 let low = self.builder.iconst(types::I64, *value as i64);
                 let high = self.builder.iconst(types::I64, (*value >> 64) as i64);
