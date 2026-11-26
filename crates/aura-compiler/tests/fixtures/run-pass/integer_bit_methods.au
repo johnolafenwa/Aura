@@ -1,0 +1,17 @@
+def main() -> int32:
+    bits: uint16 = 32769
+    print(bits.rotate_left(17))
+    print(bits.rotate_right(17))
+    print(bits.count_ones())
+    print(bits.leading_zeros())
+    print(bits.trailing_zeros())
+    print(bits.swap_bytes())
+    signed: int8 = -2
+    print(signed.rotate_left(1))
+    print(signed.count_ones())
+    zero: uint128 = 0
+    print(zero.leading_zeros())
+    print(zero.trailing_zeros())
+    wide: uint128 = 1
+    print(wide.rotate_left(127).rotate_right(127))
+    return 0

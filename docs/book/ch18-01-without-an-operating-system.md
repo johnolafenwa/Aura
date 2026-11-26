@@ -45,11 +45,15 @@ function hands back a second result.
 Aura keeps a number, a `bool`, or a class made of those directly in machine
 registers and on the stack. Those values need no runtime, and they are what
 a freestanding program is made of: fixed-width integers and floats, classes
-of them, `T | None`, functions, generics, traits, loops, `assert`, and
-contracts.
+of them, tuples and enums of them, `T | None`, functions, generics,
+traits, loops, `match`, `assert`, and contracts.
 
-Anything that lives on the heap is out: `str`, lists, dictionaries, enums
-with payloads, closures, tasks. You do not have to remember the list. Ask
+Some of the values Aura keeps on the heap for you are out:
+sets, closures, tasks. Four kinds are in. A dictionary works, with text or integer keys. A list
+works, of numbers, text, classes, enums, or other lists, with `append`, indexing, and `for`. A `str` works, with `+`, comparisons, and a few methods, so a kernel
+can build a message and hand it to its console. And an enum may hold
+itself through an `indirect` payload, so you can write a linked list or a
+tree. The compiler frees each block when nothing refers to it. You do not have to remember the list. Ask
 the compiler:
 
 ```console
@@ -176,29 +180,86 @@ The verifier cannot tell you that an address is right, and a write that
 lands on memory an Aura value occupies is outside anything a proof covers.
 Arithmetic on a value after you have read it is checked like any other.
 
-There are no strings in a freestanding program, so printing a number means
-producing its digits ourselves:
+We can build a table of the powers of ten while compiling the kernel.
+The serial output routine indexes that table to print each decimal digit.
+An unsigned 64-bit number fits in 20 digits, so we store the powers from
+10⁰ to 10¹⁹.
 
 ```aura fragment
+def decimal_divisors() -> list[uint64]:
+    mut power: uint64 = 1
+    mut powers: list[uint64] = [power]
+    for i in range(19):
+        power = power * 10
+        powers.append(power)
+    return powers
+
+
+const decimal_powers = decimal_divisors()
+
+
 def put_number(uart: uint64, value: uint64) -> None:
-    mut divisor: uint64 = 1
-    while value // divisor >= 10:
-        divisor = divisor * 10
+    mut place: int64 = 19
+    while place > 0 and decimal_powers[place] > value:
+        place = place - 1
     mut rest = value
-    while divisor > 0:
+    while place >= 0:
+        divisor = decimal_powers[place]
         put(uart, (48 + rest // divisor) as uint8)
         rest = rest % divisor
-        divisor = divisor // 10
+        place = place - 1
 ```
+
+## Memory that grows
+
+Everything so far has a size the compiler knows. A kernel also keeps
+tables that grow: the processes it runs, the pages it has handed out. For
+those it needs a heap, and a freestanding program has one as soon as it
+says where the heap may live:
+
+```aura fragment
+mem.heap_add_region(heap_start(), heap_size())
+```
+
+From then on `mem.alloc` hands out blocks of that region, `mem.realloc`
+resizes one, and `mem.free` gives it back. Here is a list of numbers that
+doubles its room whenever it fills:
+
+```aura fragment
+mut room: uint64 = 4
+mut count: uint64 = 0
+mut primes = mem.alloc(room * 8, 8)
+assert primes != 0, "the heap has no memory"
+...
+if count == room:
+    primes = mem.realloc(primes, room * 8, 8, room * 16)
+    assert primes != 0, "the heap is full"
+    room = room * 2
+mem.write_uint64(primes + count * 8, candidate)
+count = count + 1
+```
+
+Two things differ from the lists you know. A block is an address and
+nothing more, so you read and write it with `mem` and you free it
+yourself, passing the size you asked for. And `mem.alloc` returns 0 when
+the heap is full, where a hosted program would stop. A kernel has to be
+able to say no to a request and keep running.
+
+Where does the allocator come from, with no runtime? It is a few hundred
+lines of Aura, and the compiler adds it to your object when you call
+`mem.alloc`. A kernel that already has an allocator defines three
+functions, `aura_alloc`, `aura_free`, and `aura_realloc`, and Aura calls
+those instead.
 
 ## Booting it
 
 The complete program is in *examples/freestanding/kernel*. Its
 `kernel_main` counts primes, runs a float computation, takes a spin lock
-built from `mem.atomic_compare_exchange_uint32`, and then overflows a
-`uint8` on purpose. Each board adds a short assembly file that sets the
-stack pointer, turns the float registers on, and calls `kernel_main`, plus
-a linker script that says where memory is.
+built from `mem.atomic_compare_exchange_uint32`, writes a sample through
+a typed pointer, sums the primes from a block on the heap, and then
+overflows a `uint8` on purpose. Each board adds a short assembly file that
+sets the stack pointer, turns the float registers on, and calls
+`kernel_main`, plus a linker script that says where memory is.
 
 QEMU can emulate both boards the example supports:
 
@@ -208,21 +269,54 @@ p=168
 c=111
 r=1000
 n=100
-trap 1 main.au:154:13
+s=42
+h=76127
+f=0
+trap 1 main.au:234:13
 ```
 
-The first four lines are computed results. The last is our `aura_trap`
+The first seven lines are computed results. `s` is a sample read back
+after a typed pointer wrote it, `h` is the sum of the primes below 1000,
+read back from the heap, and `f` says that no byte of the heap is missing
+after the block is freed. The last is our `aura_trap`
 hook reporting the overflow, with the file and line it happened on, from a
 machine that has no operating system at all. Run it with `aarch64` and the
 output is the same.
 
-## What is missing
+## Returning from an interrupt
 
-This is the first step toward systems work in Aura, and it is honest to
-say where it stops. There is no allocator, so there are no strings or
-collections. There is no inline assembly, so startup code and x86 port
-I/O stay in an assembly file. State that outlives a function call has to
-live at an address you manage through `mem`, where `aura verify` cannot
-follow it. The
+Run `examples/freestanding/kernel/run.sh x86_64`. The board starts in
+long mode and gives Aura addresses for its interrupt table and two event
+bytes. Aura fills the gates, loads the table, then executes `asm("int3")`.
+The processor switches to the breakpoint handler.
+
+```aura fragment
+@machine.interrupt("x86_64")
+export "C" def breakpoint_handler() -> None:
+    serial_text("breakpoint\n")
+    mem.volatile_write_uint8(board_events(), 1)
+```
+
+The generated entry saves the interrupted registers. When the Aura body
+returns, the entry restores them and executes `iretq`. Back in the kernel,
+an assertion checks the byte the handler wrote. The kernel then enables the
+timer. Its handler masks the timer line, acknowledges the interrupt and
+records the second event. Seeing both bytes tells the kernel that it can
+print `ok` and write to the QEMU exit port. The test checks both the serial
+transcript and exit status 33.
+
+The kernel uses `--kernel` throughout so that interrupt entry can use the
+stack below the interrupted stack pointer. The board keeps persistent
+storage in C and accesses it through `mem`. Verification stops at the
+assembly and cannot reason about the contents of raw memory.
+
+In a freestanding program, fixed arrays can also live in mutable module
+storage, as in `mut samples: fixed[uint16, 2] = [40, 0]`. Use
+`mem.address_of(samples[1])` to get a pointer to the second element.
+
+The heap holds blocks of bytes, text, lists, the nodes of enums that hold
+themselves, and dictionaries: there are no sets yet, and text cannot
+format a float. State that lives at an address you manage through `mem`
+is out of reach of `aura verify`. The
 [Freestanding Builds](/manual/freestanding) and
 [Memory Module](/manual/mem) pages have the exact rules.

@@ -15,6 +15,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, RwLock};
 
+#[path = "regex_eval.rs"]
+mod regex_eval;
+pub use regex_eval::with_local_patterns;
+
 /// The compiled patterns one thread keeps. A thread that uses more starts
 /// again from an empty cache and compiles each pattern when it next runs.
 const REGEX_CACHE_PATTERNS: usize = 256;
@@ -78,6 +82,9 @@ fn compile(pattern: &str) -> std::result::Result<Rc<Regex>, String> {
 /// The number of `pattern`, which it keeps for the life of the process, or
 /// the reason it is not a pattern.
 fn pattern_number(pattern: &str) -> std::result::Result<i64, String> {
+    if crate::builtin_limit::active() {
+        return regex_eval::number(pattern);
+    }
     let known = PATTERNS
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -109,6 +116,9 @@ fn pattern_number(pattern: &str) -> std::result::Result<i64, String> {
 
 /// The text of pattern `number`.
 fn pattern_text(number: i64) -> Result<Arc<str>> {
+    if crate::builtin_limit::active() {
+        return regex_eval::text(number);
+    }
     PATTERNS
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -126,6 +136,9 @@ fn pattern_text(number: i64) -> Result<Arc<str>> {
 /// cloned: a clone of a `Regex` starts with empty search scratch space and
 /// would rebuild it on every call.
 fn compiled(number: i64) -> Result<Rc<Regex>> {
+    if crate::builtin_limit::active() {
+        return regex_eval::compiled(number);
+    }
     COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some((_, regex)) = cache.recent.iter().find(|(known, _)| *known == number) {
@@ -235,6 +248,9 @@ pub fn evaluate_regex_builtin(
     argument: RegexArgument<'_>,
 ) -> Result<Value> {
     let regex = compiled(number)?;
+    if crate::builtin_limit::active() {
+        regex_eval::bound_search(name, &regex, text, &argument)?;
+    }
     Ok(match name {
         "regex::__aura_is_match" => Value::Bool(regex.is_match(text)),
         "regex::__aura_count" => {
@@ -381,9 +397,11 @@ pub fn regex_number(value: &Value, name: &str) -> Result<i64> {
 pub fn host_regex_escape(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
     let name = "regex::__aura_escape";
     host_expect_arity(name, &args, 1)?;
-    Ok(Value::string(regex::escape(host_string_ref_arg(
-        &args, 0, name,
-    )?)))
+    let text = host_string_ref_arg(&args, 0, name)?;
+    if crate::builtin_limit::active() {
+        crate::builtin_limit::check((text.len() as u64).saturating_mul(2))?;
+    }
+    Ok(Value::string(regex::escape(text)))
 }
 
 fn host_regex_search(name: &str, args: Vec<Value>) -> Result<Value> {

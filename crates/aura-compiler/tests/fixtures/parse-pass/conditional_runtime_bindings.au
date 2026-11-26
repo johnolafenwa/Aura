@@ -1,0 +1,45 @@
+from build import freestanding as selected
+
+def matched(value: Packet):
+    match value:
+        case (Answer.Yes(selected), 1) | (_, Answer.Yes(selected)):
+            if selected:
+                pass
+        case Box(items=[bool as selected, *tail]):
+            if selected:
+                pass
+        case [*selected]:
+            if selected == []:
+                pass
+    if selected:
+        only_on_bare()
+
+def resources(pairs: list[(bool, bool)], running: bool):
+    for (selected, second) in pairs:
+        if selected:
+            pass
+    while running:
+        if selected:
+            if running:
+                only_on_bare()
+    with flag_context() as selected:
+        if selected:
+            pass
+    if selected:
+        only_on_bare()
+
+def unpack(values: list[bool]):
+    first, *selected = values
+    if selected == []:
+        pass
+
+def borrow(values: list[bool]):
+    view selected = values[0]
+    if selected:
+        pass
+
+def ordinary():
+    if decide() and selected:
+        pass
+    if true:
+        pass

@@ -48,8 +48,12 @@
     "attributes": {
       "patterns": [
         {
+          "name": "storage.modifier.machine.aura",
+          "match": "^[ \\t]*@machine\\.(?:interrupt|naked|section|link_name|align|noinline|always_inline|used)\\b"
+        },
+        {
           "name": "storage.modifier.attribute.aura",
-          "match": "@[A-Za-z_][A-Za-z0-9_]*"
+          "match": "@[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*"
         }
       ]
     },
@@ -346,6 +350,37 @@
     "declarations": {
       "patterns": [
         {
+          "name": "meta.definition.ffi.layout-class.aura",
+          "begin": "\\b(extern)\\s+(\"C\")(?=\\s+(?:packed|align)\\b)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.declaration.ffi.aura"
+            },
+            "2": {
+              "name": "string.quoted.double.aura"
+            }
+          },
+          "end": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)|$",
+          "endCaptures": {
+            "1": {
+              "name": "keyword.declaration.aura"
+            },
+            "2": {
+              "name": "entity.name.type.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "storage.modifier.layout.aura",
+              "match": "\\b(?:packed|align)\\b"
+            },
+            {
+              "name": "constant.numeric.aura",
+              "match": "\\b(?:0[xX][\\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|[\\d_]+)\\b"
+            }
+          ]
+        },
+        {
           "name": "meta.definition.ffi.opaque.aura",
           "match": "\\b(extern)\\s+(\"C\")\\s+(opaque)\\s+(class)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
@@ -538,6 +573,69 @@
     "contextualSyntax": {
       "patterns": [
         {
+          "name": "meta.declaration.delegation.aura",
+          "begin": "^\\s*(impl)\\b(?=[^#]*\\bby\\s+[A-Za-z_]\\w*\\s*:?\\s*(?:#|$))",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.aura"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "keyword.control.delegation.aura",
+              "match": "\\bby(?=\\s+[A-Za-z_]\\w*\\s*:?\\s*(?:#|$))"
+            },
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#keywords"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "include": "#operators"
+            }
+          ]
+        },
+        {
+          "name": "meta.assembly.aura",
+          "begin": "^[ \\t]*(asm|module_asm)[ \\t]*\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.assembly.aura"
+            }
+          },
+          "end": "\\)",
+          "patterns": [
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#comments"
+            },
+            {
+              "begin": "\\b(input|output|clobber|options)[ \\t]*\\(",
+              "beginCaptures": {
+                "1": {
+                  "name": "keyword.other.assembly-clause.aura"
+                }
+              },
+              "end": "\\)",
+              "patterns": [
+                {
+                  "include": "#assemblyOperandGroup"
+                },
+                {
+                  "include": "$self"
+                }
+              ]
+            }
+          ]
+        },
+        {
           "name": "meta.return-type.view.aura",
           "begin": "(->)(?=\\s*view\\b\\s+(?:mut\\s+)?(?:[A-Za-z_][A-Za-z0-9_.]*(?:\\s*\\[|\\s+from\\b)|\\())",
           "beginCaptures": {
@@ -599,11 +697,33 @@
               "name": "keyword.control.aura"
             }
           }
+        },
+        {
+          "name": "meta.definition.ffi.bit-field.aura",
+          "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*:\\s*(uint(?:8|16|32|64))\\s+(bits)\\s*\\(\\s*((?:0[xX][\\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|[\\d_]+))\\s*\\)",
+          "captures": {
+            "1": {
+              "name": "variable.other.member.aura"
+            },
+            "2": {
+              "name": "support.type.primitive.aura"
+            },
+            "3": {
+              "name": "storage.modifier.layout.aura"
+            },
+            "4": {
+              "name": "constant.numeric.aura"
+            }
+          }
         }
       ]
     },
     "keywords": {
       "patterns": [
+        {
+          "name": "storage.modifier.const.aura",
+          "match": "\\bconst(?=\\s+[A-Za-z_][A-Za-z0-9_]*\\s*[:=])"
+        },
         {
           "name": "keyword.declaration.ffi.aura",
           "match": "\\b(extern|opaque)\\b"
@@ -663,6 +783,10 @@
         {
           "name": "support.type.primitive.aura",
           "match": "\\b(Callable|TaskCallable)\\b"
+        },
+        {
+          "name": "support.type.primitive.aura",
+          "match": "\\bfixed(?=\\s*\\[)"
         }
       ]
     },
@@ -671,6 +795,18 @@
         {
           "name": "keyword.operator.aura",
           "match": "->|//=|\\+=|-=|\\*=|/=|%=|\\|=|==|!=|<=|>=|//|\\+|-|\\*|/|%|=|<|>|\\||\\."
+        }
+      ]
+    },
+    "assemblyOperandGroup": {
+      "begin": "\\(",
+      "end": "\\)",
+      "patterns": [
+        {
+          "include": "#assemblyOperandGroup"
+        },
+        {
+          "include": "$self"
         }
       ]
     }

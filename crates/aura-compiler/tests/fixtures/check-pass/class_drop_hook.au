@@ -1,0 +1,5 @@
+class Ticket:
+    label: str
+
+    def __drop__(mut self):
+        print("drop " + self.label)

@@ -249,7 +249,12 @@ pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 
 fn checked_codec_output_len(output_len: Option<usize>) -> Result<usize, BytesResourceError> {
     match output_len {
-        Some(output_len) if output_len <= MAX_CODEC_OUTPUT_LEN => Ok(output_len),
+        Some(output_len)
+            if crate::builtin_limit::fits(output_len as u64)
+                && output_len <= MAX_CODEC_OUTPUT_LEN =>
+        {
+            Ok(output_len)
+        }
         _ => Err(output_too_large()),
     }
 }

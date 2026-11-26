@@ -3089,6 +3089,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
     );
 
     let generic_box = MirClass {
+        c_layout: None,
         name: "Box".to_string(),
         type_params: vec!["T".to_string()],
         fields: vec![MirClassField {
@@ -3122,6 +3123,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
     );
 
     let pair_for_mismatch = MirClass {
+        c_layout: None,
         name: "TypedPair".to_string(),
         type_params: Vec::new(),
         fields: vec![MirClassField {
@@ -3155,6 +3157,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
     );
 
     let pair = MirClass {
+        c_layout: None,
         name: "Pair".to_string(),
         type_params: Vec::new(),
         fields: vec![MirClassField {

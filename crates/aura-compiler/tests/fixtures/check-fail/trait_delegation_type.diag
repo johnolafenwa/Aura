@@ -1,0 +1,5 @@
+error[AU2061]: field `engine` of type `int64` does not implement `Named`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_delegation_type.au:10:23
+   |
+10 | impl Named for Car by engine
+   |                       ^

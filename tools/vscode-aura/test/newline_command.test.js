@@ -102,7 +102,7 @@ async function activateWithEditor(editor, settings = {}) {
       registerDebugAdapterDescriptorFactory: () => ({ dispose() {} })
     },
     workspace: {
-      createFileSystemWatcher: () => ({ dispose() {} }),
+      createFileSystemWatcher: (globPattern) => ({ globPattern, dispose() {} }),
       getConfiguration: () => ({
         get: (key, fallback) => (key in settings ? settings[key] : fallback)
       }),
@@ -218,6 +218,7 @@ test("aura.compilerPath reaches the server and a change restarts it", async () =
   );
   assert.equal(clients.length, 1);
   assert.equal(clients[0].serverOptions.run.options.env.AURA_LSP_AURA_PATH, "~/.local/bin/aura");
+  assert.equal(clients[0].clientOptions.synchronize.fileEvents.globPattern, "**/{*.au,Aura.toml}");
   assert.deepEqual(
     clients[0].clientOptions.documentSelector.map((selector) => selector.scheme),
     ["file", "untitled"]
@@ -249,4 +250,16 @@ test("aura.verifyOnSave reaches the server and a change restarts it", async () =
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(clients.length, 2);
   assert.equal(clients[1].serverOptions.run.options.env.AURA_LSP_VERIFY, "0");
+});
+
+test("aura.freestanding selects the editor checking profile", async () => {
+  const settings = {};
+  const { clients, configurationListeners } = await activateWithEditor(
+    createFakeEditor(["x"], [[0, 1]]), settings
+  );
+  assert.equal(clients[0].serverOptions.run.options.env.AURA_LSP_FREESTANDING, "0");
+  settings.freestanding = true;
+  configurationListeners[0]({ affectsConfiguration: (section) => section === "aura.freestanding" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(clients[1].serverOptions.run.options.env.AURA_LSP_FREESTANDING, "1");
 });

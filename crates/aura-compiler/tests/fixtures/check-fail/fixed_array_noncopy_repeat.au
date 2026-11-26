@@ -1,0 +1,7 @@
+class Cell:
+    value: int64
+
+def main():
+    item = Cell(value=0)
+    slots: fixed[Cell, 3] = [item] * 3
+    print(len(slots))

@@ -1,0 +1,16 @@
+import build
+
+def square(n: int64) -> int64:
+    return n * n
+
+const entries = square(4)
+
+if entries == 16 and build.hosted:
+    def result() -> int64:
+        return entries
+else:
+    def result() -> str:
+        return missing_platform_call()
+
+def main():
+    print(result())

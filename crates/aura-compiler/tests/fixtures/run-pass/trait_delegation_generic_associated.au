@@ -1,0 +1,42 @@
+trait Values:
+    def initial() -> int64
+    def add(self, n: int64, *, bonus: int64) -> int64
+    def identity[U](self, value: own U) -> U
+    def label(self) -> str:
+        return "trait"
+
+class Engine:
+    pass
+
+impl Values for Engine:
+    def initial() -> int64:
+        return 4
+
+    def add(self, n: int64, *, bonus: int64) -> int64:
+        return n + bonus
+
+    def identity[U](self, value: own U) -> U:
+        return value
+
+    def label(self) -> str:
+        return "engine"
+
+class Car[T]:
+    engine: T
+
+impl[T: Values] Values for Car[T] by engine
+
+def initial[V: Values]() -> int64:
+    return V.initial()
+
+def through[V: Values]() -> int64:
+    return Car[V].initial()
+
+def main():
+    car = Car(engine=Engine())
+    print(Car[Engine].initial())
+    print(car.add(3, bonus=5))
+    print(car.identity[str]("ok"))
+    print(car.label())
+    print(initial[Car[Engine]]())
+    print(through[Engine]())

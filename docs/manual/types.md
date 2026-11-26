@@ -238,6 +238,41 @@ This rule stops a nested handle such as `Task[Task[str]]` from being copied to d
 
 **Runtime.** The pinned-worker runtime uses this classification at its task boundary. Queue and Task handle state is synchronized for cross-worker use. All other task captures and results stay owned, structural `Transfer` values. So the boundary stays share-nothing even when sibling task bodies run on different pinned workers.
 
+## Fixed Arrays
+
+`fixed[T, N]` stores N consecutive elements of T inline. Use a list literal
+in a fixed destination or repeat one Copy value.
+
+```aura
+def clear(words: mut fixed[uint16, 4]) -> None:
+    words[0] = 0
+
+def main() -> None:
+    mut words: fixed[uint16, 4] = [1, 2, 3, 4]
+    clear(words)
+    for word in words:
+        print(word)
+    empty: fixed[uint16, 4] = [0] * 4
+    print(len(empty))
+```
+
+The length is a literal integer from 1 through 1048576. The complete object
+must fit in 2147483647 bytes. Elements can be fixed-width scalars, inline
+classes, or further fixed arrays. A C field requires an element with C
+layout. A fixed array is Copy when its element is Copy.
+
+Index zero selects the first element. The last index is `len(words) - 1`.
+Negative indexes and indexes at or above the length raise `AU4031`. A
+freestanding build reports trap code 9 at that index. The compiler folds
+the length to a constant and removes a bounds test when it can prove the
+access is in range.
+
+A bare fixed array parameter borrows its argument. A `mut` parameter
+requires a mutable place and can replace its elements. For a C struct
+that needs an inline `uint16_t words[4]` field, declare
+`words: fixed[uint16, 4]`. Existing `array[T, N]` fields have the
+list-based interface described in the [FFI manual](/manual/ffi#array-fields).
+
 ## Builtin Generic Types
 
 Ordinary absence is the union `T | None`, not a generic wrapper type. The builtin generic enums below cover outcomes that must stay distinct from a present `None` payload.

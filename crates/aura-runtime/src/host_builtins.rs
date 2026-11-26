@@ -4,6 +4,9 @@
 //! links only the builtins it calls. The MIR interpreter reaches the same
 //! functions through `host_builtin_function`.
 
+#[path = "host_typed_memory.rs"]
+mod typed_memory;
+
 use super::*;
 
 /// A host builtin evaluated over owned runtime arguments. The second argument
@@ -84,13 +87,13 @@ pub(crate) fn math_unary(function: MathFunction, value: f64) -> Result<f64> {
         return Err(domain_error());
     }
     let result = match function {
-        Exp => value.exp(),
-        Log => value.ln(),
-        Log2 => value.log2(),
-        Log10 => value.log10(),
-        Sin => value.sin(),
-        Cos => value.cos(),
-        _ => value.tan(),
+        Exp => libm::exp(value),
+        Log => libm::log(value),
+        Log2 => libm::log2(value),
+        Log10 => libm::log10(value),
+        Sin => libm::sin(value),
+        Cos => libm::cos(value),
+        _ => libm::tan(value),
     };
     if function == Exp && value.is_finite() && result.is_infinite() {
         return Err(Diagnostic::coded("AU4002", "`math.exp` overflow"));
@@ -228,18 +231,18 @@ pub(crate) fn math_extended_unary(name: &str, value: f64) -> Result<f64> {
     }
     let result = match name {
         "math.sqrt" => value.sqrt(),
-        "math.cbrt" => value.cbrt(),
-        "math.asin" => value.asin(),
-        "math.acos" => value.acos(),
-        "math.atan" => value.atan(),
-        "math.sinh" => value.sinh(),
-        "math.cosh" => value.cosh(),
-        "math.tanh" => value.tanh(),
-        "math.asinh" => value.asinh(),
-        "math.acosh" => value.acosh(),
-        "math.atanh" => value.atanh(),
-        "math.expm1" => value.exp_m1(),
-        "math.log1p" => value.ln_1p(),
+        "math.cbrt" => libm::cbrt(value),
+        "math.asin" => libm::asin(value),
+        "math.acos" => libm::acos(value),
+        "math.atan" => libm::atan(value),
+        "math.sinh" => libm::sinh(value),
+        "math.cosh" => libm::cosh(value),
+        "math.tanh" => libm::tanh(value),
+        "math.asinh" => libm::asinh(value),
+        "math.acosh" => libm::acosh(value),
+        "math.atanh" => libm::atanh(value),
+        "math.expm1" => libm::expm1(value),
+        "math.log1p" => libm::log1p(value),
         "math.degrees" => value.to_degrees(),
         _ => value.to_radians(),
     };
@@ -252,8 +255,8 @@ pub(crate) fn math_extended_unary(name: &str, value: f64) -> Result<f64> {
 /// A `math` function of two `float64` values.
 pub(crate) fn math_binary(name: &str, left: f64, right: f64) -> Result<f64> {
     let result = match name {
-        "math.atan2" => left.atan2(right),
-        "math.hypot" => left.hypot(right),
+        "math.atan2" => libm::atan2(left, right),
+        "math.hypot" => libm::hypot(left, right),
         _ => left.copysign(right),
     };
     if left.is_finite() && right.is_finite() && result.is_infinite() {
@@ -903,12 +906,12 @@ pub fn host_trace_event(args: Vec<Value>, _program_args: Option<&[String]>) -> R
 /// One `mem` operation at a raw address. The caller vouches for the
 /// address, as C code does for a pointer: a bad one has undefined behavior.
 fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
-    use std::sync::atomic::{fence, AtomicU32, AtomicU64, Ordering::SeqCst};
+    if let Some(value) = typed_memory::access(name, &args) {
+        return value;
+    }
     let operation = name.strip_prefix("mem::").unwrap_or(name);
-    if operation == "fence" {
-        host_expect_arity(name, &args, 0)?;
-        fence(SeqCst);
-        return Ok(Value::Unit);
+    if let Some(op) = aura_core::atomic_order::AtomicOperation::of(operation) {
+        return mem_atomic::execute(name, op, &args);
     }
     let (operation, width) = operation
         .rsplit_once("_uint")
@@ -996,42 +999,85 @@ fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
                 (address as *mut u64).write_volatile(word(1)?);
                 Ok(Value::Unit)
             }
-            (_, IntegerKind::Uint32) => {
-                let cell = &*(address as *const AtomicU32);
-                match operation {
-                    "atomic_load" => result(u64::from(cell.load(SeqCst))),
-                    "atomic_store" => {
-                        cell.store(word(1)? as u32, SeqCst);
-                        Ok(Value::Unit)
-                    }
-                    "atomic_swap" => result(u64::from(cell.swap(word(1)? as u32, SeqCst))),
-                    "atomic_add" => result(u64::from(cell.fetch_add(word(1)? as u32, SeqCst))),
-                    _ => {
-                        let previous = cell
-                            .compare_exchange(word(1)? as u32, word(2)? as u32, SeqCst, SeqCst)
-                            .unwrap_or_else(|current| current);
-                        result(u64::from(previous))
-                    }
-                }
+            _ => unreachable!("registered plain memory operation"),
+        }
+    }
+}
+
+/// One allocation function of `mem` in a hosted program (ADR-0128): the
+/// process allocator stands where a freestanding program has its
+/// allocation hooks. The caller vouches for the addresses and sizes it
+/// passes back, as C code does for `free`.
+fn host_mem_heap(name: &str, args: Vec<Value>) -> Result<Value> {
+    use std::alloc::{alloc, dealloc, realloc, Layout};
+    let word = |index: usize| -> Result<u64> {
+        match args.get(index) {
+            Some(Value::Int(value)) => value
+                .as_i128()
+                .and_then(|value| u64::try_from(value).ok())
+                .ok_or_else(|| mem_argument_error(name)),
+            _ => Err(mem_argument_error(name)),
+        }
+    };
+    let address = |pointer: *mut u8| {
+        IntegerValue::from_typed_unsigned(pointer as usize as u128, IntegerKind::Uint64)
+            .map(Value::Int)
+            .ok_or_else(|| mem_argument_error(name))
+    };
+    // A request for no bytes still gets an address of its own.
+    let layout = |size: u64, align: u64| {
+        let size = usize::try_from(size).ok()?.max(1);
+        Layout::from_size_align(size, usize::try_from(align).ok()?).ok()
+    };
+    match name {
+        "mem::alloc" => {
+            host_expect_arity(name, &args, 2)?;
+            match layout(word(0)?, word(1)?) {
+                // SAFETY: the layout has a size above zero.
+                Some(layout) => address(unsafe { alloc(layout) }),
+                None => address(std::ptr::null_mut()),
             }
-            _ => {
-                let cell = &*(address as *const AtomicU64);
-                match operation {
-                    "atomic_load" => result(cell.load(SeqCst)),
-                    "atomic_store" => {
-                        cell.store(word(1)?, SeqCst);
-                        Ok(Value::Unit)
-                    }
-                    "atomic_swap" => result(cell.swap(word(1)?, SeqCst)),
-                    "atomic_add" => result(cell.fetch_add(word(1)?, SeqCst)),
-                    _ => {
-                        let previous = cell
-                            .compare_exchange(word(1)?, word(2)?, SeqCst, SeqCst)
-                            .unwrap_or_else(|current| current);
-                        result(previous)
-                    }
-                }
+        }
+        "mem::free" => {
+            host_expect_arity(name, &args, 3)?;
+            let block = word(0)? as usize as *mut u8;
+            if let (false, Some(layout)) = (block.is_null(), layout(word(1)?, word(2)?)) {
+                // SAFETY: the program states that `mem.alloc` or
+                // `mem.realloc` returned the address for this size and
+                // alignment and that nothing freed it since.
+                unsafe { dealloc(block, layout) };
             }
+            Ok(Value::Unit)
+        }
+        "mem::realloc" => {
+            host_expect_arity(name, &args, 4)?;
+            let block = word(0)? as usize as *mut u8;
+            let (old_size, align, new_size) = (word(1)?, word(2)?, word(3)?);
+            let Some(new) = layout(new_size, align) else {
+                return address(std::ptr::null_mut());
+            };
+            if block.is_null() {
+                // SAFETY: the layout has a size above zero.
+                return address(unsafe { alloc(new) });
+            }
+            match layout(old_size, align) {
+                // SAFETY: the program states that the address holds a
+                // live block of `old_size` bytes at this alignment, and
+                // `new` checked the new size against the alignment.
+                Some(old) => address(unsafe { realloc(block, old, new.size()) }),
+                None => address(std::ptr::null_mut()),
+            }
+        }
+        // The operating system gives a hosted program its memory.
+        "mem::heap_add_region" => {
+            host_expect_arity(name, &args, 2)?;
+            word(0)?;
+            word(1)?;
+            Ok(Value::Unit)
+        }
+        _ => {
+            host_expect_arity(name, &args, 0)?;
+            address(std::ptr::null_mut())
         }
     }
 }
@@ -1054,6 +1100,34 @@ macro_rules! host_mem_functions {
 }
 
 host_mem_functions! {
+    host_mem_read_bool => "mem::read_bool";
+    host_mem_write_bool => "mem::write_bool";
+    host_mem_volatile_read_bool => "mem::volatile_read_bool";
+    host_mem_volatile_write_bool => "mem::volatile_write_bool";
+    host_mem_read_int8 => "mem::read_int8";
+    host_mem_write_int8 => "mem::write_int8";
+    host_mem_volatile_read_int8 => "mem::volatile_read_int8";
+    host_mem_volatile_write_int8 => "mem::volatile_write_int8";
+    host_mem_read_int16 => "mem::read_int16";
+    host_mem_write_int16 => "mem::write_int16";
+    host_mem_volatile_read_int16 => "mem::volatile_read_int16";
+    host_mem_volatile_write_int16 => "mem::volatile_write_int16";
+    host_mem_read_int32 => "mem::read_int32";
+    host_mem_write_int32 => "mem::write_int32";
+    host_mem_volatile_read_int32 => "mem::volatile_read_int32";
+    host_mem_volatile_write_int32 => "mem::volatile_write_int32";
+    host_mem_read_int64 => "mem::read_int64";
+    host_mem_write_int64 => "mem::write_int64";
+    host_mem_volatile_read_int64 => "mem::volatile_read_int64";
+    host_mem_volatile_write_int64 => "mem::volatile_write_int64";
+    host_mem_read_float32 => "mem::read_float32";
+    host_mem_write_float32 => "mem::write_float32";
+    host_mem_volatile_read_float32 => "mem::volatile_read_float32";
+    host_mem_volatile_write_float32 => "mem::volatile_write_float32";
+    host_mem_read_float64 => "mem::read_float64";
+    host_mem_write_float64 => "mem::write_float64";
+    host_mem_volatile_read_float64 => "mem::volatile_read_float64";
+    host_mem_volatile_write_float64 => "mem::volatile_write_float64";
     host_mem_read_uint8 => "mem::read_uint8";
     host_mem_read_uint16 => "mem::read_uint16";
     host_mem_read_uint32 => "mem::read_uint32";
@@ -1070,17 +1144,46 @@ host_mem_functions! {
     host_mem_volatile_write_uint16 => "mem::volatile_write_uint16";
     host_mem_volatile_write_uint32 => "mem::volatile_write_uint32";
     host_mem_volatile_write_uint64 => "mem::volatile_write_uint64";
+    host_mem_atomic_load_uint8 => "mem::atomic_load_uint8";
+    host_mem_atomic_load_uint16 => "mem::atomic_load_uint16";
     host_mem_atomic_load_uint32 => "mem::atomic_load_uint32";
     host_mem_atomic_load_uint64 => "mem::atomic_load_uint64";
+    host_mem_atomic_store_uint8 => "mem::atomic_store_uint8";
+    host_mem_atomic_store_uint16 => "mem::atomic_store_uint16";
     host_mem_atomic_store_uint32 => "mem::atomic_store_uint32";
     host_mem_atomic_store_uint64 => "mem::atomic_store_uint64";
+    host_mem_atomic_swap_uint8 => "mem::atomic_swap_uint8";
+    host_mem_atomic_swap_uint16 => "mem::atomic_swap_uint16";
     host_mem_atomic_swap_uint32 => "mem::atomic_swap_uint32";
     host_mem_atomic_swap_uint64 => "mem::atomic_swap_uint64";
+    host_mem_atomic_add_uint8 => "mem::atomic_add_uint8";
+    host_mem_atomic_add_uint16 => "mem::atomic_add_uint16";
     host_mem_atomic_add_uint32 => "mem::atomic_add_uint32";
     host_mem_atomic_add_uint64 => "mem::atomic_add_uint64";
+    host_mem_atomic_compare_exchange_uint8 => "mem::atomic_compare_exchange_uint8";
+    host_mem_atomic_compare_exchange_uint16 => "mem::atomic_compare_exchange_uint16";
     host_mem_atomic_compare_exchange_uint32 => "mem::atomic_compare_exchange_uint32";
     host_mem_atomic_compare_exchange_uint64 => "mem::atomic_compare_exchange_uint64";
+    host_mem_pointer_offset => "mem::__pointer_offset";
     host_mem_fence => "mem::fence";
+}
+
+macro_rules! host_mem_heap_functions {
+    ($($function:ident => $name:literal;)*) => {
+        $(
+            pub fn $function(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+                host_mem_heap($name, args)
+            }
+        )*
+    };
+}
+
+host_mem_heap_functions! {
+    host_mem_alloc => "mem::alloc";
+    host_mem_free => "mem::free";
+    host_mem_realloc => "mem::realloc";
+    host_mem_heap_add_region => "mem::heap_add_region";
+    host_mem_heap_free_bytes => "mem::heap_free_bytes";
 }
 
 /// The owned-argument function for a host builtin, or `None` for a name the
@@ -1106,6 +1209,34 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "collections::__aura_map_range" => ordered_collections::map_range,
         "collections::__aura_map_drain" => ordered_collections::map_drain,
         "math::floor" => host_math_floor,
+        "mem::read_bool" => host_mem_read_bool,
+        "mem::write_bool" => host_mem_write_bool,
+        "mem::volatile_read_bool" => host_mem_volatile_read_bool,
+        "mem::volatile_write_bool" => host_mem_volatile_write_bool,
+        "mem::read_int8" => host_mem_read_int8,
+        "mem::write_int8" => host_mem_write_int8,
+        "mem::volatile_read_int8" => host_mem_volatile_read_int8,
+        "mem::volatile_write_int8" => host_mem_volatile_write_int8,
+        "mem::read_int16" => host_mem_read_int16,
+        "mem::write_int16" => host_mem_write_int16,
+        "mem::volatile_read_int16" => host_mem_volatile_read_int16,
+        "mem::volatile_write_int16" => host_mem_volatile_write_int16,
+        "mem::read_int32" => host_mem_read_int32,
+        "mem::write_int32" => host_mem_write_int32,
+        "mem::volatile_read_int32" => host_mem_volatile_read_int32,
+        "mem::volatile_write_int32" => host_mem_volatile_write_int32,
+        "mem::read_int64" => host_mem_read_int64,
+        "mem::write_int64" => host_mem_write_int64,
+        "mem::volatile_read_int64" => host_mem_volatile_read_int64,
+        "mem::volatile_write_int64" => host_mem_volatile_write_int64,
+        "mem::read_float32" => host_mem_read_float32,
+        "mem::write_float32" => host_mem_write_float32,
+        "mem::volatile_read_float32" => host_mem_volatile_read_float32,
+        "mem::volatile_write_float32" => host_mem_volatile_write_float32,
+        "mem::read_float64" => host_mem_read_float64,
+        "mem::write_float64" => host_mem_write_float64,
+        "mem::volatile_read_float64" => host_mem_volatile_read_float64,
+        "mem::volatile_write_float64" => host_mem_volatile_write_float64,
         "mem::read_uint8" => host_mem_read_uint8,
         "mem::read_uint16" => host_mem_read_uint16,
         "mem::read_uint32" => host_mem_read_uint32,
@@ -1122,17 +1253,33 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "mem::volatile_write_uint16" => host_mem_volatile_write_uint16,
         "mem::volatile_write_uint32" => host_mem_volatile_write_uint32,
         "mem::volatile_write_uint64" => host_mem_volatile_write_uint64,
+        "mem::atomic_load_uint8" => host_mem_atomic_load_uint8,
+        "mem::atomic_load_uint16" => host_mem_atomic_load_uint16,
         "mem::atomic_load_uint32" => host_mem_atomic_load_uint32,
         "mem::atomic_load_uint64" => host_mem_atomic_load_uint64,
+        "mem::atomic_store_uint8" => host_mem_atomic_store_uint8,
+        "mem::atomic_store_uint16" => host_mem_atomic_store_uint16,
         "mem::atomic_store_uint32" => host_mem_atomic_store_uint32,
         "mem::atomic_store_uint64" => host_mem_atomic_store_uint64,
+        "mem::atomic_swap_uint8" => host_mem_atomic_swap_uint8,
+        "mem::atomic_swap_uint16" => host_mem_atomic_swap_uint16,
         "mem::atomic_swap_uint32" => host_mem_atomic_swap_uint32,
         "mem::atomic_swap_uint64" => host_mem_atomic_swap_uint64,
+        "mem::atomic_add_uint8" => host_mem_atomic_add_uint8,
+        "mem::atomic_add_uint16" => host_mem_atomic_add_uint16,
         "mem::atomic_add_uint32" => host_mem_atomic_add_uint32,
         "mem::atomic_add_uint64" => host_mem_atomic_add_uint64,
+        "mem::atomic_compare_exchange_uint8" => host_mem_atomic_compare_exchange_uint8,
+        "mem::atomic_compare_exchange_uint16" => host_mem_atomic_compare_exchange_uint16,
         "mem::atomic_compare_exchange_uint32" => host_mem_atomic_compare_exchange_uint32,
         "mem::atomic_compare_exchange_uint64" => host_mem_atomic_compare_exchange_uint64,
+        "mem::__pointer_offset" => host_mem_pointer_offset,
         "mem::fence" => host_mem_fence,
+        "mem::alloc" => host_mem_alloc,
+        "mem::free" => host_mem_free,
+        "mem::realloc" => host_mem_realloc,
+        "mem::heap_add_region" => host_mem_heap_add_region,
+        "mem::heap_free_bytes" => host_mem_heap_free_bytes,
         "math::ceil" => host_math_ceil,
         "math::trunc" => host_math_trunc,
         "math::pow" => host_math_pow,
@@ -1314,6 +1461,9 @@ pub fn host_gzip_compress(args: Vec<Value>, _program_args: Option<&[String]>) ->
             format!("`gzip.compress` requires a level from 0 to 9, found `{level}`"),
         ));
     };
+    // The deflate bound covers stored blocks and the gzip framing.
+    let input_len = data.len() as u64;
+    crate::builtin_limit::check(input_len + input_len.div_ceil(16_384) * 5 + 32)?;
     let packed = crate::gzip_codec::gzip_compress(&data, level)
         .map_err(|error| Diagnostic::coded("AU4005", format!("`gzip.compress` failed: {error}")))?;
     host_bytes_value(packed, name)
@@ -1337,8 +1487,14 @@ pub fn host_gzip_decompress(args: Vec<Value>, _program_args: Option<&[String]>) 
             ),
         ));
     };
-    let error = match crate::gzip_codec::gzip_decompress(&data, limit) {
+    let available = crate::builtin_limit::allowance()
+        .unwrap_or(limit)
+        .min(limit);
+    let error = match crate::gzip_codec::gzip_decompress(&data, available) {
         Ok(bytes) => return host_bytes_value(bytes, name).map(result_ok),
+        Err(GzipError::OutputTooLarge { .. }) if available < limit => {
+            return Err(crate::builtin_limit::exhausted());
+        }
         Err(error) => error,
     };
     let (variant_name, payload) = match error {
@@ -1521,3 +1677,6 @@ mod mem_tests;
 #[cfg(test)]
 #[path = "host_builtins_math_tests.rs"]
 mod math_tests;
+
+#[path = "host_mem_atomic.rs"]
+mod mem_atomic;

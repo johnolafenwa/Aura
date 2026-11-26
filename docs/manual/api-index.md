@@ -196,24 +196,39 @@ evaluation-order, diagnostic, and backend rules.
 | `math.factorial` | `factorial(value: int64) -> int64` | Exact factorial. Traps with `AU4002` above `factorial(20)`. |
 | `math.comb`, `math.perm` | `(count: int64, chosen: int64) -> int64` | Exact combinations and arrangements. |
 
+A fixed-width integer supports `rotate_left(count)`, `rotate_right(count)`, `count_ones()`, `leading_zeros()`, `trailing_zeros()` and `swap_bytes()`. Counts return `int64`. Rotations and byte swaps return the receiver type.
+
 ## Memory
 
-[Memory Module](/manual/mem) has the rules for alignment, ordering, and
-undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
-32, or 64 for plain and volatile access, and 32 or 64 for atomic access.
+[Memory Module](/manual/mem) has the rules for alignment, ordering,
+allocation, and undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
+32 or 64 for unsigned plain, volatile and atomic access.
 
 | API | Signature | Contract |
 | --- | --- | --- |
+| `mem.address_of` | `address_of(place) -> ptr[T]` | Address of writable module storage, a fixed-array element or a C field. |
+| `ptr[T]` methods | `read()`, `write(value)`, `volatile_read()`, `volatile_write(value)`, `offset(count)` | Access a typed value or step by a signed count of elements. |
+| C layout | `mem.size_of(T)`, `mem.align_of(T)`, `mem.offset_of(T, field)` | Compile-time size, alignment and member byte offset. |
+| Signed and floating-point access | `mem.read_intN`, `mem.read_floatN` and matching write and volatile forms | Signed widths are 8 through 64. Floating widths are 32 and 64. |
+| `mem.in_uintN`, `mem.out_uintN` | `in_uintN(port: uint16) -> uintN`, `out_uintN(port: uint16, value: uintN) -> None` | x86-64 port transfer for N = 8, 16 or 32. |
+| `mem.read_msr`, `mem.write_msr` | `read_msr(index: uint32) -> uint64`, `write_msr(index: uint32, value: uint64) -> None` | x86-64 model-specific register access. |
+| Named control and system registers | `read_<name>() -> uint64`, `write_<name>(value: uint64) -> None` | [Register names and access directions by target](/manual/mem). |
+| Interrupt control and wait | `enable_interrupts() -> None`, `disable_interrupts() -> None`, `halt() -> None` | Change the interrupt mask or wait for a wakeup. |
 | `mem.read_uintN` | `read_uintN(address: uint64) -> uintN` | The integer at `address`, at any alignment. |
 | `mem.write_uintN` | `write_uintN(address: uint64, value: uintN) -> None` | Stores `value` at `address`, at any alignment. |
 | `mem.volatile_read_uintN` | `volatile_read_uintN(address: uint64) -> uintN` | One read the compiler never merges or drops. |
 | `mem.volatile_write_uintN` | `volatile_write_uintN(address: uint64, value: uintN) -> None` | One write the compiler never merges or drops. |
-| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64) -> uintN` | The value of the cell. |
-| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN) -> None` | Stores `value` in the cell. |
-| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN) -> uintN` | Stores `value` and returns the previous value. |
-| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN) -> uintN` | Adds `value`, wrapping, and returns the previous value. |
-| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN) -> uintN` | Stores `replacement` if the cell holds `expected`, and returns the previous value. |
-| `mem.fence` | `fence() -> None` | Orders earlier memory accesses before later ones. |
+| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64, order="seq_cst") -> uintN` | The value of the cell. |
+| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN, order="seq_cst") -> None` | Stores `value` in the cell. |
+| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN, order="seq_cst") -> uintN` | Stores `value` and returns the previous value. |
+| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN, order="seq_cst") -> uintN` | Adds `value`, wrapping, and returns the previous value. |
+| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN, order="seq_cst", failure_order=…) -> uintN` | Stores `replacement` if the cell holds `expected`, and returns the previous value. |
+| `mem.fence` | `fence(order="seq_cst") -> None` | Orders earlier memory accesses before later ones. |
+| `mem.alloc` | `alloc(size: uint64, align: uint64) -> uint64` | The address of a new block, or 0 when the memory is not there. |
+| `mem.free` | `free(address: uint64, size: uint64, align: uint64) -> None` | Gives the block back. Takes the size and alignment it was made with. |
+| `mem.realloc` | `realloc(address: uint64, old_size: uint64, align: uint64, new_size: uint64) -> uint64` | The block at its new size with its bytes kept, or 0 with the block unchanged. |
+| `mem.heap_add_region` | `heap_add_region(start: uint64, size: uint64) -> None` | Gives a freestanding program's allocator a region of memory. Does nothing in a hosted program. |
+| `mem.heap_free_bytes` | `heap_free_bytes() -> uint64` | The bytes of a freestanding program's regions that no block holds. 0 in a hosted program. |
 
 ## Randomness
 

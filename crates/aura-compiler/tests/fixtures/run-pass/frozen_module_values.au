@@ -1,0 +1,27 @@
+class Point:
+    x: int32
+
+enum Choice:
+    Chosen(int32)
+
+def square(x: int32) -> int32:
+    return x * x
+
+const score: int32 = square(6)
+const word = "au" + "ra"
+const data = b"AB"
+const pair = (score, word.clone())
+const table = [score, 7]
+const codes = {"a": score}
+const unique = {score, 7}
+const point = Point(x=score)
+const choice = Choice.Chosen(score)
+
+def main():
+    print(pair)
+    print(table[0])
+    print(codes["a"])
+    print(unique.len())
+    print(point.x)
+    print(choice)
+    print(data.len())

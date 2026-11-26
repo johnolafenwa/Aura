@@ -1,22 +1,42 @@
 """
 A program for a machine with no operating system. The board's startup
-code calls `kernel_main` with the address of its serial port and of a
-scratch region of memory. Everything here is Aura: the serial output, a
-spin lock, and the hook that reports a failed check.
+code calls `kernel_main` with the address of a scratch region. Aura writes
+the serial output, takes a spin lock, and reports a failed check.
 
 Build it with `aura build --freestanding`. See `README.md`.
 """
 
+import build
 import mem
+
+mut samples: fixed[uint16, 2] = [40, 0]
 
 
 # The startup code defines this. It never returns.
 extern "C" def power_off() -> None
 
 
-# The startup code gives the serial port's address to a hook that has no
-# other way to learn it.
-extern "C" def console_address() -> uint64
+# QEMU's virt boards expose different serial ports. Other boards can
+# supply their address through the same function.
+if build.freestanding and build.arch == "aarch64":
+    const serial_port: uint64 = 0x09000000
+
+    def console_address() -> uint64:
+        return serial_port
+elif build.freestanding and build.arch == "riscv64":
+    const serial_port: uint64 = 0x10000000
+
+    def console_address() -> uint64:
+        return serial_port
+else:
+    extern "C" def console_address() -> uint64
+
+
+# The startup code names the memory the heap may use.
+extern "C" def heap_start() -> uint64
+
+
+extern "C" def heap_size() -> uint64
 
 
 # The scratch region holds a lock word and a counter.
@@ -32,15 +52,28 @@ def put(uart: uint64, byte: uint8) -> None:
     mem.volatile_write_uint8(uart, byte)
 
 
+def decimal_divisors() -> list[uint64]:
+    mut power: uint64 = 1
+    mut powers: list[uint64] = [power]
+    for i in range(19):
+        power = power * 10
+        powers.append(power)
+    return powers
+
+
+const decimal_powers = decimal_divisors()
+
+
 def put_number(uart: uint64, value: uint64) -> None:
-    mut divisor: uint64 = 1
-    while value // divisor >= 10:
-        divisor = divisor * 10
+    mut place: int64 = 19
+    while place > 0 and decimal_powers[place] > value:
+        place = place - 1
     mut rest = value
-    while divisor > 0:
+    while place >= 0:
+        divisor = decimal_powers[place]
         put(uart, (48 + rest // divisor) as uint8)
         rest = rest % divisor
-        divisor = divisor // 10
+        place = place - 1
 
 
 def put_line(uart: uint64, label: uint8, value: uint64) -> None:
@@ -88,6 +121,42 @@ def collatz_steps(start: uint64) -> uint64:
     return steps
 
 
+# The sum of the primes below `limit`. The primes found so far live in a
+# block on the heap, which doubles when it fills.
+def sum_primes(limit: uint64) -> uint64:
+    mut room: uint64 = 4
+    mut count: uint64 = 0
+    mut primes = mem.alloc(room * 8, 8)
+    assert primes != 0, "the heap has no memory"
+    mut candidate: uint64 = 2
+    while candidate < limit:
+        mut prime = true
+        mut index: uint64 = 0
+        while index < count:
+            known = mem.read_uint64(primes + index * 8)
+            if known * known > candidate:
+                break
+            if candidate % known == 0:
+                prime = false
+                break
+            index = index + 1
+        if prime:
+            if count == room:
+                primes = mem.realloc(primes, room * 8, 8, room * 16)
+                assert primes != 0, "the heap is full"
+                room = room * 2
+            mem.write_uint64(primes + count * 8, candidate)
+            count = count + 1
+        candidate = candidate + 1
+    mut total: uint64 = 0
+    mut at: uint64 = 0
+    while at < count:
+        total = total + mem.read_uint64(primes + at * 8)
+        at = at + 1
+    mem.free(primes, room * 8, 8)
+    return total
+
+
 def mean_radius(steps: int64) -> float64:
     mut x: float64 = 1.0
     mut y: float64 = 0.0
@@ -130,7 +199,8 @@ export "C" def aura_trap(
     put(uart, 10)
     power_off()
 
-export "C" def kernel_main(uart: uint64, scratch: uint64) -> None:
+export "C" def kernel_main(scratch: uint64) -> None:
+    uart = console_address()
     lock = lock_cell(scratch)
     counter = counter_cell(scratch)
     mem.atomic_store_uint32(lock, 0)
@@ -148,6 +218,16 @@ export "C" def kernel_main(uart: uint64, scratch: uint64) -> None:
         mem.atomic_add_uint64(counter, 1)
         release(lock)
     put_line(uart, 110, mem.atomic_load_uint64(counter))
+
+    sample = mem.address_of(samples[1])
+    sample.write(samples[0] + 2)
+    put_line(uart, 115, samples[1] as uint64)
+    # h: the sum of the primes below 1000, kept in a block on the heap
+    # that grows. f: the bytes still missing from the heap afterwards.
+    mem.heap_add_region(heap_start(), heap_size())
+    free = mem.heap_free_bytes()
+    put_line(uart, 104, sum_primes(1000))
+    put_line(uart, 102, free - mem.heap_free_bytes())
 
     # A failed check reaches `aura_trap`: 255 + 1 does not fit a uint8.
     mut small: uint8 = (mem.atomic_load_uint64(counter) + 155) as uint8

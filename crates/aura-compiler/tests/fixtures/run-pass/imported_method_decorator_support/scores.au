@@ -1,0 +1,8 @@
+import imported_method_decorator_support.wrappers as wrappers
+
+public class Counter:
+    public value: int64
+
+    @wrappers.setter
+    public def score(self) -> int64:
+        return self.value

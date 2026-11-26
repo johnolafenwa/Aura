@@ -6199,11 +6199,11 @@ fn float_floor_divmod_matches_python_sign_precision_and_zero_rules() {
 fn float_power_uses_destination_width_and_shared_exception_rules() {
     assert_eq!(
         float_power(1.5, 2.0, FloatPowerWidth::Float32).expect("float32 power should succeed"),
-        (1.5_f32.powf(2.0)) as f64
+        2.25
     );
     assert_eq!(
         float_power(1.5, 2.0, FloatPowerWidth::Float64).expect("float64 power should succeed"),
-        1.5_f64.powf(2.0)
+        2.25
     );
 
     let float32_overflow = float_power(100.0, 100.0, FloatPowerWidth::Float32)
@@ -21422,4 +21422,24 @@ fn first_stack_gives_the_arguments_after_the_program_name() {
     let stack = stack_of(&strings, 9);
     assert_eq!(args(&stack, 5), None);
     assert_eq!(unsafe { super::initial_stack_args(std::ptr::null()) }, None);
+}
+
+#[test]
+fn floating_point_casts_check_the_exclusive_upper_bound_of_wide_integers() {
+    for (name, exponent) in [("int128", 127), ("uint128", 128)] {
+        let upper = 2.0_f64.powi(exponent);
+        let largest = f64::from_bits(upper.to_bits() - 1);
+        let target = Type::named(name);
+        let valid = cast_numeric_value(Value::Float(largest), &target, None)
+            .expect("the preceding representable float fits");
+        let Value::Int(valid) = valid else {
+            panic!("expected an integer")
+        };
+        assert_eq!(valid.to_f64(), largest);
+        let overflow = cast_numeric_value(Value::Float(upper), &target, None)
+            .expect_err("the power of two just above the maximum is out of range");
+        assert!(overflow
+            .message
+            .contains(&format!("does not fit in `{name}`")));
+    }
 }

@@ -17,6 +17,9 @@
 //!   does not define.
 
 use super::*;
+
+#[path = "native_frozen_tables.rs"]
+pub(super) mod frozen_tables;
 use crate::diag::Diagnostic;
 use crate::ffi::CCallback;
 use crate::native_backend::MemoryAccess;
@@ -138,6 +141,18 @@ impl NativeCodegen<'_> {
         // An export is declared before any body is built, so a body that
         // names the same symbol, as a check names the trap hook, calls the
         // export.
+        self.define_machine_items()?;
+        if self
+            .module
+            .foreign_link
+            .asm_arch
+            .as_deref()
+            .is_some_and(|arch| arch != crate::inline_asm::profile(target))
+        {
+            return Err("assembly requires the freestanding target it was checked for".into());
+        }
+        let fragments = &self.module.foreign_link.module_asm;
+        self.module_backend()?.set_module_asm(fragments);
         let mut exports = Vec::new();
         for export in &self.module.foreign_link.exports {
             let function = self
@@ -167,11 +182,16 @@ impl NativeCodegen<'_> {
                 "failed to declare export `{}`: {}",
                 export.symbol
             );
+            if let Some(attrs) = self.module.foreign_link.machine.get(&export.function) {
+                self.module_backend()?.mark_machine(entry, attrs.clone());
+            }
             exports.push((export, callback, signature, entry));
         }
+        let heap = self.declare_heap_symbols(&declared_symbols(self.module))?;
         for function in &self.module.functions {
             self.define_function(function)?;
         }
+        self.define_heap_symbols(heap)?;
         for ((name, callback), (entry_id, body_id)) in self.callback_thunks.clone() {
             let signature = entry_signature(&callback, target);
             let function = self.functions[&name];
@@ -253,6 +273,7 @@ fn declared_symbols(module: &MirModule) -> HashSet<&str> {
         .iter()
         .map(|export| export.symbol.as_str())
         .collect::<HashSet<_>>();
+    symbols.extend(module.foreign_link.asm_externs.iter().map(String::as_str));
     for instruction in module
         .functions
         .iter()
@@ -562,6 +583,16 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
                 "a freestanding object has no `main`: the code that links it calls its exported functions",
             ),
         );
+        // Assembly entry points, retained functions and placed data can
+        // supply the object roots in place of an ordinary C export.
+        if !module.foreign_link.module_asm.is_empty()
+            || !module.foreign_link.placed_data.is_empty()
+            || module.foreign_link.machine.values().any(|attrs| attrs.used)
+        {
+            problems.clear();
+        }
+    }
+    if !problems.is_empty() {
         return Err(problems);
     }
     let mut symbols = HashSet::new();
@@ -579,7 +610,21 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
     if !problems.is_empty() {
         return Err(problems);
     }
+    frozen_tables::detach_initializers(&mut module);
+    super::wide_numbers::install_layouts(&mut module);
     keep_reached_functions(&mut module);
+    frozen_tables::lower_reads(&mut module, &mut problems);
+    let declared = declared_symbols(&module)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    // An assertion's text would otherwise become a `str` on the heap.
+    for function in &mut module.functions {
+        strip_assertion_text(function);
+    }
+    // The boxes the values pass adds allocate, so it runs first.
+    problems.extend(super::freestanding_values::lower_plain_values(&mut module));
+    super::freestanding_heap::include_allocator(&mut module, &declared);
     for function in &mut module.functions {
         strip_assertion_text(function);
     }
@@ -626,6 +671,14 @@ fn keep_reached_functions(module: &mut MirModule) {
         .collect::<HashMap<_, _>>();
     let mut kept = HashSet::new();
     let mut pending = Vec::new();
+    for (name, attrs) in &module.foreign_link.machine {
+        if attrs.used {
+            if let Some(&function) = by_name.get(name.as_str()) {
+                kept.insert(name.clone());
+                pending.push(function);
+            }
+        }
+    }
     for export in &module.foreign_link.exports {
         if let Some(function) = by_name.get(export.function.as_str()) {
             if kept.insert(export.function.clone()) {
@@ -658,12 +711,27 @@ fn keep_reached_functions(module: &mut MirModule) {
         .flat_map(|block| &block.instructions)
         .filter_map(|instruction| match instruction {
             Instruction::Assign {
+                value:
+                    Rvalue::ModuleLoad { key }
+                    | Rvalue::ModuleAddress { key }
+                    | Rvalue::ModuleStore { key, .. },
+                ..
+            } => Some(key.clone()),
+            Instruction::Assign {
                 value: Rvalue::ModuleConstant { key, .. },
                 ..
             } => Some(key.clone()),
             _ => None,
         })
         .collect::<HashSet<_>>();
+    let mut read = read;
+    read.extend(
+        module
+            .foreign_link
+            .placed_data
+            .iter()
+            .filter_map(|data| data.state_key.clone()),
+    );
     module
         .constants
         .retain(|constant| read.contains(&constant.key));
@@ -673,6 +741,9 @@ fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
     match value {
         serde_json::Value::String(text) => out.push(text.clone()),
         serde_json::Value::Array(items) => items.iter().for_each(|item| collect_strings(item, out)),
+        // A resolved host operation names a runtime entry directly. Its
+        // callable-value wrapper is reachable only through a function operand.
+        serde_json::Value::Object(fields) if fields.len() == 1 && fields.contains_key("Host") => {}
         serde_json::Value::Object(fields) => {
             fields.values().for_each(|item| collect_strings(item, out))
         }
@@ -716,9 +787,10 @@ fn strip_assertion_text(function: &mut MirFunction) {
 
 /// Whether a freestanding program can hold a value of type `ty`: the
 /// emitter keeps it in machine words with no box.
-fn words_only(ty: &Type, classes: &HashMap<String, MirClass>) -> bool {
+pub(super) fn words_only(ty: &Type, classes: &HashMap<String, MirClass>) -> bool {
     fn words(ty: &DirectType) -> bool {
         match ty {
+            DirectType::Fixed(_) => true,
             DirectType::Scalar(_) | DirectType::PlainClass(_) => true,
             DirectType::Union(union) => {
                 union.owning.is_empty() && union.members.iter().all(|member| words(&member.ty))
@@ -820,6 +892,7 @@ fn check_function(
                     span = crate::diag::Span::new(*line as usize, *column as usize);
                     continue;
                 }
+                Instruction::InlineAsm { .. } => continue,
                 Instruction::Safepoint
                 | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
@@ -836,10 +909,26 @@ fn check_function(
                 | Instruction::ReturnLoan { .. } => continue,
                 Instruction::WriteLoan { value, .. } => value,
                 Instruction::Assign { value, .. } => value,
+                Instruction::ArmDrop { .. } | Instruction::EndOwner { .. } => {
+                    report(span, "uses a class destructor".to_string(), "");
+                    continue;
+                }
                 Instruction::Eval { .. } => continue,
                 Instruction::PushCleanup { .. } | Instruction::PopCleanup { .. } => {
                     report(span, "uses a `with` block".to_string(), "");
                     continue;
+                }
+                Instruction::IndexInRange { list, .. }
+                    if function
+                        .local_types
+                        .iter()
+                        .any(|v| v.name == *list && v.ty.as_fixed_array().is_some())
+                        || function
+                            .params
+                            .iter()
+                            .any(|v| v.name == *list && v.ty.as_fixed_array().is_some()) =>
+                {
+                    continue
                 }
                 Instruction::IndexInRange { .. }
                 | Instruction::BeginElementLoan { .. }
@@ -877,6 +966,10 @@ fn check_function(
                 Rvalue::Call { callee, args, .. } => {
                     check_call(callee, args, classes, functions)
                 }
+                Rvalue::ModuleConstant { initializer, .. } if initializer.is_empty() => None,
+                Rvalue::CPointerAccess { .. } => None,
+                Rvalue::CFieldAddress { .. } => None,
+                Rvalue::ModuleLoad {..} | Rvalue::ModuleAddress {..} | Rvalue::ModuleStore {..} => None,
                 Rvalue::ModuleConstant { key, .. } => Some((
                     format!("reads the module constant `{key}`"),
                     "a freestanding program has no startup code to compute a constant: write the value where it is used, or return it from a function",
@@ -935,6 +1028,9 @@ pub(super) fn memory_operation(name: &str) -> Option<(MemoryAccess, ScalarKind)>
     if operation == "fence" {
         return Some((MemoryAccess::Fence, ScalarKind::Unit));
     }
+    if let Some(access) = super::typed_memory::operation(operation) {
+        return Some(access);
+    }
     let (operation, width) = operation.rsplit_once("_uint")?;
     let kind = match width {
         "8" => ScalarKind::Uint8,
@@ -969,9 +1065,35 @@ impl FunctionCompiler<'_> {
         let Some((access, kind)) = memory_operation(name) else {
             return Ok(None);
         };
+        let (access, args) = if let Some(op) = aura_core::atomic_order::AtomicOperation::of(name) {
+            // A function operand in saved MIR, or even a string naming this
+            // wrapper, can keep it alive. It receives its order as a parameter.
+            if self.freestanding.is_none() && self.current_function_name == name {
+                return Ok(None);
+            }
+            let arity = op.arity();
+            let order = |index: usize| match args.get(index).map(|arg| &arg.value) {
+                None => Ok(None),
+                Some(Operand::String(text)) => Ok(Some(text.as_str())),
+                other => Err(format!("expected a constant atomic order, found {other:?}")),
+            };
+            let (success, failure) = op.orders(
+                order(arity)?,
+                order(arity + 1)?.filter(|text| !text.is_empty()),
+            )?;
+            (MemoryAccess::Ordered(op, success, failure), &args[..arity])
+        } else {
+            (access, args)
+        };
         let mut words = Vec::with_capacity(args.len());
         for argument in args {
             words.push(self.load_operand(&argument.value)?.values[0]);
+        }
+        if kind == ScalarKind::Bool {
+            return self.compile_memory_bool(access, &words).map(Some);
+        }
+        if let Some(value) = self.compile_typed_memory(access, kind, &words) {
+            return Ok(Some(value));
         }
         let width = match kind {
             ScalarKind::Uint8 => types::I8,
@@ -999,6 +1121,8 @@ fn check_call(
     functions: &HashSet<&str>,
 ) -> Option<(String, &'static str)> {
     match callee {
+        CallTarget::Name(name) if frozen_tables::is_projection(name) => None,
+        CallTarget::Name(name) if crate::mir::fixed_arrays::is_operation(name) => None,
         CallTarget::Name(name) if functions.contains(name.as_str()) => None,
         CallTarget::Name(name) => {
             Some((format!("calls `{}`", public_direct_function_name(name)), ""))
@@ -1051,11 +1175,24 @@ fn check_call(
             receiver: None,
             ..
         } => None,
+        CallTarget::Runtime {
+            op: RuntimeOp::Scalar(ScalarOp::Bits(_)),
+            ..
+        } => None,
+        CallTarget::Runtime {
+            op: RuntimeOp::Scalar(ScalarOp::ToFloat),
+            ..
+        } => None,
         // A `mem` function is one instruction.
         CallTarget::Runtime {
             op: RuntimeOp::Host(builtin),
             ..
         } if memory_operation(builtin.name()).is_some() => None,
+        // A heap function of `mem` is a call of its C symbol.
+        CallTarget::Runtime {
+            op: RuntimeOp::Host(builtin),
+            ..
+        } if super::freestanding_heap::heap_operation(builtin.name()).is_some() => None,
         CallTarget::Runtime { op, .. } => Some(match op.name() {
             name if name.starts_with("__") => ("reads or changes a collection".to_string(), ""),
             name => (format!("calls `{name}`"), ""),
@@ -1079,7 +1216,9 @@ pub(crate) fn check_object(bytes: &[u8], module: &MirModule) -> std::result::Res
         .filter(|name| {
             !name.is_empty()
                 && *name != TRAP_HOOK
+                && !crate::freestanding_mode::is_soft_float_helper(name)
                 && !MEMORY_ROUTINES.contains(name)
+                && !super::freestanding_heap::is_heap_symbol(name)
                 && !declared.contains(name)
         })
         .collect::<Vec<_>>();

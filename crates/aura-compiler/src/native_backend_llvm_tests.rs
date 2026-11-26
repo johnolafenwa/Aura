@@ -2719,3 +2719,127 @@ fn hosted_targets_name_their_triple_and_architecture() {
     assert_eq!(crate::native_backend::hosted_target(), None);
     assert_eq!(crate::native_backend::target_arch(), std::env::consts::ARCH);
 }
+
+#[test]
+fn ordered_subword_operations_keep_their_llvm_order_and_width() {
+    use crate::native_backend::MemoryAccess::Ordered;
+    use aura_core::atomic_order::AtomicOperation::*;
+    use std::sync::atomic::Ordering::*;
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(&mut module, "ordered", Linkage::Export, &sig, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        let words = builder.block_params(entry);
+        let (cell, word) = (words[0], words[1]);
+        builder.memory_access(Ordered(Store, Release, Relaxed), types::I8, &[cell, word]);
+        builder.memory_access(Ordered(Add, Relaxed, Relaxed), types::I16, &[cell, word]);
+        let previous = builder
+            .memory_access(
+                Ordered(CompareExchange, AcqRel, Acquire),
+                types::I8,
+                &[cell, word, word],
+            )
+            .unwrap();
+        builder.memory_access(Ordered(Load, Acquire, Acquire), types::I16, &[cell]);
+        builder.memory_access(Ordered(Fence, SeqCst, SeqCst), types::I64, &[]);
+        builder.return_(&[previous]);
+    });
+    let ir = ir(&module);
+    for text in [
+        "store atomic i8",
+        "release, align 1",
+        "i16 %",
+        "monotonic",
+        "cmpxchg",
+        "acq_rel acquire",
+        "load atomic i16",
+        "acquire, align 2",
+        "fence seq_cst",
+    ] {
+        assert!(ir.contains(text), "missing {text} in {ir}");
+    }
+}
+
+#[test]
+fn fixed_array_arguments_use_the_callers_address() {
+    let mut module = module();
+    let inline = ScalarType::Inline {
+        bytes: 12,
+        align: 4,
+    };
+    let inspect = define(
+        &mut module,
+        "inspect",
+        Linkage::Local,
+        &signature(CallConv::Aura, &[inline], &[types::I64]),
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let param = builder.block_params(entry)[0];
+            let var = Var(0);
+            builder.declare_var(var, inline);
+            builder.def_var(var, param);
+            builder.bind_array_parameter(var, 0);
+            let address = builder.var_addr(var);
+            builder.return_(&[address]);
+        },
+    );
+    define(
+        &mut module,
+        "caller",
+        Linkage::Export,
+        &signature(CallConv::C, &[], &[types::I64]),
+        move |builder| {
+            let entry = builder.create_block();
+            builder.switch_to_block(entry);
+            let var = Var(0);
+            builder.declare_var(var, inline);
+            let zero = builder.iconst(inline, 0);
+            builder.def_var(var, zero);
+            let address = builder.var_addr(var);
+            let value = builder.use_var(var);
+            let value = builder.borrow_array_argument(value, address);
+            let function = builder.import_function(inspect);
+            let got = builder.call(function, &[value]).results[0];
+            builder.return_(&[got]);
+        },
+    );
+    let text = ir(&module);
+    assert!(text.contains("@inspect(ptr %0)"), "{text}");
+    assert!(text.contains("ptrtoint ptr %0 to i64"), "{text}");
+}
+
+#[test]
+fn llvm_rejects_invalid_load_and_store_orderings_from_the_backend_boundary() {
+    use crate::native_backend::MemoryAccess::Ordered;
+    use aura_core::atomic_order::AtomicOperation::{Load, Store};
+    use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+    for (op, order, reason) in [
+        (Load, Release, "release ordering is not valid on load"),
+        (Store, Acquire, "acquire ordering is not valid on store"),
+    ] {
+        let mut module = module();
+        let sig = signature(CallConv::C, &[types::I64, types::I64], &[]);
+        define(&mut module, "bad_order", Linkage::Export, &sig, move |b| {
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            let words = b.block_params(entry);
+            b.memory_access(
+                Ordered(op, order, Relaxed),
+                types::I16,
+                &words[..op.arity()],
+            );
+            b.return_(&[]);
+        });
+        let machine = host_target_machine().unwrap();
+        let context = Context::create();
+        let error = module
+            .lower(&context, &machine)
+            .expect_err("invalid atomic order");
+        assert!(error.contains(reason), "{error}");
+    }
+}

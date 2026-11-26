@@ -1,0 +1,13 @@
+copy class Packet:
+    prefix: int8
+    data: fixed[uint8, 9]
+
+mut packet: Packet | None = Packet(prefix=-2, data=[1, 2, 3, 4, 5, 6, 7, 8, 9])
+mut empty: Packet | None = None
+
+export "C" def reset() -> int32:
+    saved = packet
+    packet = empty
+    if saved is None:
+        return 0
+    return (saved.prefix as int32) + (saved.data[8] as int32)

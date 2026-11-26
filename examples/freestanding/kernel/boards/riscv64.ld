@@ -10,4 +10,6 @@ SECTIONS {
   . += 64;
   . += 0x10000;
   stack_top = .;
+  heap_base = .;
+  . += 0x100000;
 }

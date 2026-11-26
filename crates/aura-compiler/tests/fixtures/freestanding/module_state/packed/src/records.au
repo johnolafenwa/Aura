@@ -1,0 +1,3 @@
+public extern "C" packed class Record:
+    public tag: uint8
+    public count: uint32
