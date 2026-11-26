@@ -403,3 +403,44 @@ fn confined_words_detach_once_and_survive_buffer_growth() {
         assert_eq!(call(len, vec![Value::CollectionStore(snapshot)]), number(1));
     }
 }
+
+fn into_store(value: Value) -> Store {
+    let Value::CollectionStore(store) = value else {
+        panic!("expected a collection store")
+    };
+    store
+}
+
+#[test]
+fn stores_expose_and_release_only_their_element_values() {
+    let deque = call(
+        deque_push,
+        vec![call(new, vec![number(0)]), number(7), Value::Bool(false)],
+    );
+    let map = call(
+        map_put,
+        vec![call(new, vec![number(3)]), number(1), Value::string("v")],
+    );
+    let heap = call(heap_push, vec![call(new, vec![number(1)]), number(5)]);
+
+    let is_seven = |value: &Value| *value == number(7);
+    let is_v = |value: &Value| *value == Value::string("v");
+    assert!(into_store(deque.clone()).any_value(is_seven));
+    assert!(!into_store(deque.clone()).any_value(is_v));
+    assert!(into_store(map.clone()).any_value(is_v));
+    // Heap keys are ordering keys, not element values a caller can own.
+    assert!(!into_store(heap.clone()).any_value(|_| true));
+
+    // A store whose storage another clone shares gives up nothing.
+    let shared = into_store(deque.clone());
+    let keep = shared.clone();
+    assert!(shared.into_owned_values().is_empty());
+    drop(keep);
+
+    assert_eq!(into_store(deque).into_owned_values(), vec![number(7)]);
+    assert_eq!(
+        into_store(map).into_owned_values(),
+        vec![Value::string("v")]
+    );
+    assert!(into_store(heap).into_owned_values().is_empty());
+}
