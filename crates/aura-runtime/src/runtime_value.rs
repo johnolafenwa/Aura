@@ -10243,10 +10243,19 @@ impl LightweightTaskScheduler {
     }
 
     fn resume_task(&mut self, task_id: u64, reason: RuntimeSchedulerWakeReason) {
-        let Some(mut record) = self.tasks.remove(&task_id) else {
+        // The record stays in the table while its task runs, and leaves it
+        // only when the task ends. Nothing the turn does reads it there: the
+        // coroutine never reaches the scheduler, retiring the wait only
+        // clears what the lines below clear, and the admissions after the
+        // turn insert other tasks.
+        if !self.tasks.contains_key(&task_id) {
             return;
-        };
+        }
         self.disarm_wait(task_id);
+        let record = self
+            .tasks
+            .get_mut(&task_id)
+            .expect("a resumed task is in the table");
         record
             .state
             .waits_without_deadline
@@ -10265,7 +10274,6 @@ impl LightweightTaskScheduler {
         }
         match outcome {
             CoroutineResult::Yield(TaskYield::Wait(wait)) => {
-                self.tasks.insert(task_id, record);
                 if let Some(reason) = wait.ready_reason(false) {
                     self.ready.push_back((task_id, reason));
                 } else {
@@ -10273,11 +10281,11 @@ impl LightweightTaskScheduler {
                 }
             }
             CoroutineResult::Yield(TaskYield::YieldNow) => {
-                self.tasks.insert(task_id, record);
                 self.ready
                     .push_back((task_id, RuntimeSchedulerWakeReason::Ready));
             }
             CoroutineResult::Yield(TaskYield::Exit) => {
+                let mut record = self.take_ended_task(task_id);
                 record.context.yielder.set(std::ptr::null());
                 let result = CURRENT_LIGHTWEIGHT_TASK_EXIT
                     .with(|slot| slot.borrow_mut().take())
@@ -10309,12 +10317,20 @@ impl LightweightTaskScheduler {
                 retire_lightweight_task_record(record);
             }
             CoroutineResult::Return(result) => {
+                let record = self.take_ended_task(task_id);
                 record.context.yielder.set(std::ptr::null());
                 sync_host::holder_ended(&record.context.sync_holder);
                 self.complete_task(task_id, &record.state, result);
                 retire_lightweight_task_record(record);
             }
         }
+    }
+
+    /// The record of a task whose turn ended it, out of the table.
+    fn take_ended_task(&mut self, task_id: u64) -> LightweightTaskRecord {
+        self.tasks
+            .remove(&task_id)
+            .expect("a task stays in the table until it ends")
     }
 
     fn arm_wait(&mut self, task_id: u64, registration: TaskWaitRegistration) {
