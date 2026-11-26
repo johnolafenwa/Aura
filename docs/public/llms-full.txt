@@ -2064,8 +2064,8 @@ evaluation-order, diagnostic, and backend rules.
 
 ## Memory
 
-[Memory Module](/manual/mem) has the rules for alignment, ordering, and
-undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
+[Memory Module](/manual/mem) has the rules for alignment, ordering,
+allocation, and undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
 32, or 64 for plain and volatile access, and 32 or 64 for atomic access.
 
 | API | Signature | Contract |
@@ -2080,6 +2080,11 @@ undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
 | `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN) -> uintN` | Adds `value`, wrapping, and returns the previous value. |
 | `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN) -> uintN` | Stores `replacement` if the cell holds `expected`, and returns the previous value. |
 | `mem.fence` | `fence() -> None` | Orders earlier memory accesses before later ones. |
+| `mem.alloc` | `alloc(size: uint64, align: uint64) -> uint64` | The address of a new block, or 0 when the memory is not there. |
+| `mem.free` | `free(address: uint64, size: uint64, align: uint64) -> None` | Gives the block back. Takes the size and alignment it was made with. |
+| `mem.realloc` | `realloc(address: uint64, old_size: uint64, align: uint64, new_size: uint64) -> uint64` | The block at its new size with its bytes kept, or 0 with the block unchanged. |
+| `mem.heap_add_region` | `heap_add_region(start: uint64, size: uint64) -> None` | Gives a freestanding program's allocator a region of memory. Does nothing in a hosted program. |
+| `mem.heap_free_bytes` | `heap_free_bytes() -> uint64` | The bytes of a freestanding program's regions that no block holds. 0 in a hosted program. |
 
 ## Randomness
 
@@ -14210,21 +14215,47 @@ else. An export in an imported module is also defined in the object.
 
 ## What A Freestanding Program May Hold
 
-Every value is one or more machine words. Nothing lives on a heap.
+Every value is one or more machine words. Three kinds of value also own
+blocks on a heap: text, lists, dictionaries, and an enum that holds
+itself. See [Text](#text), [Lists](#lists), [Dictionaries](#dictionaries), and
+[Enums That Hold Themselves](#enums-that-hold-themselves).
+A program reaches other heap memory through addresses: see
+[The Heap](#the-heap).
+
+A tuple or an enum whose parts are all available types is available too.
+The compiler keeps it in machine words, as it keeps a class: a tuple is its
+elements, and an enum is the variant's number and room for each variant's
+payloads.
+
+```aura
+enum Reading:
+    Value(int64)
+    Missing
+
+def read(port: uint64) -> (Reading, uint64):
+    if port == 0:
+        return (Reading.Missing, port)
+    return (Reading.Value(42), port + 1)
+```
 
 | Available | Not available |
 | --- | --- |
 | `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
-| Classes whose fields are available types, with methods | Classes that hold a `str`, a collection, or an `indirect` field |
-| `extern "C"` classes | `str`, `bytes`, `list`, `dict`, `set`, tuples, `Array` |
-| `T \| None` and other unions of available types | Enums, `Result`, `Lookup` |
+| Classes whose fields are available types, with methods | Classes that hold a `set` |
+| `str` with literals, `+`, comparisons, `len`, `byte_len`, `starts_with`, `ends_with`, `contains`, and f-strings of text, integers, and `bool` | Every other `str` method, indexing, slices, floats and format specs in f-strings, `str \| None` |
+| `list` of integers, floats, `bool`, `str`, classes, tuples, enums, lists, or unions of those, with literals, `append`, `pop`, `insert`, `swap`, `reverse`, `reserve`, `clear`, `len`, `is_empty`, element reads and writes, `view` of an element, and `for` loops | Lists of unions of words alone such as `list[int64 \| None]`, the other `list` methods, slices |
+| `dict` with `int64`, `uint64`, or `str` keys and any value a list may hold, with literals, `d[key]`, `d[key] = value`, `key in d`, `len`, `is_empty`, `keys`, `values`, `items`, and `clear` | Other key types, `get`, `remove`, and the other `dict` methods |
+| `extern "C"` classes | `set`, `Array` |
+| Tuples of available types | Tuples that hold any other type |
+| Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union or a collection, and `Lookup` |
+| `T \| None` and other unions of available types, `str \| None` among them | Unions that hold any other type |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
-| `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union | `try`, `with`, tasks, queues |
-| `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
+| `if`, `while`, `for` over `range`, over a list, or over a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
+| `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print` |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
 | Module constants with a literal value | Module constants computed when the program starts |
-| `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles, `bytes` and `ptr[T]` arguments. Pass an address as a `uint64`. |
+| `extern "C"` calls with scalar, `mut` scalar, struct, text, and callback arguments | Opaque handles, `bytes` and `ptr[T]` arguments. Pass an address as a `uint64`. |
 
 `aura check --freestanding` and the build report each construct outside the
 subset as [`AU2052`](/manual/diagnostics), with the function that holds it:
@@ -14236,6 +14267,170 @@ error[AU2052]: `entry` calls `print`, which a freestanding build cannot compile
 
 Only reached functions are checked. A package may hold hosted helpers and
 tests that a freestanding build never compiles.
+
+## Text
+
+A freestanding program holds `str` values: in locals, parameters, results,
+classes, tuples, and enums.
+
+```aura
+def greeting(name: str, tries: int64) -> str:
+    mut text = "hello " + name
+    if tries > 1:
+        text = text + " again"
+    return text
+
+export "C" def greeting_length(tries: int64) -> int64:
+    text = greeting("board", tries)
+    if text.ends_with("again"):
+        return text.len() + 1
+    return text.len()
+```
+
+A `str` lives in a block from the allocation hooks: a reference count, the
+length in bytes, the bytes, and a zero byte after them. The compiler
+counts the references and frees the block with its last one. The
+operations are written in Aura and compiled into the object only when the
+program holds a `str`.
+
+Available: literals, `+`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `len`,
+`byte_len`, `starts_with`, `ends_with`, and `contains`. A literal used in
+an operation is read where it lies in the program's data and allocates
+nothing.
+
+An f-string may hold text, integers of every width up to 64 bits, and
+`bool`: `f"{name}: {count}"`. A float, or a part with a format such as
+`{count:>4}`, is not available yet.
+
+A foreign function takes a `str` value as it takes a literal: a `cstr`
+parameter gets the address of the bytes, which end in a zero byte, and a
+`str` parameter gets the address and the length.
+
+```aura fragment
+extern "C" def uart_write(text: str) -> None
+
+export "C" def report(tries: int64) -> None:
+    uart_write(greeting("board", tries))
+```
+
+```c
+void uart_write(const char *text, size_t length);
+```
+
+The program needs a heap, as in the next section.
+
+## Lists
+
+A freestanding program holds lists of integers, floats, `bool`, text,
+classes, tuples, enums, and other lists.
+
+```aura
+def squares(n: int64) -> list[int64]:
+    mut out: list[int64] = []
+    for i in range(0, n):
+        out.append(i * i)
+    return out
+
+export "C" def sum_of_squares(n: int64) -> int64:
+    mut sum = 0
+    for value in squares(n):
+        sum = sum + value
+    return sum
+```
+
+A list is a header block from the allocation hooks, with a reference
+count, the length, and the capacity, and a buffer of 8-byte words. A
+number takes one word, and a class, a tuple, or an enum takes one for
+each of its words. The buffer doubles when it is full, through
+`aura_realloc`. The compiler frees both with the list's last reference,
+and first releases what each element owns: its text, its list, or its
+tree.
+
+Available: literals, `append`, `pop`, `insert`, `swap`, `reverse`,
+`reserve`, `clear`, `len`, `is_empty`, `items[i]`, `items[i] = value`,
+`view value = items[i]`, and `for value in items`. A negative index
+counts from the end. A write to an element releases the value it replaces. A list of
+`str | None` is available. A list of a union of words alone, such as
+`list[int64 | None]`, is not available yet. A list may be a `mut` parameter, a result, or a field of a
+class, a tuple, or an enum.
+
+An index outside the list is a failed assertion in
+`aura/freestanding_list.au`, trap code 3.
+
+## Dictionaries
+
+A freestanding program holds dictionaries whose keys are `int64`,
+`uint64`, or `str`. A value is anything a list may hold.
+
+```aura
+def count_words(words: list[str]) -> dict[str, int64]:
+    mut counts: dict[str, int64] = {}
+    for word in words:
+        if word in counts:
+            seen = counts[word]
+            counts[word.clone()] = seen + 1
+        else:
+            counts[word.clone()] = 1
+    return counts
+
+export "C" def repeats() -> int64:
+    counts = count_words(["to", "be", "or", "not", "to", "be"])
+    return counts["to"] + counts.len()
+```
+
+A dictionary is a header block from the allocation hooks, a buffer of
+entries in the order they were added, and an index of the entries by
+hash. Both buffers double when they are full. The compiler frees all
+three with the dictionary's last reference, after it releases what each
+key and each value owns.
+
+Available: literals, `d[key]`, `d[key] = value`, `key in d`, `len`,
+`is_empty`, `keys`, `values`, `items`, `clear`, and `view value =
+d[key]`. `keys`, `values`, and `items` return lists, so `for (key, value)
+in d.items()` runs in the order the keys were added. `get` and `remove`
+are not available yet, because they return a `Lookup`.
+
+`d[key]` for a key the dictionary does not hold is a failed assertion in
+`aura/freestanding_dict.au`, trap code 3.
+
+## Enums That Hold Themselves
+
+An enum may hold itself through an `indirect` payload, which is how a
+program writes a list or a tree:
+
+```aura
+enum Chain:
+    End
+    Link(int64, indirect Chain)
+
+def sum_of(chain: Chain) -> int64:
+    match chain:
+        case Chain.End:
+            return 0
+        case Chain.Link(value, rest):
+            return value + sum_of(rest)
+
+export "C" def sum_to(n: int64) -> int64:
+    mut chain = Chain.End
+    for i in range(0, n):
+        chain = Chain.Link(i, chain)
+    return sum_of(chain)
+```
+
+Each `indirect` payload lives in a block from the allocation hooks: a
+reference count, then the payload's words. The enum value itself stays in
+machine words and holds the block's address. The compiler counts the
+references, and the program frees a block when its last reference goes, so
+`sum_to` returns with every block freed.
+
+A class, a tuple, or a `Result` may hold such an enum. `match own` moves
+its payloads out, and `try` passes one on in an error.
+
+The program needs a heap: name a region with `mem.heap_add_region` first,
+or define the hooks. See [The Heap](#the-heap). A request the heap turns
+down is a failed assertion, trap code 3.
+
+A program with no such enum allocates nothing and needs no hook.
 
 ## Failed Checks
 
@@ -14299,6 +14494,90 @@ export "C" def put(byte: uint8) -> None:
     mem.volatile_write_uint8(UART, byte)
 ```
 
+## The Heap
+
+`mem.alloc`, `mem.free`, and `mem.realloc` give a freestanding program
+blocks of memory. The program first names the memory the heap may use:
+
+```aura fragment
+import mem
+
+export "C" def kernel_main(heap_start: uint64, heap_size: uint64) -> None:
+    mem.heap_add_region(heap_start, heap_size)
+    table = mem.alloc(4096, 16)
+    if table == 0:
+        return
+    mem.write_uint64(table, 1)
+    mem.free(table, 4096, 16)
+```
+
+[Memory Module](/manual/mem#allocation) has the rules of the three
+functions. They call three C symbols, the allocation hooks:
+
+```c
+void *aura_alloc(size_t size, size_t align);
+void aura_free(void *address, size_t size, size_t align);
+void *aura_realloc(void *address, size_t old_size, size_t align, size_t new_size);
+```
+
+A program that calls one of the three functions and declares no hook gets
+Aura's allocator. The build compiles it into the object, which then
+defines these symbols:
+
+| Symbol | C signature | Purpose |
+| --- | --- | --- |
+| `aura_alloc`, `aura_free`, `aura_realloc` | Above | The hooks. |
+| `aura_heap_add_region` | `void aura_heap_add_region(uint64_t start, uint64_t size)` | What `mem.heap_add_region` calls. Startup code in C or assembly may call it too. |
+| `aura_heap_free_bytes` | `uint64_t aura_heap_free_bytes(void)` | What `mem.heap_free_bytes` calls. |
+
+- **Regions.** The heap starts empty, and every request fails until the
+  program adds a region. A program may add several, at any time. A region
+  is never given back. A region too small to hold a 32-byte block is
+  ignored.
+- **Cost.** A block takes its size rounded up to a multiple of 16, plus 8
+  bytes, and at least 32 bytes. The allocator adds 4 to 6 KB of code, by
+  target, to the object.
+- **State.** The allocator keeps its lists in 784 bytes of the object's
+  `.bss` section. Startup code must zero `.bss` before the first
+  allocation, as it must for C.
+- **Reuse.** A freed block joins the free blocks on either side of it, so
+  freeing everything leaves each region whole.
+- **Cores.** A spin lock guards every call, so several cores may
+  allocate. A call from an interrupt handler deadlocks if the handler
+  interrupted an allocation. Turn interrupts off around allocations, or
+  do not allocate in a handler.
+- **Checks.** A failed check inside the allocator, which a damaged heap
+  can cause, calls `aura_trap` with the file `aura/freestanding_heap.au`.
+
+### Your Own Allocator
+
+The five symbols are weak. A definition in C, assembly, or another object
+replaces the build's at link time. Define all three hooks or none: memory
+from one allocator must not reach the `free` of another.
+
+```c
+void *aura_alloc(size_t size, size_t align) { return kernel_alloc(size, align); }
+void aura_free(void *address, size_t size, size_t align) { kernel_free(address, size); }
+void *aura_realloc(void *address, size_t old_size, size_t align, size_t new_size) {
+    return kernel_resize(address, old_size, new_size, align);
+}
+```
+
+A hook written in Aura is an exported function:
+
+```aura fragment
+export "C" def aura_alloc(size: uint64, align: uint64) -> uint64:
+    return bump(size, align)
+```
+
+A program that declares any of the three hooks, as an `export "C" def` or
+an `extern "C" def`, gets no allocator from the build. The object then
+refers to each heap symbol the program calls and does not define.
+
+- A hook returns 0 when it has no memory. `mem.alloc` hands the 0 on.
+- `align` is a power of two, and `size` is at least 1.
+- `aura_free` gets the size and alignment the block was made with.
+
 ## Targets
 
 `--target` names the machine. Without it the build targets the
@@ -14330,6 +14609,7 @@ The object refers to these symbols and no others:
 | --- | --- |
 | `aura_trap` | The object holds a check. |
 | The program's `extern "C"` functions | The program calls them. |
+| `aura_alloc`, `aura_free`, `aura_realloc`, `aura_heap_add_region`, `aura_heap_free_bytes` | The program calls the `mem` function for one and declares an allocation hook itself. See [The Heap](#the-heap). |
 
 The compiler may copy or compare a large value through `memcpy`, `memmove`,
 `memset`, or `memcmp`. The object carries a small weak definition of each,
@@ -14379,7 +14659,16 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 
 ## Current Limits
 
-- No heap values. A freestanding program cannot allocate.
+- The heap values of the language are `str`, lists, dictionaries, and
+  enums that hold themselves: no `set` yet, and a dictionary has no
+  `get` and no `remove`. A program allocates other memory
+  through the [`mem` module](/manual/mem).
+- Text has no indexing or slices, an f-string takes no float and no
+  format spec.
+- A field that holds text, a list, or an enum that holds itself cannot
+  be assigned. Build a new value instead.
+- Releasing a long list calls itself once for each link, so a very long
+  list needs stack to match.
 - No inline assembly and no port I/O instructions. Memory-mapped devices
   are reached with the [`mem` module](/manual/mem), and everything else
   through `extern "C"` functions.
@@ -20178,10 +20467,12 @@ diagnostics.
 
 # Memory Module
 
-The `mem` module reads and writes integers at a raw address. It is for
-device registers, memory shared with C, and the lock-free cells a kernel or
-a driver needs. Each function compiles to one machine instruction, in
-hosted and [freestanding](/manual/freestanding) builds alike.
+The `mem` module reads and writes integers at a raw address, and allocates
+and frees blocks of memory. It is for device registers, memory shared with
+C, the lock-free cells a kernel or a driver needs, and data whose size is
+known only when the program runs. Each read or write compiles to one
+machine instruction, in hosted and [freestanding](/manual/freestanding)
+builds alike.
 
 ```aura fragment
 import mem
@@ -20216,6 +20507,11 @@ for the atomic ones.
 | `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN) -> uintN` | Adds `value`, wrapping, and returns the previous value. |
 | `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN) -> uintN` | Stores `replacement` if the cell holds `expected`. Returns the previous value either way, so the exchange happened when the result equals `expected`. |
 | `mem.fence` | `fence() -> None` | Orders every earlier memory access before every later one. |
+| `mem.alloc` | `alloc(size: uint64, align: uint64) -> uint64` | The address of a new block of `size` bytes at a multiple of `align`, or 0 when the memory is not there. |
+| `mem.free` | `free(address: uint64, size: uint64, align: uint64) -> None` | Gives the block back. |
+| `mem.realloc` | `realloc(address: uint64, old_size: uint64, align: uint64, new_size: uint64) -> uint64` | The address of the block at its new size, or 0 with the block unchanged. |
+| `mem.heap_add_region` | `heap_add_region(start: uint64, size: uint64) -> None` | Gives a freestanding program's allocator the `size` bytes at `start`. |
+| `mem.heap_free_bytes` | `heap_free_bytes() -> uint64` | The bytes of a freestanding program's regions that no block holds. |
 
 ## Rules
 
@@ -20241,6 +20537,50 @@ for the atomic ones.
   type and does not model writes. A write to memory that an Aura value
   occupies is outside what a proof covers.
 
+## Allocation
+
+`mem.alloc` returns the address of a block, and `mem.free` gives it back:
+
+```aura fragment
+import mem
+
+def sum_of_squares(count: uint64) -> uint64:
+    squares = mem.alloc(count * 8, 8)
+    if squares == 0:
+        return 0
+    mut i: uint64 = 0
+    while i < count:
+        mem.write_uint64(squares + i * 8, i * i)
+        i = i + 1
+    mut total: uint64 = 0
+    i = 0
+    while i < count:
+        total = total + mem.read_uint64(squares + i * 8)
+        i = i + 1
+    mem.free(squares, count * 8, 8)
+    return total
+```
+
+- **Check for 0.** `alloc` and `realloc` return 0 when no block is large
+  enough. They never stop the program.
+- **`align` is a power of two.** Any other alignment returns 0.
+- **A new block's bytes are not zeroed.** Write before you read.
+- **`free` takes the size and alignment the block was made with.** For a
+  block `realloc` returned, the size is its `new_size`. Freeing address 0
+  does nothing. Freeing a block twice, or with another size or alignment,
+  has undefined behavior.
+- **`realloc` keeps the bytes.** The block's first bytes, up to the smaller
+  of the two sizes, are the same at the address it returns. That address
+  may be the old one. When it returns 0 the old block is still valid.
+  `realloc` of address 0 allocates.
+- **A size of 0 is a size of 1.** Every block has an address of its own.
+
+In a hosted program the blocks come from the process, as with C's
+`malloc`. In a freestanding program they come from the allocation hooks.
+[Freestanding Builds](/manual/freestanding#the-heap) describes the hooks,
+the allocator the build provides, and `heap_add_region`. In a hosted
+program `heap_add_region` does nothing and `heap_free_bytes` returns 0.
+
 ## A Spin Lock
 
 ```aura fragment
@@ -20257,19 +20597,16 @@ def release(lock: uint64) -> None:
 ## Hosted Programs
 
 The module works under `aura run` and in an ordinary `aura build`, with
-the same results. An address there comes from C:
+the same results. An address there comes from `mem.alloc` or from C:
 
 ```aura fragment
 import mem
 
-extern "C" def malloc(size: uint64) -> uint64
-extern "C" def free(address: uint64) -> None
-
 def main() -> None:
-    block = malloc(16)
+    block = mem.alloc(16, 4)
     mem.write_uint32(block, 7)
     print(mem.read_uint32(block))
-    free(block)
+    mem.free(block, 16, 4)
 ```
 
 ## Current Limits
@@ -20278,6 +20615,7 @@ def main() -> None:
   bits.
 - No atomic access to 8-bit and 16-bit cells.
 - One ordering, sequentially consistent.
+- No way to copy or fill a run of bytes in one call. Use a loop.
 - No inline assembly and no port I/O instructions. On x86-64, reach I/O
   ports through an `extern "C"` function written in assembly.
 
@@ -62493,11 +62831,15 @@ function hands back a second result.
 Aura keeps a number, a `bool`, or a class made of those directly in machine
 registers and on the stack. Those values need no runtime, and they are what
 a freestanding program is made of: fixed-width integers and floats, classes
-of them, `T | None`, functions, generics, traits, loops, `assert`, and
-contracts.
+of them, tuples and enums of them, `T | None`, functions, generics,
+traits, loops, `match`, `assert`, and contracts.
 
-Anything that lives on the heap is out: `str`, lists, dictionaries, enums
-with payloads, closures, tasks. You do not have to remember the list. Ask
+Some of the values Aura keeps on the heap for you are out:
+sets, closures, tasks. Four kinds are in. A dictionary works, with text or integer keys. A list
+works, of numbers, text, classes, enums, or other lists, with `append`, indexing, and `for`. A `str` works, with `+`, comparisons, and a few methods, so a kernel
+can build a message and hand it to its console. And an enum may hold
+itself through an `indirect` payload, so you can write a linked list or a
+tree. The compiler frees each block when nothing refers to it. You do not have to remember the list. Ask
 the compiler:
 
 ```console
@@ -62639,14 +62981,56 @@ def put_number(uart: uint64, value: uint64) -> None:
         divisor = divisor // 10
 ```
 
+## Memory that grows
+
+Everything so far has a size the compiler knows. A kernel also keeps
+tables that grow: the processes it runs, the pages it has handed out. For
+those it needs a heap, and a freestanding program has one as soon as it
+says where the heap may live:
+
+```aura fragment
+mem.heap_add_region(heap_start(), heap_size())
+```
+
+From then on `mem.alloc` hands out blocks of that region, `mem.realloc`
+resizes one, and `mem.free` gives it back. Here is a list of numbers that
+doubles its room whenever it fills:
+
+```aura fragment
+mut room: uint64 = 4
+mut count: uint64 = 0
+mut primes = mem.alloc(room * 8, 8)
+assert primes != 0, "the heap has no memory"
+...
+if count == room:
+    primes = mem.realloc(primes, room * 8, 8, room * 16)
+    assert primes != 0, "the heap is full"
+    room = room * 2
+mem.write_uint64(primes + count * 8, candidate)
+count = count + 1
+```
+
+Two things differ from the lists you know. A block is an address and
+nothing more, so you read and write it with `mem` and you free it
+yourself, passing the size you asked for. And `mem.alloc` returns 0 when
+the heap is full, where a hosted program would stop. A kernel has to be
+able to say no to a request and keep running.
+
+Where does the allocator come from, with no runtime? It is a few hundred
+lines of Aura, and the compiler adds it to your object when you call
+`mem.alloc`. A kernel that already has an allocator defines three
+functions, `aura_alloc`, `aura_free`, and `aura_realloc`, and Aura calls
+those instead.
+
 ## Booting it
 
 The complete program is in *examples/freestanding/kernel*. Its
 `kernel_main` counts primes, runs a float computation, takes a spin lock
-built from `mem.atomic_compare_exchange_uint32`, and then overflows a
-`uint8` on purpose. Each board adds a short assembly file that sets the
-stack pointer, turns the float registers on, and calls `kernel_main`, plus
-a linker script that says where memory is.
+built from `mem.atomic_compare_exchange_uint32`, sums the primes from a
+block on the heap, and then overflows a `uint8` on purpose. Each board
+adds a short assembly file that sets the stack pointer, turns the float
+registers on, and calls `kernel_main`, plus a linker script that says
+where memory is.
 
 QEMU can emulate both boards the example supports:
 
@@ -62656,10 +63040,14 @@ p=168
 c=111
 r=1000
 n=100
-trap 1 main.au:154:13
+h=76127
+f=0
+trap 1 main.au:204:13
 ```
 
-The first four lines are computed results. The last is our `aura_trap`
+The first six lines are computed results. `h` is the sum of the primes
+below 1000, read back from the heap, and `f` says that no byte of the
+heap is missing after the block is freed. The last is our `aura_trap`
 hook reporting the overflow, with the file and line it happened on, from a
 machine that has no operating system at all. Run it with `aarch64` and the
 output is the same.
@@ -62667,8 +63055,9 @@ output is the same.
 ## What is missing
 
 This is the first step toward systems work in Aura, and it is honest to
-say where it stops. There is no allocator, so there are no strings or
-collections. There is no inline assembly, so startup code and x86 port
+say where it stops. The heap holds blocks of bytes, text, lists, and the nodes of
+enums that hold themselves, and dictionaries: there are no sets yet,
+and text cannot format a float. There is no inline assembly, so startup code and x86 port
 I/O stay in an assembly file. State that outlives a function call has to
 live at an address you manage through `mem`, where `aura verify` cannot
 follow it. The

@@ -7,6 +7,49 @@ in this file.
 
 ## Unreleased
 
+- Freestanding builds have a heap. `mem.alloc`, `mem.free`, and
+  `mem.realloc` hand out blocks of memory at a `uint64` address, and
+  `mem.heap_add_region` names the memory the heap may use. They call three
+  allocation hooks, the C symbols `aura_alloc`, `aura_free`, and
+  `aura_realloc`. A program that defines none of them gets an allocator
+  written in Aura, which `aura build --freestanding` compiles into the
+  object as weak symbols, so the build still writes one object and links
+  nothing. In a hosted program the same functions use the process
+  allocator. The values the language keeps on a heap, such as `str` and
+  `list`, are still not available in a freestanding build.
+- Freestanding builds compile tuples, enums, and `Result` whose parts are
+  all numbers, `bool`, classes of those, or other such tuples and enums,
+  with `match` and `try` on them. The compiler keeps each in machine words with no
+  heap. An enum that holds a collection or a union is still reported as
+  `AU2052`.
+- Freestanding builds compile dictionaries with `int64`, `uint64`, or
+  `str` keys: literals, `d[key]`, `d[key] = value`, `key in d`, `len`,
+  `is_empty`, `keys`, `values`, `items`, and `clear`. The hash table is
+  written in Aura and keeps the order the keys were added in. `clone` of
+  a text is available too.
+- Freestanding builds compile unions of values that own heap memory,
+  such as `str | None` and `list[int64] | None`, as locals, parameters,
+  results, fields, and list elements, with `is None` and `match` on them.
+- Freestanding builds compile `str`: literals, values in locals, classes,
+  tuples, and enums, `+`, the comparisons, `len`, `byte_len`,
+  `starts_with`, `ends_with`, and `contains`. A `str` lives in a counted
+  block from the allocation hooks, and its operations are written in
+  Aura. A foreign function takes a `str` value as an address, or as an
+  address and a length. An f-string may hold text, integers, and `bool`.
+  Indexing, the other text methods, and floats or format specs in
+  f-strings are still reported as `AU2052`.
+- Freestanding builds compile lists of integers, floats, `bool`, text,
+  classes, tuples, enums, and lists: literals, `append`, `len`,
+  `is_empty`, `pop`, `insert`, `swap`, `reverse`, `reserve`, `clear`,
+  element reads and writes, `view` of an element, and `for` loops. A list releases what its
+  elements own when its last reference goes. A list is a counted header and a buffer that
+  grows through `aura_realloc`, and its operations are written in Aura.
+  An index out of range calls the trap hook with code 3.
+- Freestanding builds compile an enum with an `indirect` payload of its own
+  type, such as a list or a tree. Each such payload lives in a block from
+  the allocation hooks with a reference count, and the program frees
+  every block when its last reference goes. Classes, tuples, and `Result`
+  may hold such an enum, and `match own` and `try` work on them.
 - Tensors: `Tensor[float16]` holds IEEE half-precision floats. It takes
   and gives `float32` numbers and arrays, rounds every result to the
   nearest half, and does not mix with `float32` in one operation.

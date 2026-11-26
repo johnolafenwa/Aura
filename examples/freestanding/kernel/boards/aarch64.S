@@ -17,6 +17,17 @@ console_address:
     ldr x0, =0x09000000
     ret
 
+    // The memory after the stack is the heap's.
+    .globl heap_start
+heap_start:
+    ldr x0, =heap_base
+    ret
+
+    .globl heap_size
+heap_size:
+    ldr x0, =0x100000
+    ret
+
     .globl power_off
 power_off:
     ldr x0, =0x84000008        // PSCI SYSTEM_OFF

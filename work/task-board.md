@@ -2,6 +2,33 @@
 
 Last updated: 2026-11-24
 
+
+## Freestanding heap
+
+- Target: memory at run time in freestanding builds (ADR-0128), and after
+  it the heap values of the language there. Scope: the `mem` module, the
+  freestanding emitter, and a new Aura source file. No file of the runtime
+  moves.
+- Done: the allocation hooks `aura_alloc`, `aura_free`, and `aura_realloc`;
+  `mem.alloc`, `mem.free`, `mem.realloc`, `mem.heap_add_region`, and
+  `mem.heap_free_bytes` in hosted and freestanding builds; the default
+  allocator in `crates/aura-compiler/std/freestanding_heap.au`; the heap in
+  the example kernel.
+- Verified locally on Linux x86-64: 9 compiler tests, 5 command tests, and
+  4 runtime tests for the heap pass. The example kernel boots under QEMU on
+  RISC-V and AArch64 and prints `h=76127` and `f=0`.
+- Done after that, not yet in a pull request: tuples, enums, and `Result`
+  of words in freestanding builds, kept in machine words (ADR-0129), with
+  `try` on them, and enums that hold themselves in counted heap blocks
+  (ADR-0160), `str` with its first operations and f-strings, and lists of numbers,
+  text, classes, enums, and lists, 22 compiler tests and 6 command tests.
+  [Notes](2026-11-24-freestanding-values.md)
+- Remaining: `dict`, `set`,
+  and closures in freestanding builds, by route D1 of
+  [checkpoint 40](../architecture_docs/40-freestanding-heap-design-checkpoint.md),
+  a lean value layer written in Aura, which the owner chose.
+  [Notes](2026-11-24-freestanding-heap.md)
+
 ## Dict and set speed (in progress)
 
 - Target: John's 2026-11-24 goal of Rust's speed, dict and set half.
