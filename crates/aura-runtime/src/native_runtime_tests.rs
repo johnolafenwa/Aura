@@ -24875,11 +24875,25 @@ fn direct_tcp_wrappers_cover_stream_reads_at_end_of_stream_and_closed_resources(
     assert!(coverage_is_none(expect_result_ok_payload(
         super::aura_direct_tcp_stream_read_line(client_ptr, duration_value(5_000)),
     )));
+    // The end of the stream is a null line with no failure.
+    let mut failure = std::ptr::null_mut();
+    assert!(super::aura_direct_tcp_stream_read_line_try(
+        client_ptr,
+        duration_value(5_000),
+        &mut failure
+    )
+    .is_null());
+    assert!(failure.is_null());
     assert!(coverage_is_none(expect_result_ok_payload(
         super::aura_direct_tcp_stream_read_bytes(client_ptr, int_value(4), duration_value(5_000)),
     )));
     expect_unit(super::aura_direct_tcp_stream_close(client_ptr));
     let timeout = || duration_value(1_000);
+    // A closed stream fails, and the failure word holds the `Result.Err`.
+    assert!(
+        super::aura_direct_tcp_stream_read_line_try(client_ptr, timeout(), &mut failure).is_null()
+    );
+    expect_result_err_payload(failure);
     expect_result_err_payload(super::aura_direct_tcp_stream_read_all(
         client_ptr,
         timeout(),

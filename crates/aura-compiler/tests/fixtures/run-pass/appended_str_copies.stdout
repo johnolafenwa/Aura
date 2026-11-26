@@ -1,0 +1,7 @@
+MSG a
+MSG b
+MSG a,MSG b,END
+MSG a,MSG a,END
+MSG a,MSG b,END
+4
+[wx, wx] wx

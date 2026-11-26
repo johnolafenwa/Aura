@@ -3240,6 +3240,7 @@ impl<'a> NativeCodegen<'a> {
             str_append_root: None,
             owned_replace_receiver: None,
             lent_temps: HashMap::new(),
+            read_only_field_lends: classes::read_only_field_lends(function, &field_lend_temps),
             field_lend_temps,
             field_lends: HashMap::new(),
             record_lends: HashMap::new(),
@@ -4908,6 +4909,9 @@ struct FunctionCompiler<'a> {
     /// The temporaries of lends of a field to one runtime operation, which
     /// may lend the field's box as it is. See `classes::field_lend_temps`.
     field_lend_temps: HashSet<String>,
+    /// The field lend temporaries whose one operation only reads the list.
+    /// See `classes::read_only_field_lends`.
+    read_only_field_lends: HashSet<String>,
     /// The field lends in progress that lent a box as it is, by temporary.
     field_lends: HashMap<String, classes::FieldLend>,
     /// The lends of a plain record to a method call in progress that read
@@ -6081,14 +6085,16 @@ impl<'a> FunctionCompiler<'a> {
                         Rvalue::Call {
                             callee:
                                 CallTarget::Runtime {
+                                    op: RuntimeOp::Resource(op),
                                     receiver: Some(file),
                                     ..
                                 },
+                            args,
                             ..
                         },
                 } = instruction
                 {
-                    self.compile_try_read(target, file)?;
+                    self.compile_try_read(target, *op, file, args)?;
                     continue;
                 }
             }
@@ -12055,7 +12061,26 @@ impl<'a> FunctionCompiler<'a> {
                     index + 1
                 ));
             }
-            let loaded = self.load_operand(&argument.value)?;
+            let loaded = match &argument.value {
+                // A stream in a field is passed where it lies to a builtin
+                // that borrows it: the builtin reads the stream it names,
+                // and the field keeps it.
+                Operand::Place(place)
+                    if place.contains('.')
+                        && builtin
+                            .metadata()
+                            .params
+                            .get(index)
+                            .map(|param| param.passing)
+                            == Some(ReceiverKind::Borrow)
+                        && self.type_of_place(place).ok()
+                            == Some(DirectType::Opaque(Type::named("http.Stream"))) =>
+                {
+                    let ty = DirectType::Opaque(Type::named("http.Stream"));
+                    self.load_borrowed_field_argument(&argument.value, &ty)?
+                }
+                operand => self.load_operand(operand)?,
+            };
             let loaded = self.ensure_opaque(loaded)?;
             loaded_args.push(loaded);
         }
@@ -16358,11 +16383,15 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let tag = codegen.builder.iconst(types::I64, index as i64);
                 let call = codegen.builder.call(inject, &[ptr, len, tag, transferred]);
+                // The injection names the union's type, which is all a tag
+                // gives a union.
+                codegen.shaped_boxes.insert(call.results[0]);
                 Ok(ValueRef {
                     values: call.results,
                     ty: DirectType::Opaque(union_type.clone()),
                 })
             })?;
+        self.shaped_boxes.insert(boxed.values[0]);
         self.mark_temporary_opaque_owned(&boxed);
         Ok(boxed)
     }
@@ -17504,7 +17533,7 @@ impl<'a> FunctionCompiler<'a> {
                 Rvalue::Call {
                     callee:
                         CallTarget::Runtime {
-                            op: RuntimeOp::Resource(crate::runtime_ops::ResourceOp::FileReadLine),
+                            op: RuntimeOp::Resource(op),
                             receiver: Some(Operand::Place(_)),
                             ..
                         },
@@ -17522,9 +17551,16 @@ impl<'a> FunctionCompiler<'a> {
         else {
             return false;
         };
+        // A stream's read takes its timeout, which the helper takes too.
+        let arity = match op {
+            crate::runtime_ops::ResourceOp::FileReadLine => 0,
+            crate::runtime_ops::ResourceOp::TcpStreamReadLine => 1,
+            _ => return false,
+        };
         result == moved
             && result.starts_with('%')
-            && args.is_empty()
+            && args.len() == arity
+            && args.iter().all(|arg| arg.writeback_place.is_none())
             && !self.lent_places.contains(result.as_str())
             && !self.lookup_slots.contains(result.as_str())
             && self
@@ -17540,18 +17576,35 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_try_read(
         &mut self,
         result: &str,
+        op: crate::runtime_ops::ResourceOp,
         file: &Operand,
+        args: &[MirArg],
     ) -> std::result::Result<(), String> {
         let loaded = self.load_operand(file)?;
         let file = self.ensure_opaque(loaded)?;
+        let mut words = vec![file.values[0]];
+        for argument in args {
+            let word = match &argument.value {
+                Operand::Default(ArgDefault::Omitted) => self.builder.iconst(types::I64, 0),
+                operand => {
+                    let loaded = self.load_operand(operand)?;
+                    self.ensure_opaque(loaded)?.values[0]
+                }
+            };
+            words.push(word);
+        }
         let slot = self.builder.create_sized_stack_slot(8, 3);
         let failure = self.builder.stack_addr(types::I64, slot, 0);
         let zero = self.builder.iconst(types::I64, 0);
         self.builder.store(MemFlags::new(), zero, failure, 0);
-        let call = self.builder.call(
-            self.runtime[RuntimeFn::FileReadLineTry],
-            &[file.values[0], failure],
-        );
+        words.push(failure);
+        let helper = if op == crate::runtime_ops::ResourceOp::TcpStreamReadLine {
+            RuntimeFn::TcpStreamReadLineTry
+        } else {
+            RuntimeFn::FileReadLineTry
+        };
+        let call = self.builder.call(self.runtime[helper], &words);
+        self.release_all_temporary_owned();
         self.pending_try_read = Some((result.to_string(), call.results[0], failure));
         Ok(())
     }
@@ -22520,20 +22573,15 @@ fn reads_operands_only(rvalue: &Rvalue) -> bool {
             ..
         } => matches!(
             op,
-            RuntimeOp::Str(StrOp::Contains | StrOp::StartsWith | StrOp::EndsWith | StrOp::Len)
-                | RuntimeOp::List(
-                    ListOp::Len
-                        | ListOp::IsEmpty
-                        | ListOp::Contains
-                        | ListOp::IndexOf
-                        | ListOp::Count
-                )
-                | RuntimeOp::Dict(
-                    DictOp::Len | DictOp::IsEmpty | DictOp::ContainsKey | DictOp::ContainsKeyInt64
-                )
-                | RuntimeOp::Set(
-                    SetOp::Len | SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64
-                )
+            RuntimeOp::Str(
+                StrOp::Contains | StrOp::StartsWith | StrOp::EndsWith | StrOp::Len | StrOp::ByteLen
+            ) | RuntimeOp::List(
+                ListOp::Len | ListOp::IsEmpty | ListOp::Contains | ListOp::IndexOf | ListOp::Count
+            ) | RuntimeOp::Dict(
+                DictOp::Len | DictOp::IsEmpty | DictOp::ContainsKey | DictOp::ContainsKeyInt64
+            ) | RuntimeOp::Set(
+                SetOp::Len | SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64
+            )
         ),
         _ => false,
     }

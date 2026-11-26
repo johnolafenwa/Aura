@@ -183,6 +183,35 @@ fn a_copy_made_only_to_be_appended_is_planned_as_words() {
     assert!(appended_copies(main).is_empty());
 }
 
+const LENT_COPIES: &str = r#"
+class Broker:
+    mailboxes: list[list[str]]
+
+    def deliver(mut self, name: str, clients: list[int64]):
+        message = "MSG " + name
+        for client in clients:
+            self.mailboxes[client].append(message.clone())
+        print(message)
+
+def main():
+    mut broker = Broker(mailboxes=[[], []])
+    broker.deliver("a", [1, 0])
+"#;
+
+#[test]
+fn a_copy_appended_to_a_lent_element_list_is_planned_as_words() {
+    let mir = lower_source_to_mir(LENT_COPIES).expect("the source should lower");
+    let module = validated_for_emission(&mir).expect("the source should validate");
+    let deliver = module
+        .functions
+        .iter()
+        .find(|function| function.name == "Broker.deliver")
+        .expect("the module has `Broker.deliver`");
+    // The lend of the element list between the copy and the append
+    // lends no part of `message`.
+    assert_eq!(appended_copies(deliver).len(), 1, "{deliver:#?}");
+}
+
 const METHODS: &str = r#"
 class Tokens:
     pos: int64

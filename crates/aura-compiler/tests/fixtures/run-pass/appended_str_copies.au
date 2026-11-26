@@ -1,0 +1,37 @@
+# Appending a copy of a `str` local to a list an element loan lends copies
+# the local's bytes into the list, with no box for the copy, and leaves the
+# local as it was.
+class Broker:
+    mailboxes: list[list[str]]
+    count: int64
+
+    def deliver(mut self, name: str, clients: list[int64]):
+        message = "MSG " + name
+        for client in clients:
+            self.mailboxes[client].append(message.clone())
+            self.count += 1
+        self.mailboxes[0].append(message.clone())
+        print(message)
+
+    def drain(self, client: int64) -> str:
+        mut lines: list[str] = []
+        for index in range(self.mailboxes[client].len()):
+            lines.append(self.mailboxes[client][index].clone())
+        lines.append("END")
+        return ",".join(lines)
+
+
+def main() -> int32:
+    mut broker = Broker(mailboxes=[[], [], []], count=0)
+    broker.deliver("a", [1, 2, 1])
+    broker.deliver("b", [2])
+    print(broker.drain(0))
+    print(broker.drain(1))
+    print(broker.drain(2))
+    print(broker.count)
+    mut kept: list[str] = []
+    word = "w" + "x"
+    kept.append(word.clone())
+    kept.append(word.clone())
+    print(f"{kept} {word}")
+    return 0

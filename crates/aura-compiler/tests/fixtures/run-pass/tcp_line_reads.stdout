@@ -1,0 +1,6 @@
+1:alpha
+2:beta
+3:gamma
+end of replies
+failed: io.Error.Closed
+served 3

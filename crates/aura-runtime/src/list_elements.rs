@@ -2178,6 +2178,10 @@ pub struct StrView {
 /// The auxiliary views a list keeps once the native runtime builds them.
 /// Their entries describe the current elements only while the box's access
 /// code selects them. A copy of the list starts without cached entries.
+///
+/// Until a view is made, the word may count misses instead (see
+/// [`Self::note_miss`]): an odd word holds the count shifted left by one,
+/// which no view's address is.
 #[derive(Default)]
 pub struct StrViewCache(std::sync::atomic::AtomicPtr<StrView>);
 
@@ -2185,10 +2189,30 @@ impl StrViewCache {
     /// Whether no view was ever made.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.0.load(std::sync::atomic::Ordering::Relaxed).is_null()
+        self.view().is_null()
     }
 
-    /// The view, made empty on first use.
+    /// The view's address, or null while there is none.
+    fn view(&self) -> *mut StrView {
+        let word = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        if word.addr() & 1 == 1 {
+            std::ptr::null_mut()
+        } else {
+            word
+        }
+    }
+
+    /// The misses the word counts while there is no view.
+    fn counted_misses(&self) -> usize {
+        let word = self.0.load(std::sync::atomic::Ordering::Relaxed).addr();
+        if word & 1 == 1 {
+            word >> 1
+        } else {
+            0
+        }
+    }
+
+    /// The view, made empty on first use, with the misses counted so far.
     ///
     /// # Safety
     ///
@@ -2197,14 +2221,41 @@ impl StrViewCache {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_or_create(&self) -> &mut StrView {
         use std::sync::atomic::Ordering;
-        let mut view = self.0.load(Ordering::Relaxed);
+        let mut view = self.view();
         if view.is_null() {
-            view = Box::into_raw(Box::default());
+            view = Box::into_raw(Box::new(StrView {
+                misses: self.counted_misses(),
+                ..StrView::default()
+            }));
             self.0.store(view, Ordering::Relaxed);
         }
         // SAFETY: the box is this cache's, and the caller holds the only
         // reference.
         unsafe { &mut *view }
+    }
+
+    /// Counts one miss. While there is no view and fewer than `defer`
+    /// misses came, the word counts it and there is no view to return, so
+    /// a short list read a few times before it is dropped makes none.
+    /// Otherwise the view, made on the miss that reaches `defer`, counts it.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::get_or_create`].
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn note_miss(&self, defer: usize) -> Option<&mut StrView> {
+        if self.view().is_null() {
+            let misses = self.counted_misses() + 1;
+            if misses < defer {
+                let word = std::ptr::without_provenance_mut(misses << 1 | 1);
+                self.0.store(word, std::sync::atomic::Ordering::Relaxed);
+                return None;
+            }
+        }
+        // SAFETY: the caller's contract.
+        let view = unsafe { self.get_or_create() };
+        view.misses += 1;
+        Some(view)
     }
 }
 
@@ -2216,7 +2267,7 @@ impl Clone for StrViewCache {
 
 impl Drop for StrViewCache {
     fn drop(&mut self) {
-        let view = *self.0.get_mut();
+        let view = self.view();
         if !view.is_null() {
             // SAFETY: `get_or_create` leaked this box for the cache.
             drop(unsafe { Box::from_raw(view) });

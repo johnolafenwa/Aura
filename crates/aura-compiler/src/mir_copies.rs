@@ -357,6 +357,83 @@ pub(crate) fn sink_unread_empty_lists(function: &mut MirFunction) {
     }
 }
 
+/// Moves the `Release` of a `list[str]` local past the reads of an element
+/// read from it just before, up to the `Release` of that element in the
+/// same block, when nothing between names the list. The element then dies
+/// before its list, so a backend that reads the element where the list
+/// keeps it needs no copy of it when the list goes.
+pub(crate) fn sink_list_releases_past_element_reads(function: &mut MirFunction) {
+    use crate::mir::{instruction_place_mentions, CallTarget};
+    use crate::runtime_ops::{ListOp, RuntimeOp};
+    let str_lists = function
+        .local_types
+        .iter()
+        .map(|local| (&local.name, &local.ty))
+        .chain(function.params.iter().map(|param| (&param.name, &param.ty)))
+        .filter(|(_, ty)| {
+            matches!(ty, Type::Named(name, args)
+                if name == "list" && args.as_slice() == [Type::named("str")])
+        })
+        .map(|(name, _)| name.clone())
+        .collect::<BTreeSet<_>>();
+    if str_lists.is_empty() {
+        return;
+    }
+    let root = |place: &str| place.split('.').next().unwrap_or(place).to_string();
+    for block in &mut function.blocks {
+        let mut index = 0;
+        while index < block.instructions.len() {
+            let Instruction::Release { place: list } = &block.instructions[index] else {
+                index += 1;
+                continue;
+            };
+            let list = list.clone();
+            let element = (index > 0 && str_lists.contains(&list))
+                .then(|| match &block.instructions[index - 1] {
+                    Instruction::Assign {
+                        target,
+                        value:
+                            Rvalue::Call {
+                                callee:
+                                    CallTarget::Runtime {
+                                        op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked),
+                                        receiver: Some(Operand::Place(receiver)),
+                                        ..
+                                    },
+                                ..
+                            },
+                    } if *receiver == list && !target.contains('.') => Some(target.clone()),
+                    _ => None,
+                })
+                .flatten();
+            let Some(element) = element else {
+                index += 1;
+                continue;
+            };
+            let mut end = None;
+            for (later, instruction) in block.instructions.iter().enumerate().skip(index + 1) {
+                if matches!(instruction, Instruction::Release { place } if *place == element) {
+                    end = Some(later);
+                    break;
+                }
+                let mut mentions = Vec::new();
+                instruction_place_mentions(instruction, &mut mentions);
+                if mentions.iter().any(|place| root(place) == list) {
+                    break;
+                }
+            }
+            match end {
+                Some(end) => {
+                    let release = block.instructions.remove(index);
+                    block.instructions.insert(end, release);
+                    index = end + 1;
+                }
+                None => index += 1,
+            }
+        }
+    }
+}
+
 /// How many times each place root is read, plus one for each definition by
 /// an `Assign` or a second `ReadLoan`, so a count of 1 for a `ReadLoan`
 /// target means one definition and exactly one read.

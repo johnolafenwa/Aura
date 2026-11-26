@@ -656,14 +656,23 @@ pub(super) fn appended_copies(function: &MirFunction) -> HashMap<String, String>
             let Some((target, copied)) = copied_str(instruction) else {
                 continue;
             };
-            let next = block.instructions[index + 1..].iter().find(|next| {
-                !matches!(
-                    next,
-                    Instruction::EndLoan { .. }
-                        | Instruction::SourceLocation { .. }
-                        | Instruction::SourceName { .. }
-                )
-            });
+            // A lend of the list the copy goes into may come between, when
+            // it lends no part of what the copy read.
+            let copied_root = copied.split('.').next().unwrap_or(copied);
+            let next = block.instructions[index + 1..]
+                .iter()
+                .find(|next| match next {
+                    Instruction::Lend { place, temp, .. } => {
+                        let lent = place.split('.').next().unwrap_or(place);
+                        lent == copied_root || temp == copied_root
+                    }
+                    _ => !matches!(
+                        next,
+                        Instruction::EndLoan { .. }
+                            | Instruction::SourceLocation { .. }
+                            | Instruction::SourceName { .. }
+                    ),
+                });
             if next.and_then(appended_local) == Some(target) {
                 copies.insert(target, copied);
             }
@@ -2198,8 +2207,22 @@ impl FunctionCompiler<'_> {
         let Some(copied) = self.appended_copies.get(target).cloned() else {
             return Ok(false);
         };
-        let Some(words) = self.load_place_words(&Operand::Place(copied))? else {
-            return Ok(false);
+        let words = match self.load_place_words(&Operand::Place(copied.clone()))? {
+            Some(words) => words,
+            // A local that owns its box keeps it, and its bytes, until the
+            // append right after.
+            None if self.owns_counted_str(&copied) => {
+                let held = self.load_root(&copied)?.values[0];
+                let (ptr, len) = self.str_box_words(held);
+                let owner = self.builder.iconst(types::I64, 0);
+                ViewArgument {
+                    owner,
+                    ptr,
+                    len,
+                    released: None,
+                }
+            }
+            None => return Ok(false),
         };
         self.deferred_str_copies.insert(target.to_string(), words);
         Ok(true)
