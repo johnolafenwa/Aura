@@ -17,6 +17,11 @@
 //! edge of a loop in the first body goes back to the copy, so a loop whose
 //! iteration took a slow way runs its next iteration fast again.
 //!
+//! Only a slow way after which warm code reads again a word that the way
+//! to it read leaves the copy: elsewhere the second body would only add
+//! code. A body that calls itself, or whose copy would add too much code,
+//! keeps one body.
+//!
 //! Every block of the copy computes what its block computes, from the
 //! copy's values, and the variables are the same memory in both, so a
 //! move between the two at any edge is exact as long as each value is
@@ -25,17 +30,27 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::{map_op, op_operands, op_targets, BlockIr, FunctionIr, InstIr, Op, Val, Var};
-use crate::native_backend::Blk;
+use super::{map_op, op_operands, op_targets, BinaryOp, BlockIr, FunctionIr, InstIr, Op, Val, Var};
+use crate::native_backend::{AliasClass, Blk, FuncHandle, MemoryAccess};
 
 /// A body of more recorded instructions gets no copy.
 const MOST_INSTRUCTIONS: usize = 24_000;
+
+/// The most blocks the search for a word read again looks at, before a
+/// slow way and after it.
+const READ_BLOCKS: usize = 64;
+
+/// A copy that would add more recorded instructions to the blocks the
+/// function reaches is not made, which keeps binaries lean: the largest
+/// bodies are mostly code that runs once.
+const MOST_GROWTH: usize = 8192;
 
 impl FunctionIr {
     /// Gives the body a copy that the function runs, whose slow paths
     /// continue in the body as it was (see the module documentation).
     /// Returns whether the copy was made: a body with no slow path that
-    /// rejoins a warm block, or one too large, stays as it is.
+    /// rejoins a warm block which reads again, or one too large, stays as
+    /// it is.
     pub(super) fn continue_slow_paths(&mut self) -> bool {
         let Some((&entry, members)) = self.layout.split_first() else {
             return false;
@@ -62,20 +77,35 @@ impl FunctionIr {
                     .iter()
                     .any(|target| !ir.blocks[*target as usize].cold)
         };
-        if !members.iter().any(|block| exits_from(self, *block)) {
-            return false;
-        }
         let exits = members
             .iter()
             .copied()
             .filter(|block| exits_from(self, *block))
+            .collect::<Vec<_>>();
+        if exits.is_empty() {
+            return false;
+        }
+        self.rebuild_predecessors();
+        let idom = self.dominators(entry);
+        // Only a slow way after which warm code reads again what the way
+        // to it read leaves the copy. Another rejoins where it is, since
+        // leaving would only run the body as built from there.
+        let slow = self.slow_blocks();
+        let leaves = exits
+            .into_iter()
+            .filter(|exit| self.reads_again_after(*exit, &idom, &slow))
             .collect::<HashSet<_>>();
+        if leaves.is_empty() {
+            return false;
+        }
+        let members = members
+            .into_iter()
+            .filter(|block| idom.contains_key(block))
+            .collect::<Vec<_>>();
         // The back edges of the body as built, from its dominators, of the
         // loops a slow way leaves the copy in. A loop no slow way leaves
         // keeps its own back edges, so each body's copy of it stays a loop
         // with one entry, whose count LLVM can know.
-        self.rebuild_predecessors();
-        let idom = self.dominators(entry);
         let back_edges = members
             .iter()
             .flat_map(|block| {
@@ -86,12 +116,15 @@ impl FunctionIr {
                         dominates(&idom, *target, *block)
                             && self
                                 .loop_blocks(*target, *block)
-                                .any(|member| exits.contains(&member))
+                                .any(|member| leaves.contains(&member))
                     })
                     .map(|(slot, _)| (*block, slot))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
+        if self.copy_growth(entry, &leaves, &back_edges) > MOST_GROWTH {
+            return false;
+        }
         let before = self.insts.len();
 
         let mut block_map = HashMap::new();
@@ -127,7 +160,7 @@ impl FunctionIr {
         }
         for block in &members {
             let copy = block_map[block];
-            let exits_here = exits.contains(block);
+            let exits_here = leaves.contains(block);
             for inst in self.blocks[*block as usize].insts.clone() {
                 let original = self.insts[inst as usize].clone();
                 let value = |value: Val| value_map.get(&value).copied().unwrap_or(value);
@@ -198,6 +231,176 @@ impl FunctionIr {
         self.rebuild_predecessors();
         self.slow_copy_insts = self.insts.len() - before;
         true
+    }
+
+    /// Whether warm code after the slow way `exit` rejoins reads again,
+    /// before a call or a write of any memory, a word a block dominating
+    /// `exit` read, or a word through a variable the slow way sets. The
+    /// frame stack's words do not count, since every return reads them,
+    /// and neither do a list's elements.
+    fn reads_again_after(&self, exit: u32, idom: &HashMap<u32, u32>, slow: &HashSet<u32>) -> bool {
+        let mut read = HashSet::new();
+        let mut block = exit;
+        for _ in 0..READ_BLOCKS {
+            let Some(&parent) = idom.get(&block).filter(|parent| **parent != block) else {
+                break;
+            };
+            block = parent;
+            for inst in &self.blocks[block as usize].insts {
+                if let Op::Load(_, flags, address, offset) = &self.insts[*inst as usize].op {
+                    if !matches!(
+                        flags.alias,
+                        AliasClass::FrameHeader | AliasClass::FrameEntry
+                    ) {
+                        read.insert(self.word(*address, *offset));
+                    }
+                }
+            }
+        }
+        // The variables the slow way sets, whose values the copy knows
+        // from its warm way once the slow way leaves it.
+        let mut set_slow = self.defined_vars(exit);
+        let mut seen = HashSet::new();
+        let warm = |targets: Vec<u32>| {
+            targets
+                .into_iter()
+                .filter(|target| !self.blocks[*target as usize].cold)
+        };
+        let mut work = warm(self.terminator_targets(exit)).collect::<Vec<_>>();
+        while let Some(block) = work.pop() {
+            if seen.len() >= READ_BLOCKS || !seen.insert(block) {
+                continue;
+            }
+            // A block only slow ways reach is the slow way's own, whose
+            // calls run before it rejoins.
+            if slow.contains(&block) {
+                set_slow.extend(self.defined_vars(block));
+                work.extend(self.terminator_targets(block));
+                continue;
+            }
+            for inst in &self.blocks[block as usize].insts {
+                match &self.insts[*inst as usize].op {
+                    Op::Load(_, flags, address, offset)
+                        if flags.alias != AliasClass::ListElements =>
+                    {
+                        let word = self.word(*address, *offset);
+                        if read.contains(&word)
+                            || matches!(word.0, Word::Var(var) if set_slow.contains(&var))
+                        {
+                            return true;
+                        }
+                    }
+                    Op::Call(..) | Op::CallIndirect(..) => break,
+                    Op::Store(flags, ..) if flags.alias == AliasClass::Any => break,
+                    Op::Memory(access, ..) if *access != MemoryAccess::Read => break,
+                    Op::Brif(..) | Op::Jump(..) => {
+                        work.extend(warm(self.terminator_targets(block)))
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
+    /// The variables `block` sets.
+    fn defined_vars(&self, block: u32) -> HashSet<u32> {
+        self.blocks[block as usize]
+            .insts
+            .iter()
+            .filter_map(|inst| match self.insts[*inst as usize].op {
+                Op::DefVar(var, _) => Some(var.0),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The cold blocks, and the blocks whose every predecessor is one.
+    fn slow_blocks(&self) -> HashSet<u32> {
+        let mut slow = self
+            .layout
+            .iter()
+            .copied()
+            .filter(|block| self.blocks[*block as usize].cold)
+            .collect::<HashSet<_>>();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in &self.layout {
+                let predecessors = &self.blocks[*block as usize].predecessors;
+                if !predecessors.is_empty()
+                    && predecessors
+                        .iter()
+                        .all(|predecessor| slow.contains(predecessor))
+                    && slow.insert(*block)
+                {
+                    changed = true;
+                }
+            }
+        }
+        slow
+    }
+
+    /// The value or variable and byte offset a load of `offset` from
+    /// `address` reads, through the constant offsets added to the value.
+    fn word(&self, mut address: Val, offset: i32) -> (Word, i64) {
+        let mut offset = i64::from(offset);
+        while let Some(def) = self.value_defs[address.0 as usize] {
+            match &self.insts[def as usize].op {
+                Op::BinaryImm(BinaryOp::Iadd, base, added) => {
+                    address = *base;
+                    offset += added;
+                }
+                Op::Copy(value) => address = *value,
+                Op::UseVar(var) => return (Word::Var(var.0), offset),
+                _ => break,
+            }
+        }
+        (Word::Value(address), offset)
+    }
+
+    /// How many more recorded instructions the reachable blocks hold once
+    /// the function runs the copy, the slow ways of `leaves` leave it, and
+    /// the back edges `back_edges` of the first body go back to it.
+    fn copy_growth(&self, entry: u32, leaves: &HashSet<u32>, back_edges: &[(u32, usize)]) -> usize {
+        let back_edges = back_edges.iter().copied().collect::<HashSet<_>>();
+        let size = |block: u32| self.blocks[block as usize].insts.len();
+        let mut before = 0;
+        let mut seen = HashSet::from([entry]);
+        let mut work = vec![entry];
+        while let Some(block) = work.pop() {
+            before += size(block);
+            for target in self.terminator_targets(block) {
+                if seen.insert(target) {
+                    work.push(target);
+                }
+            }
+        }
+        // Each block of the first body (false) or of the copy (true).
+        let mut after = 0;
+        let mut seen = HashSet::from([(entry, false)]);
+        let mut work = vec![(entry, false)];
+        while let Some((block, in_copy)) = work.pop() {
+            after += size(block);
+            for (slot, target) in self.terminator_targets(block).into_iter().enumerate() {
+                let to_copy = if in_copy || block == entry {
+                    !leaves.contains(&block) || self.blocks[target as usize].cold
+                } else {
+                    back_edges.contains(&(block, slot))
+                };
+                if seen.insert((target, to_copy)) {
+                    work.push((target, to_copy));
+                }
+            }
+        }
+        after - before
+    }
+
+    /// Whether the body calls `function`.
+    pub(super) fn calls(&self, function: FuncHandle) -> bool {
+        self.insts.iter().any(|inst| {
+            matches!(&inst.op, Op::Call(callee, _) if self.func_refs[callee.0 as usize] == function)
+        })
     }
 
     /// The recorded instructions of the body as built that are not a
@@ -316,11 +519,13 @@ impl FunctionIr {
     }
 
     /// Gives each value whose definition no longer lies on every way to
-    /// one of its uses a variable: both copies of the definition set it,
-    /// and each such use reads it. Each way to the use passes one of the
-    /// two copies last, since in the body as built the definition lies on
+    /// one of its uses, or that both bodies define and a block other than
+    /// its own uses, a variable: both copies of the definition set it, and
+    /// each such use reads it. Each way to the use passes one of the two
+    /// copies last, since in the body as built the definition lies on
     /// every way to the use, so the variable holds the value the use
-    /// would have read there.
+    /// would have read there, even where a way passes one copy and then
+    /// the other.
     fn demote_undominated(&mut self, entry: u32, twin: &HashMap<Val, Val>) {
         let idom = self.dominators(entry);
         let mut param_blocks = HashMap::new();
@@ -344,7 +549,12 @@ impl FunctionIr {
             for inst in &self.blocks[*block as usize].insts {
                 for operand in op_operands(&self.insts[*inst as usize].op) {
                     let def = def_block(self, operand);
-                    if !dominates(&idom, def, *block) && seen.insert((*inst, operand)) {
+                    // A value both bodies define may be defined again by
+                    // its twin between its definition and a use in another
+                    // block, even where its definition dominates the use.
+                    let crosses = def != *block && twin.contains_key(&operand);
+                    if (crosses || !dominates(&idom, def, *block)) && seen.insert((*inst, operand))
+                    {
                         uses.push((*inst, operand));
                     }
                 }
@@ -386,6 +596,10 @@ impl FunctionIr {
                 location,
             });
             self.blocks[block as usize].insts.insert(position, index);
+            // A frame record's push reads its operands as part of it.
+            if self.frame_insts.contains(&inst) {
+                self.frame_insts.insert(index);
+            }
             let op = map_op(
                 &self.insts[inst as usize].op,
                 |operand| if operand == value { read } else { operand },
@@ -434,6 +648,13 @@ impl FunctionIr {
             }
         }
     }
+}
+
+/// What an address is computed from: a value, or a read of a variable.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Word {
+    Value(Val),
+    Var(u32),
 }
 
 /// Whether `block` lies under `def` in the dominator tree `idom`.

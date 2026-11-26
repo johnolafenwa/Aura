@@ -342,8 +342,10 @@ impl ModuleBackend for LlvmModule {
             return Err(DefineError::Body(error));
         }
         let mut ir = builder.ir;
-        // A debug build keeps one body, as written.
-        if super::optimizes() && !self.debug_info {
+        // A debug build keeps one body, as written. So does a body that
+        // calls itself: each call ends what the copy's checks found, and
+        // the larger body only costs the hot recursion registers.
+        if super::optimizes() && !self.debug_info && !ir.calls(function) {
             ir.continue_slow_paths();
         }
         let decl = &self.functions[function.0 as usize];

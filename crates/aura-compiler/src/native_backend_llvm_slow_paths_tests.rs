@@ -2,8 +2,8 @@ use inkwell::context::Context;
 
 use super::super::{host_target_machine, LlvmModule, Op};
 use crate::native_backend::{
-    types, CallConv, FuncHandle, FunctionBackend, IntCC, Linkage, ModuleBackend, ScalarType,
-    Signature, Var,
+    types, AliasClass, CallConv, FuncHandle, FunctionBackend, IntCC, Linkage, MemFlags,
+    MemoryAccess, ModuleBackend, ScalarType, Signature, Val, Var,
 };
 
 fn signature(params: &[ScalarType], returns: &[ScalarType]) -> Signature {
@@ -91,6 +91,9 @@ fn checked_body(builder: &mut dyn FunctionBackend, slow: FuncHandle) {
     builder.switch_to_block(start);
     builder.seal_block(start);
     let kept = builder.iadd_imm(input, 3);
+    // The check reads a word of `input`, which the join reads again.
+    let address = builder.iadd_imm(input, 8);
+    builder.load(types::I64, access(), address, 0);
     let small = builder.icmp_imm(IntCC::SignedLessThan, kept, 10);
     builder.set_cold_block(cold);
     builder.brif(small, fast, &[], cold, &[]);
@@ -110,8 +113,14 @@ fn checked_body(builder: &mut dyn FunctionBackend, slow: FuncHandle) {
     builder.switch_to_block(join);
     builder.seal_block(join);
     let sum = builder.iadd(joined, kept);
-    let twice = builder.iadd(sum, kept);
+    let again = builder.load(types::I64, access(), input, 8);
+    let twice = builder.iadd(sum, again);
     builder.return_(&[twice]);
+}
+
+/// The flags of a load of a list view's access code.
+fn access() -> MemFlags {
+    MemFlags::trusted_in(AliasClass::BoxAccess)
 }
 
 #[test]
@@ -187,6 +196,7 @@ fn a_loop_of_the_first_body_goes_back_to_the_copy() {
         let input = builder.block_params(entry)[0];
         builder.jump(header, &[input]);
         builder.switch_to_block(header);
+        builder.load(types::I64, access(), input, 0);
         let odd = builder.band_imm(count, 1);
         builder.set_cold_block(cold);
         builder.brif(odd, cold, &[], fast, &[]);
@@ -200,6 +210,7 @@ fn a_loop_of_the_first_body_goes_back_to_the_copy() {
         builder.jump(latch, &[]);
         builder.switch_to_block(latch);
         builder.seal_block(latch);
+        builder.load(types::I64, access(), input, 0);
         let next = builder.iadd_imm(count, -1);
         let more = builder.icmp_imm(IntCC::SignedGreaterThan, next, 0);
         builder.brif(more, header, &[next], exit, &[]);
@@ -244,6 +255,7 @@ fn framed_body(builder: &mut dyn FunctionBackend, slow: FuncHandle) {
     let callee = builder.import_function(slow);
     let descriptor = builder.iconst(types::I64, 7);
     builder.defer_frame(framed, descriptor, callee, &[]);
+    builder.load(types::I64, access(), carried, 0);
     builder.set_cold_block(cold);
     builder.brif(carried, cold, &[], fast, &[]);
     builder.switch_to_block(fast);
@@ -260,6 +272,7 @@ fn framed_body(builder: &mut dyn FunctionBackend, slow: FuncHandle) {
     builder.seal_block(join);
     // `carried` is the first body's block parameter, which the copy's
     // cold way leaves undefined here.
+    builder.load(types::I64, access(), carried, 0);
     builder.return_(&[carried]);
 }
 
@@ -359,6 +372,7 @@ fn a_loop_no_slow_way_leaves_keeps_its_back_edge_in_each_body() {
         builder.switch_to_block(entry);
         builder.seal_block(entry);
         let input = builder.block_params(entry)[0];
+        builder.load(types::I64, access(), input, 0);
         builder.set_cold_block(cold);
         builder.brif(input, cold, &[], fast, &[]);
         builder.switch_to_block(fast);
@@ -372,6 +386,7 @@ fn a_loop_no_slow_way_leaves_keeps_its_back_edge_in_each_body() {
         builder.jump(header, &[called]);
         // The loop has no cold block: block 3 branches back to itself.
         builder.switch_to_block(header);
+        builder.load(types::I64, access(), input, 0);
         let next = builder.iadd_imm(count, -1);
         let more = builder.icmp_imm(IntCC::SignedGreaterThan, next, 0);
         builder.brif(more, header, &[next], exit, &[]);
@@ -431,4 +446,195 @@ fn a_call_the_copy_repeats_leaves_its_function_to_llvm() {
     assert_eq!(calls, 2);
     module.inline_calls_copied_with_their_loops();
     assert!(!module.functions[callee.0 as usize].inline);
+}
+
+/// A check that reads the word at `input + 8` with `before`, whose cold
+/// way calls `slow` and rejoins at a join that runs `between` and reads
+/// the word again with `after`.
+fn reread_body(
+    builder: &mut dyn FunctionBackend,
+    slow: FuncHandle,
+    before: MemFlags,
+    after: MemFlags,
+    between: &dyn Fn(&mut dyn FunctionBackend, Val, FuncHandle),
+) {
+    let entry = builder.create_block();
+    builder.append_block_params_for_function_params(entry);
+    let fast = builder.create_block();
+    let cold = builder.create_block();
+    let join = builder.create_block();
+    builder.switch_to_block(entry);
+    builder.seal_block(entry);
+    let input = builder.block_params(entry)[0];
+    let word = builder.load(types::I64, before, input, 8);
+    builder.set_cold_block(cold);
+    builder.brif(word, fast, &[], cold, &[]);
+    builder.switch_to_block(fast);
+    builder.seal_block(fast);
+    builder.jump(join, &[]);
+    builder.switch_to_block(cold);
+    builder.seal_block(cold);
+    let callee = builder.import_function(slow);
+    builder.call(callee, &[input]);
+    builder.jump(join, &[]);
+    builder.switch_to_block(join);
+    builder.seal_block(join);
+    between(builder, input, slow);
+    let again = builder.load(types::I64, after, input, 8);
+    builder.return_(&[again]);
+}
+
+/// Whether `reread_body` with these loads and `between` gets a copy.
+fn reread_copied(
+    before: MemFlags,
+    after: MemFlags,
+    between: impl Fn(&mut dyn FunctionBackend, Val, FuncHandle) + 'static,
+) -> bool {
+    let mut module = LlvmModule::for_host().expect("the host should have an LLVM target");
+    let function = define(&mut module, "reread", true, move |builder, slow| {
+        reread_body(builder, slow, before, after, &between);
+    });
+    let copied = body(&module, function).slow_copy_insts > 0;
+    lowered(&module);
+    copied
+}
+
+#[test]
+fn only_a_slow_way_after_which_a_word_is_read_again_leaves_the_copy() {
+    assert!(reread_copied(access(), access(), |_, _, _| {}));
+    // A call, an indirect call, a write of any memory, or a fence between
+    // the join and the read ends what the check found anyway.
+    assert!(!reread_copied(access(), access(), |builder, input, slow| {
+        let callee = builder.import_function(slow);
+        builder.call(callee, &[input]);
+    }));
+    assert!(!reread_copied(access(), access(), |builder, input, _| {
+        let signature = builder.import_signature(signature(&[types::I64], &[types::I64]));
+        builder.call_indirect(signature, input, &[input]);
+    }));
+    assert!(!reread_copied(access(), access(), |builder, input, _| {
+        builder.store(MemFlags::trusted(), input, input, 0);
+    }));
+    assert!(!reread_copied(access(), access(), |builder, _, _| {
+        builder.memory_access(MemoryAccess::Fence, types::I64, &[]);
+    }));
+    // A write of another class of memory keeps it.
+    assert!(reread_copied(access(), access(), |builder, input, _| {
+        let flags = MemFlags::trusted_in(AliasClass::ListElements);
+        builder.store(flags, input, input, 0);
+    }));
+    // The frame stack's words and a list's elements do not count.
+    let frame = MemFlags::trusted_in(AliasClass::FrameHeader);
+    assert!(!reread_copied(frame, frame, |_, _, _| {}));
+    let elements = MemFlags::trusted_in(AliasClass::ListElements);
+    assert!(!reread_copied(elements, elements, |_, _, _| {}));
+}
+
+#[test]
+fn a_word_is_the_same_through_added_offsets_and_copies() {
+    let mut module = LlvmModule::for_host().expect("the host should have an LLVM target");
+    let function = define(&mut module, "offsets", false, |builder, slow| {
+        reread_body(builder, slow, access(), access(), &|builder, input, _| {
+            builder.iadd_imm(input, 0);
+        });
+    });
+    let mut ir = body(&module, function).clone();
+    // The join's read of `input + 8` reads `copied + 0` instead, where
+    // `copied` copies `input + 8`.
+    let join = 3;
+    let added = ir.blocks[join].insts[0] as usize;
+    let input = ir.blocks[ir.layout[0] as usize].params[0];
+    ir.insts[added].op = Op::BinaryImm(super::BinaryOp::Iadd, input, 8);
+    let copy = ir.new_value(types::I64);
+    let copied = ir.insts.len() as u32;
+    ir.value_defs[copy.0 as usize] = Some(copied);
+    ir.insts.push(super::InstIr {
+        op: Op::Copy(ir.insts[added].results[0]),
+        results: vec![copy],
+        block: join as u32,
+        location: None,
+    });
+    ir.blocks[join].insts.insert(1, copied);
+    let read = ir.blocks[join].insts[2] as usize;
+    let Op::Load(kind, flags, _, _) = ir.insts[read].op.clone() else {
+        panic!("the join reads the word: {}", ir.display());
+    };
+    ir.insts[read].op = Op::Load(kind, flags, copy, 0);
+    assert!(ir.continue_slow_paths(), "{}", ir.display());
+}
+
+#[test]
+fn a_word_read_through_a_variable_the_slow_way_sets_is_read_again() {
+    let mut module = LlvmModule::for_host().expect("the host should have an LLVM target");
+    let function = define(&mut module, "variable", true, |builder, slow| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        let fast = builder.create_block();
+        let cold = builder.create_block();
+        let call = builder.create_block();
+        let join = builder.create_block();
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let input = builder.block_params(entry)[0];
+        let held = Var(0);
+        builder.declare_var(held, types::I64);
+        builder.def_var(held, input);
+        builder.set_cold_block(cold);
+        builder.brif(input, fast, &[], cold, &[]);
+        builder.switch_to_block(fast);
+        builder.seal_block(fast);
+        builder.jump(join, &[]);
+        builder.switch_to_block(cold);
+        builder.seal_block(cold);
+        builder.jump(call, &[]);
+        // A warm block only the cold way reaches makes the slow way's
+        // call, and sets the variable the join reads through.
+        builder.switch_to_block(call);
+        builder.seal_block(call);
+        let callee = builder.import_function(slow);
+        let called = builder.call(callee, &[input]).results[0];
+        builder.def_var(held, called);
+        builder.jump(join, &[]);
+        builder.switch_to_block(join);
+        builder.seal_block(join);
+        let address = builder.use_var(held);
+        let word = builder.load(types::I64, access(), address, 0);
+        builder.return_(&[word]);
+    });
+    assert!(body(&module, function).slow_copy_insts > 0);
+    lowered(&module);
+}
+
+#[test]
+fn a_body_that_calls_itself_keeps_one_copy() {
+    let mut module = LlvmModule::for_host().expect("the host should have an LLVM target");
+    let sig = signature(&[types::I64], &[types::I64]);
+    let function = module
+        .declare_function("recursive", Linkage::Export, &sig)
+        .expect("the function should declare");
+    module
+        .define_function(
+            function,
+            &sig,
+            Box::new(move |builder| {
+                checked_body(builder, function);
+                builder.verify()
+            }),
+        )
+        .expect("the function should define");
+    assert_eq!(body(&module, function).slow_copy_insts, 0);
+}
+
+#[test]
+fn a_copy_that_would_add_too_much_code_is_not_made() {
+    let mut module = LlvmModule::for_host().expect("the host should have an LLVM target");
+    let function = define(&mut module, "long", true, |builder, slow| {
+        reread_body(builder, slow, access(), access(), &|builder, input, _| {
+            let mut value = input;
+            for _ in 0..super::MOST_GROWTH {
+                value = builder.iadd_imm(value, 1);
+            }
+        });
+    });
+    assert_eq!(body(&module, function).slow_copy_insts, 0);
 }
