@@ -139,6 +139,19 @@ pub struct GeneratorValue {
     inner: Arc<Mutex<GeneratorState>>,
 }
 
+/// A handle that does not keep its generator alive.
+#[derive(Clone)]
+pub struct WeakGeneratorValue {
+    inner: std::sync::Weak<Mutex<GeneratorState>>,
+}
+
+impl WeakGeneratorValue {
+    /// The generator, while any strong handle to it remains.
+    pub fn upgrade(&self) -> Option<GeneratorValue> {
+        self.inner.upgrade().map(|inner| GeneratorValue { inner })
+    }
+}
+
 impl std::fmt::Debug for GeneratorValue {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("<generator>")
@@ -297,6 +310,13 @@ impl GeneratorValue {
                 yielder: Arc::new(YielderCell(Cell::new(std::ptr::null()))),
                 owner: std::thread::current().id(),
             })),
+        }
+    }
+
+    /// A handle that does not keep the generator alive.
+    pub fn downgrade(&self) -> WeakGeneratorValue {
+        WeakGeneratorValue {
+            inner: Arc::downgrade(&self.inner),
         }
     }
 
