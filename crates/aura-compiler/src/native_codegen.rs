@@ -3518,6 +3518,9 @@ impl<'a> NativeCodegen<'a> {
                 // A walk of a dict's entries reads the element as a box,
                 // so no element words come from a list.
                 || compiler.entry_loops.contains_key(list)
+                // A membership test on the element reads the key where the
+                // list holds it and never assigns the slot's words.
+                || compiler.str_key_tests.contains_key(local)
         });
         let return_ty = ensure_direct_type(
             &function.return_type,
