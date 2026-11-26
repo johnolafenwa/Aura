@@ -16203,6 +16203,30 @@ def main():
 }
 
 #[test]
+fn a_walked_key_loop_holds_its_copied_key_as_a_box() {
+    // A `keys()` loop that walks the dict's entries reads each key as a
+    // box, so its variable is not an element slot of the list it skips.
+    let source = r#"
+def main():
+    mut words: dict[str, int64] = {}
+    words["one"] = 1
+    mut names: list[str] = []
+    for key in words.keys():
+        names.append(key.clone())
+    print(names[0])
+"#;
+    let mir = lower_source_to_mir(source).expect("the loop should lower");
+    let object = emit_host_object(&mir).expect("the loop should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in ["aura_direct_map_next_slot", "aura_direct_map_key_at"] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    for words in ["aura_direct_map_keys", "aura_direct_string_from_view"] {
+        assert!(!referenced.contains(words), "{words}: {referenced:?}");
+    }
+}
+
+#[test]
 fn str_keys_read_from_a_list_are_looked_up_in_place() {
     let source = r#"
 def main():

@@ -3463,6 +3463,9 @@ impl<'a> NativeCodegen<'a> {
                 || compiler.element_lend_temps.contains(local)
                 || compiler.field_lend_temps.contains(local)
                 || compiler.key_loops.contains_key(list)
+                // A walk of a dict's entries reads the element as a box,
+                // so no element words come from a list.
+                || compiler.entry_loops.contains_key(list)
         });
         let return_ty = ensure_direct_type(
             &function.return_type,
