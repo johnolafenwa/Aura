@@ -7,7 +7,6 @@ in this file.
 
 ## Unreleased
 
-<<<<<<< HEAD
 - Freestanding builds have a heap. `mem.alloc`, `mem.free`, and
   `mem.realloc` hand out blocks of memory at a `uint64` address, and
   `mem.heap_add_region` names the memory the heap may use. They call three
@@ -51,7 +50,6 @@ in this file.
   the allocation hooks with a reference count, and the program frees
   every block when its last reference goes. Classes, tuples, and `Result`
   may hold such an enum, and `match own` and `try` work on them.
-=======
 - Tensors: `Tensor[float16]` holds IEEE half-precision floats. It takes
   and gives `float32` numbers and arrays, rounds every result to the
   nearest half, and does not mix with `float32` in one operation.
@@ -72,7 +70,6 @@ in this file.
   weights in `float32` and `float16`, and `benchmarks/tensor/nanogpt.au`
   trains a character model on a real text, each beside the same program
   in PyTorch.
->>>>>>> origin/main
 - Tensors: the Metal device runs `tanh`, `sigmoid`, `erf`, `slice`,
   `index_select`, `index_add`, `cat`, `expand`, `argmax`, `argmin`, and
   the random tensors on the GPU. They ran on the CPU before. Tensors
