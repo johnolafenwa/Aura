@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+- Speed: a `Result` that a function returns and its caller matches or
+  unwraps with `try` no longer allocates. `bank_ledger` runs half the
+  instructions it did in 0.17.0.
+- Speed: `swap` on a list of a copy class, and an append to a list held
+  in a field or in a list of lists, are compiled in place. `graph_paths`
+  runs half the instructions it did in 0.17.0, and `order_book` two
+  thirds.
 - A long chain of `indirect` enum variants, such as a linked list of
   hundreds of thousands of `Cons` cells, is dropped, compared with `==`,
   and copied without running out of stack, in a task, in a generator, and
@@ -29,13 +36,6 @@ in this file.
   fit an `int64`. Arithmetic and conversions on `int128`, `uint128`,
   `intsize`, and `uintsize` are reported as not modeled (`AU5104`) instead
   of being skipped.
-- Speed: a `Result` that a function returns and its caller matches or
-  unwraps with `try` no longer allocates. `bank_ledger` runs half the
-  instructions it did in 0.17.0.
-- Speed: `swap` on a list of a copy class, and an append to a list held
-  in a field or in a list of lists, are compiled in place. `graph_paths`
-  runs half the instructions it did in 0.17.0, and `order_book` two
-  thirds.
 - Speed: a loop written `for j in range(i + 1, n)` reads and writes list
   elements without bounds checks when the outer loop proves the range, and
   a function that only calls small leaves keeps no frame record. `nbody`
