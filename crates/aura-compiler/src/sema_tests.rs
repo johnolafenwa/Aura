@@ -34607,6 +34607,12 @@ fn extern_c_layouts_beyond_the_size_and_scalar_bounds_are_rejected() {
             "class `P`",
             leaves,
         ),
+        // Padded elements fill the byte bound, and one more field ends past it.
+        (
+            "extern \"C\" align(4096) class Q:\n    b: uint8\nextern \"C\" class P:\n    v: array[Q, 4096]\n    w: uint8\n",
+            "class `P`",
+            size,
+        ),
     ] {
         let diagnostic =
             check_ffi_source_for_test(source).expect_err("the oversized layout must fail");
