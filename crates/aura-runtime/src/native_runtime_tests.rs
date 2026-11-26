@@ -30413,6 +30413,16 @@ fn literal_affix_tests_and_str_element_copies_read_text_in_place() {
     };
     let (text, owner) = words(list, -1);
     assert_eq!((text.as_deref(), owner), (Some("bc"), std::ptr::null_mut()));
+    // Each read in place counts a miss of the list's view, and once the
+    // misses pay for it the list keeps a `str` view for the reads after.
+    assert_eq!(
+        list_view_access(list),
+        super::DirectListAccess::Values as u32
+    );
+    for _ in 1..super::STR_VIEW_MIN_MISSES {
+        assert_eq!(words(list, 0).0.as_deref(), Some("a"));
+    }
+    assert_eq!(list_view_access(list), super::DirectListAccess::Str as u32);
     unsafe { release_value(list) };
     let mixed = boxed_value(Value::Vec(VecValue::new(
         Type::named("str"),
