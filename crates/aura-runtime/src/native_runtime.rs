@@ -10286,10 +10286,10 @@ pub extern "C-unwind" fn aura_direct_vec_push_str_view(
 ) {
     task_runtime_boundary(|| {
         crate::runtime_value::representation_stats::note_clone();
-        // The copy is made before the list changes, since the bytes may be
-        // an element of the same list.
-        let value = Value::String(literal_str(ptr, len).into());
         with_vector_mut(vec, |vector| {
+            // The copy is made before the list changes, since the bytes may
+            // be an element of the same list. Made here, it is moved once.
+            let value = Value::String(literal_str(ptr, len).into());
             if is_unknown_runtime_type(&vector.element_type) {
                 vector.element_type = SharedType::from(inferred_collection_type(&value));
             }
