@@ -1,0 +1,4 @@
+import vectors
+
+export "C" def entry() -> None:
+    pass

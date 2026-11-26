@@ -346,8 +346,15 @@ fn the_allocator_keeps_its_rules_when_run_as_an_ordinary_program() {
             .expect("the sink is not poisoned")
             .push_str(chunk);
     });
-    crate::run_mir_with_stdout_sink(&crate::mir::lower_implicit(&program), Some(sink))
-        .expect("the checked run passes");
+    // The allocator reads and writes raw memory, which only a trusted run
+    // (a manifest with `allow_ffi = true`) may do.
+    crate::mir_runtime::run_lowered_entry(
+        &crate::mir::lower_implicit(&program),
+        None,
+        Some(sink),
+        Vec::new(),
+    )
+    .expect("the checked run passes");
     let output = captured.lock().expect("the sink is not poisoned").clone();
     assert_eq!(output, "0\n63\n64\n66\n95\nok\n");
 }

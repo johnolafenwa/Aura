@@ -200,6 +200,9 @@ fn guarded<T>(work: impl FnOnce() -> Result<T, ImageError>) -> Result<T, ImageEr
 // ---------------------------------------------------------------- PNG
 
 fn png_decoder(data: &[u8], limit_bytes: usize) -> png::Decoder<Cursor<&[u8]>> {
+    let limit_bytes = crate::builtin_limit::allowance()
+        .unwrap_or(limit_bytes)
+        .min(limit_bytes);
     let mut decoder =
         png::Decoder::new_with_limits(Cursor::new(data), png::Limits { bytes: limit_bytes });
     // Palettes, low bit depths and transparency keys expand to plain
@@ -220,6 +223,9 @@ fn png_channels(color: png::ColorType) -> usize {
 fn png_decode_error(error: png::DecodingError) -> ImageError {
     match error {
         png::DecodingError::LimitsExceeded => {
+            if let Some(remaining) = crate::builtin_limit::allowance() {
+                crate::builtin_limit::fits(remaining as u64 + 1);
+            }
             unsupported("the PNG needs more memory than its pixel limit allows")
         }
         other => invalid(format!("invalid PNG: {other}")),
@@ -240,6 +246,9 @@ fn decode_png(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
     let size = reader
         .output_buffer_size()
         .ok_or(ImageError::TooLarge { limit_pixels })?;
+    if !crate::builtin_limit::fits(size as u64) {
+        return Err(ImageError::TooLarge { limit_pixels });
+    }
     let mut buffer = vec![0u8; size];
     let frame = reader.next_frame(&mut buffer).map_err(png_decode_error)?;
     let channels = png_channels(frame.color_type);
@@ -331,11 +340,19 @@ fn decode_jpeg(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
     } else {
         ColorSpace::RGB
     };
-    let options = DecoderOptions::default()
+    let options = if crate::builtin_limit::allowance().is_some() {
+        DecoderOptions::new_safe()
+    } else {
+        DecoderOptions::default()
+    };
+    let options = options
         .set_max_width(width)
         .set_max_height(height)
         .jpeg_set_out_colorspace(colorspace);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
+    if !crate::builtin_limit::fits((pixels * channels) as u64) {
+        return Err(ImageError::TooLarge { limit_pixels });
+    }
     let mut buffer = vec![0u8; pixels * channels];
     decoder
         .decode_into(&mut buffer)
@@ -636,6 +653,9 @@ fn decode_pnm(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
     let header = PnmHeader::parse(data)?;
     let (width, height, channels) = (header.width, header.height, header.channels());
     let pixels = checked_pixels(width, height, limit_pixels)?;
+    if !crate::builtin_limit::fits((pixels * header.channels()) as u64) {
+        return Err(ImageError::TooLarge { limit_pixels });
+    }
     let samples = pixels * channels;
     let body = &data[header.body..];
     let short = || invalid("invalid Netpbm image: the data ends early");

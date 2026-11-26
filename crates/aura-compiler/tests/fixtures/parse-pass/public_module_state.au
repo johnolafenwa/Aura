@@ -1,0 +1,4 @@
+public mut ticks: uint64 = 0
+
+export "C" def count() -> uint64:
+    return ticks

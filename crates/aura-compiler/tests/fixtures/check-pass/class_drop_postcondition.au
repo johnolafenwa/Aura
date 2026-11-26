@@ -1,0 +1,8 @@
+class Ticket:
+    count: int64
+    def __drop__(mut self):
+        ensures self.count == 0
+        self.count = 0
+
+def main():
+    item = Ticket(1)

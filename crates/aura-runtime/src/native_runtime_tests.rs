@@ -32058,6 +32058,38 @@ fn native_decimal_result_slot_is_written_only_for_compact_answers() {
     assert_eq!(out, [-1, 0]);
 }
 
+#[path = "native_frozen_value_tests.rs"]
+mod compile_time_transport;
+
+#[test]
+fn direct_bit_methods_check_arguments_and_preserve_wide_values() {
+    use aura_core::integer_bits::BitMethod;
+
+    let integer = IntegerValue::from_typed_unsigned(1 << 127, IntegerKind::Uint128).unwrap();
+    let input = boxed_value(Value::Int(integer));
+    let result = super::aura_direct_integer_bits(input, 1, BitMethod::RotateLeft as i64);
+    let Value::Int(rotated) = (unsafe { take_value(result) }) else {
+        panic!("rotation returns an integer");
+    };
+    assert_eq!(rotated.runtime_kind(), Some(IntegerKind::Uint128));
+    assert_eq!(rotated.as_i128(), Some(1));
+    unsafe { release_value(input) };
+
+    let negative = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_integer_bits(std::ptr::null_mut(), -1, BitMethod::RotateRight as i64);
+    });
+    assert_eq!(negative.code, "AU4034");
+    assert!(capture_direct_boundary_error_message(|| {
+        super::aura_direct_integer_bits(std::ptr::null_mut(), 0, -1);
+    })
+    .contains("unknown integer bit method"));
+    assert!(capture_direct_boundary_error_message(|| {
+        let mut text = OpaqueValue::new(Value::string("abc"), None);
+        super::aura_direct_integer_bits(&mut text, 0, BitMethod::CountOnes as i64);
+    })
+    .contains("requires an integer"));
+}
+
 #[test]
 fn a_tasks_last_reference_to_a_str_box_frees_the_text_and_the_block() {
     let _claim_flag_guard = super::direct_task_claim_flag_test_guard();

@@ -1,0 +1,26 @@
+trait Scale[T]:
+    def scale(self, n: T) -> int64
+
+class Engine:
+    pass
+
+impl Scale[int64] for Engine:
+    def scale(self, n: int64) -> int64:
+        return n
+
+impl Scale[str] for Engine:
+    def scale(self, n: str) -> int64:
+        return len(n)
+
+class Car[E, T]:
+    engine: E
+    seed: T
+
+impl[T, E: Scale[T]] Scale[T] for Car[E, T] by engine
+
+def main():
+    print(Car(engine=Engine(), seed="x").scale("aura"))
+    text: dyn Scale[str] = Car(engine=Engine(), seed="x")
+    number: dyn Scale[int64] = Car(engine=Engine(), seed=1)
+    print(text.scale("two"))
+    print(number.scale(17))

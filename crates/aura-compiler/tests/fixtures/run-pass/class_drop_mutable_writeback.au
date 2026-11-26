@@ -1,0 +1,21 @@
+class Ticket:
+    id: int64
+    def __drop__(mut self):
+        print(self.id)
+
+class Shelf:
+    item: Ticket
+
+    def update(mut self):
+        self.item = Ticket(2)
+        print("updated")
+
+def replace_item(shelf: mut Shelf):
+    shelf.item = Ticket(3)
+    print("replaced through parameter")
+
+def main():
+    mut shelf = Shelf(Ticket(1))
+    shelf.update()
+    replace_item(shelf)
+    print("done")

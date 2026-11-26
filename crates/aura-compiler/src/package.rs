@@ -135,6 +135,13 @@ impl GitSelector {
 /// one.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ForeignLinkPlan {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub module_asm: Vec<String>,
+    /// Target and permitted native references for source-level assembly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asm_arch: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asm_externs: Vec<String>,
     /// Library names as the linker's `-l` option takes them: `sqlite3` for
     /// `libsqlite3.so` or `libsqlite3.dylib`.
     pub libraries: Vec<String>,
@@ -146,6 +153,10 @@ pub struct ForeignLinkPlan {
     /// defines as C symbols. Lowering fills it in, not a manifest.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exports: Vec<ForeignExport>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub machine: BTreeMap<String, crate::machine_attributes::MachineAttributes>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placed_data: Vec<crate::machine_data::PlacedData>,
 }
 
 /// One `export "C"` function: the MIR function and the C symbol a
@@ -164,7 +175,12 @@ impl ForeignLinkPlan {
 
     /// Whether the plan names nothing at all, so MIR leaves it out.
     pub fn is_blank(&self) -> bool {
-        self.is_empty() && self.exports.is_empty()
+        self.is_empty()
+            && self.exports.is_empty()
+            && self.machine.is_empty()
+            && self.placed_data.is_empty()
+            && self.module_asm.is_empty()
+            && self.asm_arch.is_none()
     }
 
     /// Adds what `other` names and this plan does not, keeping the order.
@@ -187,6 +203,7 @@ pub struct PackageSource {
     pub name: String,
     pub version: String,
     pub allow_ffi: bool,
+    cfg: BTreeMap<String, String>,
     /// The package's own `[ffi]` link settings for this host.
     pub foreign_link: ForeignLinkPlan,
     pub manifest_dir: PathBuf,
@@ -253,6 +270,15 @@ impl PackageGraph {
             lockfile_root,
             packages,
         }))
+    }
+
+    pub(crate) fn entry_cfg(&self) -> &BTreeMap<String, String> {
+        &self
+            .packages
+            .values()
+            .find(|package| package.external_prefix.is_none())
+            .expect("resolved entry package")
+            .cfg
     }
 
     pub fn source_for_path(&self, path: &Path) -> Option<&PackageSource> {
@@ -839,6 +865,7 @@ impl PackageResolver {
             name: manifest.package.name.clone(),
             version: manifest.package.version,
             allow_ffi: manifest.package.allow_ffi,
+            cfg: manifest.cfg,
             foreign_link: manifest.foreign_link,
             manifest_dir: manifest_dir.clone(),
             source_root,
@@ -862,8 +889,53 @@ struct ResolvedGitDependency {
     selector: GitSelector,
 }
 
+#[derive(Deserialize, Default)]
+struct RawBuildSection {
+    #[serde(default)]
+    cfg: Option<toml::Value>,
+}
+
+impl RawBuildSection {
+    fn into_cfg(self, path: &Path) -> Result<BTreeMap<String, String>> {
+        let Some(cfg) = self.cfg else {
+            return Ok(BTreeMap::new());
+        };
+        let toml::Value::Table(entries) = cfg else {
+            return Err(Diagnostic::coded(
+                "AU2070",
+                format!(
+                    "build.cfg in `{}` requires a table of flags",
+                    path.display()
+                ),
+            ));
+        };
+        entries
+            .into_iter()
+            .map(|(name, value)| {
+                crate::build_config::validate_name(&name)?;
+                let value = match value {
+                    toml::Value::String(value) => value,
+                    toml::Value::Boolean(value) => value.to_string(),
+                    _ => {
+                        return Err(Diagnostic::coded(
+                            "AU2070",
+                            format!(
+                                "build.cfg.{name} in `{}` requires a string or boolean",
+                                path.display()
+                            ),
+                        ))
+                    }
+                };
+                Ok((name, value))
+            })
+            .collect()
+    }
+}
+
 #[derive(Deserialize)]
 struct RawManifest {
+    #[serde(default)]
+    build: RawBuildSection,
     package: Option<RawPackageSection>,
     #[serde(default)]
     dependencies: BTreeMap<String, RawDependency>,
@@ -949,10 +1021,25 @@ struct RawLockPackage {
 }
 
 struct ParsedPackageManifest {
+    cfg: BTreeMap<String, String>,
     package: RawPackageSection,
     dependencies: BTreeMap<String, RawDependency>,
     ffi_dependencies: BTreeSet<String>,
     foreign_link: ForeignLinkPlan,
+}
+
+pub(crate) fn manifest_cfg_for_entry(entry: &Path) -> Result<BTreeMap<String, String>> {
+    let entry = canonicalize_if_exists(&crate::absolutize(entry))?;
+    for ancestor in entry.parent().unwrap_or(Path::new(".")).ancestors() {
+        let path = ancestor.join(MANIFEST_NAME);
+        if path.exists() {
+            let manifest = load_raw_manifest(&path)?;
+            if manifest.package.is_some() {
+                return manifest.build.into_cfg(&path);
+            }
+        }
+    }
+    Ok(BTreeMap::new())
 }
 
 fn find_enclosing_package_manifest_dir(entry_path: &Path) -> Result<Option<PathBuf>> {
@@ -1210,6 +1297,7 @@ fn load_package_manifest(manifest_dir: &Path) -> Result<ParsedPackageManifest> {
         None => ForeignLinkPlan::default(),
     };
     Ok(ParsedPackageManifest {
+        cfg: raw.build.into_cfg(&manifest_path)?,
         package,
         dependencies: raw.dependencies,
         ffi_dependencies,
@@ -1310,6 +1398,7 @@ fn foreign_link_plan_for_host(
 }
 
 fn load_raw_manifest(manifest_path: &Path) -> Result<RawManifest> {
+    crate::record_source_read(manifest_path);
     let source = fs::read_to_string(manifest_path).map_err(|error| {
         Diagnostic::new(format!(
             "failed to read manifest `{}`: {}",
@@ -2212,7 +2301,7 @@ fn write_atomic_file(path: &Path, contents: &[u8], noun: &str, target: &str) -> 
     write_result
 }
 
-fn is_valid_package_name(name: &str) -> bool {
+pub(crate) fn is_valid_package_name(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;

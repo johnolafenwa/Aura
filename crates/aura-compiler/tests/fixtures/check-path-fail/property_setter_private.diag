@@ -1,0 +1,5 @@
+error[AU2999]: setter for `level` is private on `Gauge`
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/property_setter_private.au:5:5
+  |
+5 |     gauge.level = 2
+  |     ^

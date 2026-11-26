@@ -1,0 +1,5 @@
+error[AU2071]: a compile-time condition must have type bool
+ --> crates/aura-compiler/tests/fixtures/check-fail/conditional_invalid_predicate.au:2:4
+  |
+2 | if build.os:
+  |    ^

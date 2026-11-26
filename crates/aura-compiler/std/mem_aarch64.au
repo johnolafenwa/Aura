@@ -1,0 +1,129 @@
+public def read_midr_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, midr_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def read_mpidr_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, mpidr_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def read_currentel() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, currentel", output("reg", value), options("preserves_flags"))
+    return value
+
+public def read_cntpct_el0() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, cntpct_el0", output("reg", value), options("preserves_flags"))
+    return value
+
+public def read_cntfrq_el0() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, cntfrq_el0", output("reg", value), options("preserves_flags"))
+    return value
+
+public def read_sctlr_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, sctlr_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_sctlr_el1(value: uint64) -> None:
+    asm("msr sctlr_el1, $0", input("reg", value), options("preserves_flags"))
+
+public def read_tcr_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, tcr_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_tcr_el1(value: uint64) -> None:
+    asm("msr tcr_el1, $0", input("reg", value), options("preserves_flags"))
+
+public def read_ttbr0_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, ttbr0_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_ttbr0_el1(value: uint64) -> None:
+    asm("msr ttbr0_el1, $0", input("reg", value), options("preserves_flags"))
+
+public def read_ttbr1_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, ttbr1_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_ttbr1_el1(value: uint64) -> None:
+    asm("msr ttbr1_el1, $0", input("reg", value), options("preserves_flags"))
+
+public def read_mair_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, mair_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_mair_el1(value: uint64) -> None:
+    asm("msr mair_el1, $0", input("reg", value), options("preserves_flags"))
+
+public def read_vbar_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, vbar_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_vbar_el1(value: uint64) -> None:
+    asm("msr vbar_el1, $0", input("reg", value), options("preserves_flags"))
+
+public def read_esr_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, esr_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_esr_el1(value: uint64) -> None:
+    asm("msr esr_el1, $0", input("reg", value), options("preserves_flags"))
+
+public def read_far_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, far_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_far_el1(value: uint64) -> None:
+    asm("msr far_el1, $0", input("reg", value), options("preserves_flags"))
+
+public def read_elr_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, elr_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_elr_el1(value: uint64) -> None:
+    asm("msr elr_el1, $0", input("reg", value), options("preserves_flags"))
+
+public def read_spsr_el1() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, spsr_el1", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_spsr_el1(value: uint64) -> None:
+    asm("msr spsr_el1, $0", input("reg", value), options("preserves_flags"))
+
+public def read_cntp_ctl_el0() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, cntp_ctl_el0", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_cntp_ctl_el0(value: uint64) -> None:
+    asm("msr cntp_ctl_el0, $0", input("reg", value), options("preserves_flags"))
+
+public def read_cntp_cval_el0() -> uint64:
+    mut value: uint64 = 0
+    asm("mrs $0, cntp_cval_el0", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_cntp_cval_el0(value: uint64) -> None:
+    asm("msr cntp_cval_el0, $0", input("reg", value), options("preserves_flags"))
+
+public def enable_interrupts() -> None:
+    asm("msr DAIFClr, #2", options("preserves_flags"))
+
+public def disable_interrupts() -> None:
+    asm("msr DAIFSet, #2", options("preserves_flags"))
+
+public def halt() -> None:
+    asm("wfi", options("preserves_flags"))

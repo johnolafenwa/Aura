@@ -65,6 +65,7 @@ date of that decision, not the state of the implementation today.
 - [31-shared-state-design-checkpoint.md](31-shared-state-design-checkpoint.md) covers shared mutexes, atomics, and maps.
 - [32-collections-text-numbers-design-checkpoint.md](32-collections-text-numbers-design-checkpoint.md) covers collection types, text operations and numeric types.
 - [33-failure-recovery-design-checkpoint.md](33-failure-recovery-design-checkpoint.md): trap recovery and call depth
+- [Class items design checkpoint](34-class-items-design-checkpoint.md) covers delegation, property setters, destructor hooks, and method decorators.
 - [40-freestanding-heap-design-checkpoint.md](40-freestanding-heap-design-checkpoint.md): allocation in freestanding builds
 
 Accepted language and runtime decisions are recorded separately in

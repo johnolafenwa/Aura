@@ -131,6 +131,12 @@ fn a_selection_across_columns_is_a_strided_view() {
     assert_eq!(column.get_optional(&[3]).unwrap(), None);
     assert_eq!(column.value_at_flat(1), int(5));
     assert_eq!(column.render(), "Array[int64](shape=[3], values=[1, 5, 9])");
+    // Rendering a view reads its backing buffer, even when allocating
+    // additional array storage would fail.
+    assert_eq!(
+        with_array_allocation_budget(0, || column.render()),
+        "Array[int64](shape=[3], values=[1, 5, 9])"
+    );
 
     let stepped = matrix.select(&[span(2, 0, -1), span(0, 4, 2)]).unwrap();
     assert_eq!(&*stepped.shape, &[2, 2]);

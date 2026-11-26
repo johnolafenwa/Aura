@@ -1,0 +1,2 @@
+def use_address(address: uint64) -> int32:
+    return (address as ptr[int32]).read()

@@ -143,6 +143,25 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 117. [ADR-0117 Ordered collections](0117-ordered-collections.md) covers deques, binary heaps and B-tree maps and sets.
 128. [ADR-0128: Freestanding programs allocate through hooks, with an allocator written in Aura](0128-freestanding-allocation-hooks.md) — Accepted; `aura_alloc`, `aura_free`, and `aura_realloc` with sized frees; `mem.alloc`, `mem.free`, `mem.realloc`; a default allocator in Aura source that the build compiles into the object as weak symbols
 129. [ADR-0129: A freestanding build keeps tuples and enums of words in machine words](0129-freestanding-plain-values.md) — Accepted; a MIR pass in `prepare` rewrites plain tuples, enums, and `Result` to classes of words; `match` becomes tag comparisons; no heap
+130. [ADR-0130 Delegate a trait to a field](0130-delegated-trait-implementations.md)
+131. [ADR-0131 A property setter is a mutable method](0131-property-setters.md)
+132. [ADR-0132 An owner runs its class drop hook](0132-class-drop-hooks.md)
+133. [ADR-0133 Method decorators](0133-method-decorators.md)
+135. [ADR-0135 Target Configuration](0135-build-configuration.md)
+136. [ADR-0136 Constant Evaluation](0136-constant-evaluation.md)
+137. [ADR-0137 Frozen Module Data](0137-frozen-module-data.md)
+138. [ADR-0138 Conditional Suites](0138-conditional-suites.md)
+139. [ADR-0139 Tooling For Conditional Programs](0139-conditional-tooling.md)
+140. [ADR-0140 Mutable module storage](0140-mutable-module-storage.md)
+141. [ADR-0141 Fixed-size arrays](0141-fixed-size-arrays.md)
+142. [ADR-0142 Typed raw pointers](0142-typed-raw-pointers.md)
+143. [ADR-0143 C record layout controls](0143-c-record-layout-controls.md)
+144. [ADR-0144 Fixed-width bit operations and atomics](0144-fixed-width-bit-operations-and-atomics.md)
+145. [ADR-0145: Freestanding Assembly](0145-freestanding-assembly.md)
+146. [ADR-0146 Machine Entries And Object Placement](0146-machine-function-attributes.md)
+147. [ADR-0147. Privileged hardware operations in mem](0147-privileged-hardware-operations.md)
+148. [ADR-0148: x86-64 Kernel Code Generation](0148-x86-64-kernel-profile.md)
+149. [ADR-0149 PC Interrupts Under QEMU](0149-qemu-x86-64-interrupt-board.md)
 150. [ADR-0150: A check that reads an unmodeled result is not a failure](0150-unmodeled-results-are-not-failures.md) — Accepted; made-up results are recorded and a refuted check that reads one is reported as not modeled, with no counterexample
 151. [ADR-0151: A contract that can never hold is reported](0151-contracts-that-cannot-hold.md) — Accepted; one satisfiability query for the entry assumptions, `AU5120`
 160. [ADR-0160: A freestanding build keeps a type inside itself in counted heap blocks](0160-freestanding-boxes.md) — Accepted; `str` in the same blocks with a text library in Aura; an `indirect` payload of an enum's own type is the address of a block with a reference count; block functions in Aura over `mem.alloc`; the MIR pass counts references where the ownership pass stated them

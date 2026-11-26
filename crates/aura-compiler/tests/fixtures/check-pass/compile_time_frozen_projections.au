@@ -1,0 +1,91 @@
+class Dimensions:
+    height: int64
+    width: int64
+
+    def area(self) -> int64:
+        return self.height * self.width
+
+enum Mode:
+    Missing
+    Ready(int64)
+
+MODE = Mode.Ready(4)
+ROWS = [[11, 13], [21, 23]]
+CODES = {10: 2, 40: 5}
+IDS = {10, 40}
+SHAPE = Dimensions(height=2, width=3)
+PAIR = (7, 9)
+TEXT = "λx"
+BYTES = b"ABC"
+NAMES = {"a": 2, "λx": 5}
+
+def mode_code() -> int64:
+    match MODE:
+        case Mode.Ready(value):
+            return value
+        case Mode.Missing:
+            return -1
+
+export "C" def total(i: int64, key: int64) -> int64:
+    mut total = ROWS[i][-1] + ROWS.len() + SHAPE.area() + PAIR[1] + TEXT.byte_len() + TEXT.len() + NAMES["λx"] + mode_code()
+    if key in IDS and key in CODES:
+        total += CODES[key]
+    return total + (BYTES[-1] as int64)
+
+class Rectangle:
+    size: Dimensions
+    scale: int64
+
+RECTANGLES = [Rectangle(size=Dimensions(height=2, width=5), scale=3)]
+ROW_MAP = {11: [4, 7]}
+LABELS = ["port", "starboard"]
+LENGTHS = {"port": 4, "starboard": 9}
+EMPTY: list[int64] = []
+MAYBE: int64 | None = 6
+
+export "C" def nested(i: int64) -> int64:
+    if EMPTY.is_empty():
+        rect = RECTANGLES[0]
+        value = MAYBE
+        if value is None:
+            return 0
+        return rect.size.area() * rect.scale + ROW_MAP[11][-1] + LENGTHS[LABELS[i]] + value
+    return 0
+
+class Port:
+    label: str
+    number: int64
+PORTS = [Port(label="east", number=11)]
+FLOATS = {0.5, 1.5}
+export "C" def details(i: int64) -> int64:
+    if 0.5 in FLOATS:
+        p = PORTS[i]
+        return p.label.len() + p.number
+    return 0
+
+def select_title(enabled: bool) -> str | None:
+    if enabled:
+        return "board"
+    return None
+const TITLE = select_title(true)
+export "C" def title_len() -> int64:
+    title = TITLE
+    if title is None:
+        return 0
+    return title.len()
+
+const WIDE: list[uint128] = [
+    ((7 as uint128) << 64) | (11 as uint128),
+    ((13 as uint128) << 64) | (17 as uint128),
+]
+export "C" def wide_words(i: int64) -> uint64:
+    pair = WIDE[i]
+    return ((pair >> 64) as uint64) + ((pair & (255 as uint128)) as uint64)
+
+const SLOTS: dict[uint128, int64] = {((5 as uint128) << 64) | (9 as uint128): 3, (9 as uint128): 7}
+const SIGNED_KEYS: set[int128] = {(-7 as int128), (7 as int128)}
+export "C" def wide_keys(i: int64) -> int64:
+    key = ((i as uint128) << 64) | (9 as uint128)
+    if key in SLOTS and (-7 as int128) in SIGNED_KEYS:
+        return SLOTS[key]
+    return -1

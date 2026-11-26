@@ -1,0 +1,4 @@
+from conditional_support.features import selected
+if selected:
+    def build_resource() -> int64:
+        return 3

@@ -281,6 +281,7 @@ fn hosted_constructs_in_helpers_are_reported() {
         (
             r#"
 def seed() -> int64:
+    print("loading")
     return 41
 START: int64 = seed() + 1
 export "C" def get() -> int64:
@@ -464,7 +465,7 @@ export "C" def bump(cell: uint64) -> uint64:
 fn every_mem_function_is_a_host_builtin_the_emitter_compiles_inline() {
     let namespace = crate::builtin_modules::builtin_module_namespace(&["mem".to_string()])
         .expect("`mem` is a builtin module");
-    assert_eq!(namespace.all_functions.len(), 32);
+    assert_eq!(namespace.all_functions.len(), 71);
     for name in namespace.all_functions.keys() {
         let qualified = format!("mem::{name}");
         assert!(
@@ -691,8 +692,8 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
             "function value",
         ),
         (
-            "    wide: int128 = 5\n    return count\n",
-            "holds `wide` of type `int128`",
+            "    wide: Duration = Duration.ms(5)\n    return count\n",
+            "holds `wide` of type `Duration`",
         ),
     ] {
         assert_problem(&format!("{prelude}{body}"), expected);
@@ -895,4 +896,425 @@ fn an_emitter_fault_is_not_a_subset_report() {
         refusal.message,
         "`f` does x, which a freestanding build cannot compile"
     );
+}
+
+#[path = "machine_attributes_tests.rs"]
+mod machine_attributes_tests;
+
+#[test]
+fn kernel_float_operations_and_addresses_use_the_kernel_abi() {
+    let source = include_str!("../tests/fixtures/check-pass/kernel_soft_float.au");
+    let kernel = FreestandingTarget::X86_64Kernel;
+    assert_eq!(kernel.name(), FreestandingTarget::X86_64.name());
+    assert_eq!(kernel.arch(), FreestandingTarget::X86_64.arch());
+    let bytes = object(source, kernel);
+    let (_, _, undefined) = symbols(&bytes);
+    assert!(undefined.contains(&"__adddf3".to_owned()), "{undefined:?}");
+    let file = object::File::parse(&*bytes).expect("object should parse");
+    // The trap hook takes the address of its file name. Kernel-model code
+    // sign-extends an absolute 32-bit relocation into the upper two GiB.
+    assert!(file
+        .sections()
+        .any(|section| section.relocations().any(|(_, relocation)| {
+            relocation.flags()
+                == object::RelocationFlags::Elf {
+                    r_type: object::elf::R_X86_64_32S,
+                }
+        })));
+}
+
+#[test]
+fn frozen_tables_are_read_only_objects_for_each_freestanding_target() {
+    let source = r#"
+def squares() -> list[int64]:
+    return [17 * 17, 23 * 23, 31 * 31]
+TABLE = squares()
+export "C" def lookup(index: int64) -> int64:
+    return TABLE[index]
+"#;
+    let words = [289_i64, 529, 961]
+        .into_iter()
+        .flat_map(i64::to_le_bytes)
+        .collect::<Vec<_>>();
+    for target in TARGETS {
+        let bytes = object(source, target);
+        let file = object::File::parse(bytes.as_slice()).unwrap();
+        assert!(file.sections().any(|section| {
+            section.kind() == object::SectionKind::ReadOnlyData
+                && section
+                    .data()
+                    .unwrap()
+                    .windows(words.len())
+                    .any(|window| window == words)
+        }));
+        let (globals, _, undefined) = symbols(&bytes);
+        assert_eq!(globals, ["lookup"]);
+        assert_eq!(undefined, ["aura_trap"]);
+    }
+}
+
+#[test]
+fn systems_integer_operations_emit_self_contained_objects() {
+    for source in [
+        include_str!("../tests/fixtures/systems-integers/atomic_orders.au"),
+        include_str!("../tests/fixtures/systems-integers/wide_arithmetic.au"),
+        include_str!("../tests/fixtures/systems-integers/wide_vectors.au"),
+        "export \"C\" def count(n: uint64) -> int64:\n    return n.rotate_left(3).count_ones()\n",
+    ] {
+        for target in TARGETS {
+            let (_, _, undefined) = symbols(&object(source, target));
+            assert!(undefined.iter().all(|s| s == "aura_trap"), "{undefined:?}");
+        }
+    }
+}
+
+#[test]
+fn load_rejects_release_order_during_checking() {
+    let source = include_str!("../tests/fixtures/systems-integers/invalid_order.au");
+    let module = crate::parse_source(source).expect("valid syntax");
+    let errors = crate::check_module_with_builtin_imports(module).expect_err("invalid order");
+    assert_eq!(errors.code, "AU2087", "{errors:?}");
+}
+
+#[test]
+fn rotation_count_type_diagnostic() {
+    let source = include_str!("../tests/fixtures/check-fail/rotation_count_type.au");
+    let error = crate::check_source(source).expect_err("invalid count");
+    assert_eq!(error.code, "AU2088");
+}
+
+#[test]
+fn integer_bit_methods_run_on_the_interpreter() {
+    let source = include_str!("../tests/fixtures/run-pass/integer_bit_methods.au");
+    let want = include_str!("../tests/fixtures/run-pass/integer_bit_methods.stdout");
+    let run = crate::run_source(source).expect("bit operations execute");
+    assert_eq!(run.stdout, want);
+}
+
+#[test]
+fn atomic_order_diagnostics_cover_aliases_and_dynamic_orders() {
+    for (import, stmt) in [
+        ("import mem", "mem.fence(\"relaxed\")"),
+        (
+            "from mem import atomic_load_uint16 as load",
+            "load(address, order)",
+        ),
+        (
+            "import mem",
+            "mem.atomic_store_uint16(address, 1, \"acquire\")",
+        ),
+        (
+            "import mem",
+            "mem.atomic_compare_exchange_uint8(address, 0, 1, \"relaxed\", \"acquire\")",
+        ),
+        ("import mem", "f = mem.atomic_add_uint8"),
+    ] {
+        let source =
+            format!("{import}\n\ndef check(address: uint64, order: str) -> None:\n    {stmt}\n");
+        let parsed = crate::parse_source(&source).expect("ordering test source parses");
+        let error = crate::check_module_with_builtin_imports(parsed).expect_err("invalid ordering");
+        assert_eq!(error.code, "AU2087", "{stmt}: {error}");
+    }
+}
+
+#[test]
+fn constant_scale_guard_requires_matching_checked_operations() {
+    let source = "export \"C\" def scale(x: uint64) -> uint64:\n    return 3 * x + 1\n";
+    let module = lower(source);
+    let function = module.functions.iter().find(|f| f.name == "scale").unwrap();
+    let pattern = function
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.windows(4))
+        .find(|ops| super::freestanding_scale::guard_limit(ops).is_some())
+        .unwrap();
+    assert_eq!(
+        super::freestanding_scale::guard_limit(pattern),
+        Some((u64::MAX - 1) / 3)
+    );
+    let mut ops = pattern.to_vec();
+    if let Instruction::Assign {
+        value: Rvalue::Use(Operand::Int(multiplier)),
+        ..
+    } = &mut ops[0]
+    {
+        *multiplier = 0;
+    }
+    assert_eq!(super::freestanding_scale::guard_limit(&ops), None);
+    assert!(!object(source, FreestandingTarget::X86_64).is_empty());
+}
+
+#[test]
+fn fixed_arrays_use_inline_storage_on_every_target() {
+    let source = r#"
+def sample(index: int64) -> uint16:
+    mut row: fixed[uint16, 3] = [4, 2, 7]
+    row[0] = 9
+    return row[index]
+
+export "C" def get(index: int64) -> uint16:
+    return sample(index)
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert_eq!(undefined, [TRAP_HOOK]);
+    }
+}
+
+#[test]
+fn fixed_array_constant_access_needs_no_trap_hook() {
+    let source = r#"
+export "C" def get(word: uint16) -> uint16:
+    row: fixed[uint16, 3] = [word] * 3
+    return row[2]
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(undefined.is_empty(), "{undefined:?}");
+    }
+}
+
+#[test]
+fn c_layout_queries_are_target_constants_in_freestanding_objects() {
+    let source = "import mem\nextern \"C\" packed align(8) class Header:\n    flag: uint8 bits(3)\n    count: uint32\n\nSIZE = mem.size_of(Header)\n\nexport \"C\" def layout() -> uint64:\n    return SIZE + mem.align_of(Header) + mem.offset_of(Header, count)\n";
+    for target in TARGETS {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert!(global.iter().any(|symbol| symbol == "layout"));
+        assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+    }
+}
+
+#[test]
+fn freestanding_union_member_write_keeps_runtime_out_of_every_object() {
+    let source = r#"
+extern "C" union Word:
+    whole: uint32
+    low: uint8
+
+export "C" def replace_low(original: uint32, low: uint8) -> uint32:
+    mut w = Word.from_whole(original)
+    w.low = low
+    return w.whole
+"#;
+    let mut module = crate::parse_source(source).unwrap();
+    module.use_freestanding_c_layout();
+    let program = crate::check_module_with_builtin_imports(module).unwrap();
+    let mir = crate::mir::lower_with_source_locations(&program);
+    for target in TARGETS {
+        let bytes = emit_freestanding_object(&mir, "kernel.au", source, target).unwrap();
+        let (globals, _, undefined) = symbols(&bytes);
+        assert!(globals.iter().any(|s| s == "replace_low"));
+        assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+    }
+}
+
+#[test]
+fn packed_mut_parameter_uses_target_c_layout_on_every_freestanding_target() {
+    let source = r#"
+extern "C" packed align(16) class Header:
+    kind: uint8
+    serial: uint32
+    code: uint16 bits(3)
+
+extern "C" def advance(h: mut Header) -> None
+
+export "C" def reset(code: uint16) -> uint32:
+    mut h = Header(kind=4, serial=1234, code=code)
+    advance(h)
+    h.code = 1
+    return h.serial + (h.code as uint32)
+"#;
+    for target in TARGETS {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert!(global.iter().any(|name| name == "reset"));
+        assert!(undefined.iter().any(|name| name == "advance"));
+        assert!(undefined
+            .iter()
+            .all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
+    }
+}
+
+#[test]
+fn fixed_arrays_of_controlled_records_keep_the_target_stride() {
+    let source = r#"
+extern "C" packed class Row:
+    tag: uint8
+    word: uint32
+
+extern "C" align(256) class Line:
+    word: uint32
+
+extern "C" class Packet:
+    rows: fixed[Row, 2]
+    lines: fixed[Line, 2]
+
+extern "C" def touch(p: mut Packet) -> None
+
+def lane(lines: fixed[Line, 2] | None) -> uint32:
+    if lines is not None:
+        return lines[1].word
+    return 0
+
+export "C" def exercise() -> uint32:
+    mut p = Packet(rows=[Row(tag=1, word=3), Row(tag=2, word=4)], lines=[Line(word=5), Line(word=6)])
+    touch(p)
+    return p.rows[1].word + lane(p.lines)
+"#;
+    for target in TARGETS {
+        let (exports, _, imports) = symbols(&object(source, target));
+        assert!(exports.iter().any(|s| s == "exercise"));
+        assert!(imports.iter().any(|s| s == "touch"));
+        assert!(imports
+            .iter()
+            .all(|s| ["touch", TRAP_HOOK].contains(&s.as_str())));
+    }
+}
+
+#[test]
+fn typed_pointer_objects_use_target_memory_operations() {
+    for source in [
+        include_str!("../tests/fixtures/typed-pointers/scalars.au"),
+        include_str!("../tests/fixtures/typed-pointers/aggregate.au"),
+        include_str!("../tests/fixtures/typed-pointers/links.au"),
+        include_str!("../tests/fixtures/typed-pointers/widths.au"),
+        include_str!("../tests/fixtures/typed-pointers/nested.au"),
+        include_str!("../tests/fixtures/typed-pointers/wide.au"),
+        include_str!("../tests/fixtures/typed-pointers/fixed.au"),
+    ] {
+        for target in TARGETS {
+            let (_, _, undefined) = symbols(&object(source, target));
+            assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+        }
+    }
+}
+
+#[test]
+fn hosted_pointer_objects_preserve_wide_accesses_and_parameter_storage() {
+    for (source, expected) in [
+        (
+            include_str!("../tests/fixtures/typed-pointers/borrowed_owner.au"),
+            &["aura_direct_instance_set_field_owned"][..],
+        ),
+        (
+            include_str!("../tests/fixtures/typed-pointers/wide.au"),
+            &[
+                "aura_direct_pointer_wide_read",
+                "aura_direct_pointer_wide_write",
+            ][..],
+        ),
+        (
+            include_str!("../tests/fixtures/typed-pointers/pointer_field.au"),
+            &[][..],
+        ),
+        (
+            include_str!("../tests/fixtures/typed-pointers/array_records.au"),
+            &[][..],
+        ),
+    ] {
+        let parsed = crate::parse_source(source).unwrap();
+        let program = crate::check_module_with_builtin_imports(parsed).unwrap();
+        let module = crate::mir::lower(&program);
+        let bytes = crate::native_codegen::emit_host_object(&module).unwrap();
+        let (_, _, imports) = symbols(&bytes);
+        for symbol in expected {
+            assert!(
+                imports
+                    .iter()
+                    .any(|name| name.trim_start_matches('_') == *symbol),
+                "{imports:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_pointer_cast_requires_ffi_without_a_mem_import() {
+    let source = include_str!("../tests/fixtures/typed-pointers/permission.au");
+    let failure = crate::check_source(source).expect_err("source-only pointers need a manifest");
+    assert!(failure.message.contains("allow_ffi = true"), "{failure:?}");
+}
+
+#[test]
+fn fixed_arrays_of_wide_words_stay_inline() {
+    let source = r#"
+export "C" def sample(i: int64, high: uint64) -> uint64:
+    word = (high as uint128) << 64
+    mut row: fixed[uint128, 2] = [word, 0]
+    row[1] = row[0]
+    return (row[i] >> 64) as uint64
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert_eq!(undefined, [TRAP_HOOK]);
+    }
+}
+
+#[test]
+fn fixed_array_updates_do_not_copy_the_entire_ring() {
+    let kernels = include_str!("../../../benchmarks/freestanding/kernels.au");
+    let bytes = object(kernels, FreestandingTarget::X86_64);
+    let file = object::File::parse(bytes.as_slice()).unwrap();
+    let ring = file
+        .symbols()
+        .find(|sym| sym.name() == Ok("aura_ring_mix"))
+        .unwrap();
+    // The loop needs one indexed load and store. Copying every lane
+    // into and out of scratch storage produced 814 bytes on x86-64.
+    assert!(ring.size() < 400, "ring_mix grew to {} bytes", ring.size());
+}
+
+#[test]
+fn fixed_array_union_members_store_every_word_and_partial_tail() {
+    let source = r#"
+def last(row: fixed[uint16, 9] | None) -> uint16:
+    if row is not None:
+        return row[8]
+    return 0
+
+export "C" def sample(value: uint16) -> uint16:
+    row: fixed[uint16, 9] = [value] * 9
+    return last(row)
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(undefined.is_empty(), "{undefined:?}");
+    }
+}
+
+#[test]
+fn hosted_ordered_atomics_emit_without_generic_order_wrappers() {
+    let source = include_str!("../tests/fixtures/systems-integers/atomic_orders.au");
+    let mir = lower(&format!("{source}\n\ndef main() -> int32:\n    return 0\n"));
+    let kept = super::reachability::prune_unreachable_functions(&mir);
+    assert!(kept
+        .functions
+        .iter()
+        .all(|f| f.name != "mem::atomic_store_uint8"));
+    emit_host_object(&mir).expect("every memory order is available at the call site");
+
+    let named = lower("import mem\n\ndef main() -> None:\n    print(\"mem::fence\")\n");
+    emit_host_object(&named).expect("a string naming the generic wrapper can compile");
+}
+
+#[test]
+fn wide_integer_comparisons_and_narrow_casts_are_self_contained() {
+    let source = r#"
+export "C" def check(low: uint64, divisor: int64) -> uint16:
+    numerator = low as uint128
+    signed = low as int128
+    quotient = signed // (divisor as int128)
+    if quotient >= 0 and quotient <= signed:
+        exact = quotient as float64
+        if (exact as int128) == quotient:
+            small = numerator as int16
+            return (small as int128) as uint16
+    return 0
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(
+            undefined.iter().all(|name| name == "aura_trap"),
+            "{target:?}: {undefined:?}"
+        );
+    }
 }

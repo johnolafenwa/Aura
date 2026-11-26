@@ -33,7 +33,7 @@ function runVerifier(
   source,
   spawnImpl = spawn,
   timeoutMs = VERIFY_TIMEOUT_MS,
-  { signal = null, maxStdoutBytes = MAX_VERIFY_STDOUT_BYTES } = {}
+  { signal = null, maxStdoutBytes = MAX_VERIFY_STDOUT_BYTES, freestandingTarget = process.env.AURA_LSP_FREESTANDING_TARGET } = {}
 ) {
   if (signal && signal.aborted) {
     return Promise.resolve(null);
@@ -41,9 +41,14 @@ function runVerifier(
   return new Promise((resolve) => {
     let child;
     try {
+      const targetArgs = [];
+      if (freestandingTarget || process.env.AURA_LSP_FREESTANDING === "1") {
+        targetArgs.push("--freestanding");
+      }
+      if (freestandingTarget) targetArgs.push("--target", freestandingTarget);
       child = spawnImpl(
         command.cmd,
-        [...command.args, "verify", "--format", "json", "--stdin", filePath],
+        [...command.args, "verify", ...targetArgs, "--format", "json", "--stdin", filePath],
         {
           cwd: command.cwd,
           env: { AURA_OFFLINE: "1", ...process.env },

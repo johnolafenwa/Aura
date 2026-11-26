@@ -16,11 +16,13 @@ mod array_members;
 mod array_reduce;
 pub mod array_simd;
 pub mod array_views;
+pub mod builtin_limit;
 pub mod bytes_codec;
 pub mod c_layout;
 pub mod c_values;
 pub mod collection_index;
 pub mod ffi;
+pub mod frozen_value;
 pub mod gzip_codec;
 pub mod host_io;
 #[cfg(any(test, feature = "test-support"))]
@@ -37,6 +39,7 @@ pub mod numbers_host;
 #[cfg(any(windows, test))]
 mod pipe_bridge;
 pub mod randomness;
+pub mod raw_wide_memory;
 pub mod runtime_config;
 pub mod runtime_reactor;
 pub mod runtime_value;

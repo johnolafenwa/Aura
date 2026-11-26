@@ -275,6 +275,136 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "not available in a freestanding build",
     },
     DiagnosticCodeInfo {
+        code: "AU2060",
+        band: "names/types",
+        title: "unknown delegation field",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2061",
+        band: "names/types",
+        title: "unsatisfied delegation trait",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2062",
+        band: "names/types",
+        title: "duplicate trait delegation",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2063",
+        band: "names/types",
+        title: "delegation to a view field",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2064",
+        band: "names/types",
+        title: "invalid property setter",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2065",
+        band: "names/types",
+        title: "invalid drop hook declaration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2066",
+        band: "names/types",
+        title: "explicit drop hook reference",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2070",
+        band: "names/types",
+        title: "invalid build configuration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2071",
+        band: "names/types",
+        title: "invalid compile-time condition",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2080",
+        band: "names/types",
+        title: "invalid static storage initializer",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2081",
+        band: "names/types",
+        title: "invalid fixed array type",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2082",
+        band: "names/types",
+        title: "invalid fixed array initializer",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2083",
+        band: "names/types",
+        title: "invalid raw pointer operation",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2084",
+        band: "names/types",
+        title: "raw pointer requires FFI permission",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2085",
+        band: "names/types",
+        title: "invalid C layout declaration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2086",
+        band: "names/types",
+        title: "invalid C layout query",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2087",
+        band: "names/types",
+        title: "invalid atomic ordering",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2088",
+        band: "names/types",
+        title: "invalid rotation count type",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2090",
+        band: "names/types",
+        title: "assembly requires a freestanding target",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2091",
+        band: "names/types",
+        title: "invalid assembly operand type",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2092",
+        band: "names/types",
+        title: "invalid assembly register or clobber",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2093",
+        band: "names/types",
+        title: "invalid assembly syntax or option",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2094",
+        band: "names/types",
+        title: "machine attributes in a hosted build",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2095",
+        band: "names/types",
+        title: "invalid machine attribute or declaration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2096",
+        band: "names/types",
+        title: "invalid interrupt target or call",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2097",
+        band: "names/types",
+        title: "hardware operation unavailable on this target",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
@@ -340,6 +470,56 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "definite initialization",
     },
     DiagnosticCodeInfo {
+        code: "AU3020",
+        band: "ownership",
+        title: "partial move from a class with a drop hook",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3025",
+        band: "ownership",
+        title: "required compile-time evaluation",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3026",
+        band: "ownership",
+        title: "compile-time evaluation trap",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3027",
+        band: "ownership",
+        title: "compile-time evaluation step limit",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3028",
+        band: "ownership",
+        title: "compile-time evaluation memory limit",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3030",
+        band: "ownership",
+        title: "module state access",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3031",
+        band: "ownership",
+        title: "fixed array would duplicate a non-copy element",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3032",
+        band: "ownership",
+        title: "place has no writable stable address",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3033",
+        band: "ownership",
+        title: "borrow of a C bit-field",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3035",
+        band: "ownership",
+        title: "invalid assembly output destination",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",
@@ -388,6 +568,36 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4010",
         band: "runtime",
         title: "generator misuse",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4030",
+        band: "runtime",
+        title: "module state outside freestanding execution",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4031",
+        band: "runtime",
+        title: "fixed array index out of bounds",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4032",
+        band: "runtime",
+        title: "invalid raw pointer value",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4033",
+        band: "runtime",
+        title: "value exceeds C bit-field width",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4034",
+        band: "runtime",
+        title: "invalid integer operation argument",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4035",
+        band: "verify",
+        title: "assembly is outside the verified subset",
     },
     DiagnosticCodeInfo {
         code: "AU5001",

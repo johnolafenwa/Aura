@@ -1,0 +1,5 @@
+error[AU3025]: module constant `token` cannot be evaluated at build time
+ --> crates/aura-compiler/tests/fixtures/check-fail/required_effectful_constant.au:5:7
+  |
+5 | const token = observe()
+  |       ^

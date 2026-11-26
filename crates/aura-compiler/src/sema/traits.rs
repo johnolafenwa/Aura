@@ -1660,11 +1660,31 @@ impl<'a> FunctionChecker<'a> {
         method_name: &str,
         span: crate::diag::Span,
     ) -> Result<Option<TraitMethodMatch<'_>>> {
+        let delegated =
+            super::delegation::generated_call(self.trait_impls.iter(), self.module_name, span).map(
+                |(owner, _)| {
+                    self.trait_bound_identity(
+                        &TraitBound {
+                            trait_name: owner.trait_name.clone(),
+                            trait_args: owner.trait_args.clone(),
+                        },
+                        &owner.module_name,
+                    )
+                },
+            );
         let mut matches = Vec::new();
         for trait_impl in self.trait_impls_in_scope() {
             let Some(substitutions) = self.trait_impl_substitutions(trait_impl, ty) else {
                 continue;
             };
+            if delegated.as_ref().is_some_and(|wanted| {
+                self.trait_bound_identity(
+                    &self.resolved_trait_bound_for_impl(trait_impl, &substitutions),
+                    &trait_impl.module_name,
+                ) != *wanted
+            }) {
+                continue;
+            }
             let Some(method) = trait_impl.methods.get(method_name) else {
                 continue;
             };

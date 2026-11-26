@@ -104,3 +104,15 @@ pub extern "C" fn rs_orbit(steps: i64) -> f64 {
     }
     body.x * body.x + body.y * body.y
 }
+
+#[no_mangle]
+pub extern "C" fn rs_ring_mix(rounds: u32) -> u32 {
+    let mut ring = [0_u32; 16];
+    let mut value = 0x1357_9bdf;
+    for i in 0..rounds {
+        let slot = (i & 15) as usize;
+        value = (value ^ ring[slot] ^ i).rotate_left(7);
+        ring[slot] = value;
+    }
+    value
+}

@@ -1,0 +1,18 @@
+import build
+
+if build.hosted:
+    extern "C" class Number:
+        field: int64
+else:
+    impl Measure for Number:
+        def measure(self) -> int64:
+            return self.field
+
+class Platform:
+    if build.arch == "aarch64":
+        bits: uint64
+    elif build.freestanding:
+        code: int32
+    else:
+        def tag(self) -> str:
+            return "host"
