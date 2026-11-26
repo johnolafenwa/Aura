@@ -19089,3 +19089,120 @@ def main() -> int32:
     // A queue's state changes where its handle points.
     assert_eq!(slots("puts"), [0]);
 }
+
+const FRAME_FREE_SOURCE: &str = r#"
+enum Value:
+    Int(value: int64)
+    Text(value: str)
+    Pair(left: Value, right: Value)
+
+class Box:
+    value: int64
+
+def same(left: Value, right: Value) -> bool:
+    match left:
+        case Value.Int(a):
+            match right:
+                case Value.Int(b):
+                    return a == b and a >= 0
+                case _:
+                    return false
+        case Value.Text(a):
+            match right:
+                case Value.Text(b):
+                    return a != b
+                case _:
+                    return false
+        case _:
+            return false
+
+def is_int(value: Value) -> bool:
+    match value:
+        case Value.Int(_):
+            return true
+        case Value.Text(_):
+            return false
+        case Value.Pair(_, _):
+            return false
+
+def scaled(value: Value, factor: int64) -> int64:
+    match value:
+        case Value.Int(a):
+            return a * factor
+        case _:
+            return 0
+
+def halved(value: int64) -> int64:
+    return value // 2
+
+def before(left: str, right: str) -> bool:
+    return left < right
+
+def boxed(item: Box) -> int64:
+    return item.value
+
+def named(value: Value) -> str:
+    match value:
+        case Value.Text(text):
+            return text.clone()
+        case _:
+            return ""
+
+def inner(value: Value) -> bool:
+    match value:
+        case Value.Pair(left, _):
+            return is_int(left)
+        case _:
+            return false
+
+def calls(value: Value) -> bool:
+    return is_int(value)
+
+def bump(total: mut int64) -> int64:
+    total += 1
+    return total
+
+def countdown(n: int64) -> int64:
+    if n == 0:
+        return 0
+    return countdown(n - 1)
+
+def main():
+    mut total = 0
+    print(same(Value.Int(1), Value.Int(1)))
+    print(is_int(Value.Text("a")))
+    print(scaled(Value.Int(2), 3) + halved(5) + boxed(Box(value=1)) + bump(total))
+    print(before("a", "b"))
+    print(named(Value.Text("t")))
+    print(inner(Value.Pair(Value.Int(1), Value.Int(2))))
+    print(calls(Value.Int(1)))
+    print(countdown(3))
+"#;
+
+/// A function whose every way only copies, compares, releases, and reads
+/// variants needs no record of its caller; one that may trap, calls, takes
+/// a `mut` parameter, recurses, or reads a payload that is no scalar or
+/// `str` does.
+#[test]
+fn frame_free_callees_read_variants_and_compare_only() {
+    let mir = lower_source_to_mir(FRAME_FREE_SOURCE).expect("the source should lower");
+    let recursive = crate::mir::recursion::recursive_functions(&mir);
+    let free = super::frame_free_callees(&mir, &recursive);
+    for name in ["same", "is_int"] {
+        assert!(free.contains(name), "{name}: {free:?}");
+    }
+    for name in [
+        "scaled",
+        "halved",
+        "before",
+        "boxed",
+        "named",
+        "inner",
+        "calls",
+        "bump",
+        "countdown",
+        "main",
+    ] {
+        assert!(!free.contains(name), "{name}");
+    }
+}

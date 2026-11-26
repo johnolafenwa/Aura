@@ -745,6 +745,9 @@ struct NativeCodegen<'a> {
     /// The parameters a call may pass an element a list keeps in place
     /// as its bytes (see `element_loans::block_params`).
     block_params: HashMap<(String, usize), element_loans::BlockParam>,
+    /// The functions a caller may call without pushing its deferred frame
+    /// record (see `frame_free_callees`).
+    frame_free_callees: HashSet<String>,
     /// The functions that only read scalar fields of an instance they are
     /// passed: a leaf's body with calls of total leaves, and no `mut`
     /// parameter.
@@ -1113,6 +1116,7 @@ impl<'a> NativeCodegen<'a> {
             .collect::<HashSet<_>>();
         let total_leaves = total_leaves(module, &classes);
         let block_params = element_loans::block_params(module, &classes);
+        let frame_free_callees = frame_free_callees(module, &recursive_functions);
         let instance_keepers = module
             .functions
             .iter()
@@ -1387,6 +1391,7 @@ impl<'a> NativeCodegen<'a> {
             frame_entry,
             total_leaves,
             block_params,
+            frame_free_callees,
             instance_keepers,
             layout_keepers,
             debug_info: false,
@@ -2219,6 +2224,46 @@ impl<'a> NativeCodegen<'a> {
             builder.seal_block(ready);
             blocks.insert(function.entry.clone(), ready);
         }
+        let mut function_refs = HashMap::new();
+        // Sorted, so each function declares its callees in the same order in
+        // every build.
+        let mut functions = self.functions.iter().collect::<Vec<_>>();
+        functions.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, func_id) in functions {
+            let func_ref = builder.import_function(*func_id);
+            function_refs.insert(name.clone(), func_ref);
+        }
+        // The calls a deferred record waits past: the frame stack's own,
+        // retains and releases, which change counts in the task's ledger
+        // and free values but never fail or yield (a frameless leaf makes
+        // them with no record at all), and calls of the functions this one
+        // names that need no record of their callers.
+        let mut frame_free = frame_calls(&runtime_refs).to_vec();
+        frame_free.extend([
+            runtime_refs[RuntimeFn::RetainValue],
+            runtime_refs[RuntimeFn::ReleaseValue],
+            runtime_refs[RuntimeFn::ReleaseLastOwnedValue],
+            runtime_refs[RuntimeFn::ReleaseLastOwnedVariant],
+        ]);
+        let mut free_callees = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Name(name),
+                            ..
+                        },
+                    ..
+                } if self.frame_free_callees.contains(name) => function_refs.get(name).copied(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        free_callees.sort_by_key(|callee| callee.0);
+        free_callees.dedup();
+        frame_free.extend(free_callees);
         let deferred_frame = defers_frame.then(|| {
             let framed = Var(variable_index as u32);
             variable_index += 1;
@@ -2259,7 +2304,7 @@ impl<'a> NativeCodegen<'a> {
                 (_, Some(entry)) => builder.import_function(entry),
                 _ => runtime_refs[RuntimeFn::EnterCall],
             };
-            builder.defer_frame(framed, descriptor, enter, &frame_calls(&runtime_refs));
+            builder.defer_frame(framed, descriptor, enter, &frame_free);
             framed
         });
         if function.receiver == Some(MirReceiverKind::BorrowMut) {
@@ -2277,15 +2322,6 @@ impl<'a> NativeCodegen<'a> {
             }
         }
 
-        let mut function_refs = HashMap::new();
-        // Sorted, so each function declares its callees in the same order in
-        // every build.
-        let mut functions = self.functions.iter().collect::<Vec<_>>();
-        functions.sort_by(|left, right| left.0.cmp(right.0));
-        for (name, func_id) in functions {
-            let func_ref = builder.import_function(*func_id);
-            function_refs.insert(name.clone(), func_ref);
-        }
         let mut recovery_refs = HashMap::new();
         let mut functions = self.recovery_functions.iter().collect::<Vec<_>>();
         functions.sort_by_key(|(name, _)| *name);
@@ -22159,6 +22195,146 @@ fn total_leaves(module: &MirModule, classes: &HashMap<String, MirClass>) -> Hash
         .functions
         .iter()
         .filter(total)
+        .map(|function| function.name.clone())
+        .collect()
+}
+
+/// The functions of `module` a caller that defers its frame record may
+/// call without pushing it (see `defer_frame`): nothing on any of their
+/// ways can need the caller's record. Such a function is on no call cycle,
+/// so it neither checks the stack nor counts scheduling fuel, and it has
+/// no safepoint, no call of a function, and no trap: its instructions are
+/// copies, releases, scalar arithmetic and comparisons with no check,
+/// `str` equality, and reads of a variant's payload, and its terminators
+/// branch, match on the variant of an enum, and return. The runtime reads
+/// a variant or a `str` box its generated code cannot read in place with
+/// helpers that fail only on a value of another type, which a well-typed
+/// program never passes; a release frees a value without running Aura
+/// code. The references it takes and releases belong to the task's
+/// ledger, which no frame record keeps. Its own record is pushed where it
+/// calls one of those helpers, as any function's is.
+fn frame_free_callees(module: &MirModule, recursive: &HashSet<String>) -> HashSet<String> {
+    let enum_type = |ty: &Type| {
+        matches!(ty, Type::Named(name, args) if args.is_empty()
+            && module.enums.iter().any(|candidate| &candidate.name == name
+                && candidate.type_params.is_empty()))
+    };
+    let scalar_name = |ty: &Type| {
+        matches!(ty, Type::Named(name, args) if args.is_empty() && matches!(name.as_str(),
+            "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64"
+                | "float32" | "float64" | "bool"))
+    };
+    let text =
+        |ty: &Type| matches!(ty, Type::Named(name, args) if args.is_empty() && name == "str");
+    let free = |function: &MirFunction| {
+        let types = function
+            .local_types
+            .iter()
+            .map(|local| (local.name.as_str(), &local.ty))
+            .chain(
+                function
+                    .params
+                    .iter()
+                    .map(|param| (param.name.as_str(), &param.ty)),
+            )
+            .collect::<HashMap<_, _>>();
+        let typed = |operand: &Operand, accepts: &dyn Fn(&Type) -> bool| match operand {
+            Operand::Place(place) | Operand::MovePlace(place) => {
+                types.get(place.as_str()).is_some_and(|ty| accepts(ty))
+            }
+            Operand::Int(_) | Operand::Bool(_) | Operand::Float(_) => {
+                accepts(&Type::named("int64"))
+            }
+            _ => false,
+        };
+        let plain = |operand: &Operand| {
+            matches!(
+                operand,
+                Operand::Place(_)
+                    | Operand::MovePlace(_)
+                    | Operand::Int(_)
+                    | Operand::Float(_)
+                    | Operand::Bool(_)
+                    | Operand::Unit
+            )
+        };
+        let instruction_free = |instruction: &Instruction| match instruction {
+            Instruction::SourceLocation { .. }
+            | Instruction::SourceName { .. }
+            | Instruction::Retain { .. }
+            | Instruction::Release { .. } => true,
+            Instruction::Assign { target, value } => {
+                let local = types.get(target.as_str()).copied();
+                match value {
+                    Rvalue::Use(operand) => plain(operand),
+                    Rvalue::VariantPayload { scrutinee, .. } => {
+                        typed(scrutinee, &enum_type)
+                            && local.is_some_and(|ty| scalar_name(ty) || text(ty))
+                    }
+                    Rvalue::Binary {
+                        op,
+                        left,
+                        right,
+                        trap,
+                        ..
+                    } => match op {
+                        BinaryOp::Eq | BinaryOp::NotEq
+                            if typed(left, &text) && typed(right, &text) =>
+                        {
+                            true
+                        }
+                        BinaryOp::Div
+                        | BinaryOp::FloorDiv
+                        | BinaryOp::Mod
+                        | BinaryOp::Pow
+                        | BinaryOp::Shl
+                        | BinaryOp::Shr => false,
+                        _ => {
+                            *trap == ArithmeticTrap::None
+                                && typed(left, &scalar_name)
+                                && typed(right, &scalar_name)
+                        }
+                    },
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        let terminator_free = |terminator: &Terminator| match terminator {
+            Terminator::Return(operand) => plain(operand),
+            Terminator::Goto(_) => true,
+            Terminator::Branch { condition, .. } => typed(condition, &scalar_name),
+            Terminator::Match {
+                scrutinee, arms, ..
+            } => {
+                typed(scrutinee, &enum_type)
+                    && arms
+                        .iter()
+                        .all(|arm| arm.variant_name.is_some() && !arm.wildcard)
+            }
+            _ => false,
+        };
+        function.name != "main"
+            && !function.blocks.is_empty()
+            && function.receiver.is_none()
+            && !recursive.contains(&function.name)
+            && function
+                .params
+                .iter()
+                .all(|param| param.passing == MirReceiverKind::Borrow)
+            && types
+                .values()
+                .all(|ty| scalar_name(ty) || text(ty) || enum_type(ty))
+            && (scalar_name(&function.return_type) || function.return_type == Type::Unit)
+            && function.blocks.iter().all(|block| {
+                block.instructions.iter().all(instruction_free)
+                    && terminator_free(&block.terminator)
+            })
+    };
+    module
+        .functions
+        .iter()
+        .filter(|function| free(function))
         .map(|function| function.name.clone())
         .collect()
 }
