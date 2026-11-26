@@ -491,6 +491,80 @@ def main() -> None:
     }
 }
 
+/// A caller that defers its frame record lends a function that can only
+/// trap a link naming itself instead of pushing the record, and such a
+/// function lends one to its own callees. A trap in the innermost callee
+/// still names every frame, whether or not the caller had pushed its
+/// record by then, and the native run frees every box.
+#[test]
+fn a_trap_in_a_chain_callee_names_every_frame() {
+    let source = r#"copy class Stamp:
+    seconds: int64
+    offset: int64
+
+    def local(self) -> int64:
+        return self.seconds + self.offset * 60
+
+    def days(self) -> int64:
+        return self.local() // 86400
+
+def era_day(days: int64) -> int64:
+    shifted = days + 719468
+    return shifted - shifted // 146097 * 146097
+
+def year_of(days: int64) -> int64:
+    day = era_day(days)
+    return (day - day // 1460 + day // 36524) // 365
+
+def describe(stamp: Stamp, label: str) -> str:
+    PUSH
+    return f"{label} {year_of(stamp.days())} {year_of(stamp.seconds)}"
+
+def main() -> None:
+    names = ["a", "b"]
+    print(describe(Stamp(seconds=1700000000, offset=60), names[0]))
+    print(describe(Stamp(seconds=SECONDS, offset=OFFSET), names[1]))
+"#;
+    for (push, seconds, offset, chain) in [
+        (
+            "pass",
+            "9223372036854775000",
+            "0",
+            "era_day at 11:1 -> year_of at 15:1 -> describe at 19:1 -> main at 23:1",
+        ),
+        (
+            "print(label)",
+            "9223372036854775000",
+            "0",
+            "era_day at 11:1 -> year_of at 15:1 -> describe at 19:1 -> main at 23:1",
+        ),
+        (
+            "pass",
+            "9223372036854775000",
+            "100000000",
+            "Stamp.local at 5:5 -> Stamp.days at 8:5 -> describe at 19:1 -> main at 23:1",
+        ),
+    ] {
+        let source = source
+            .replace("PUSH", push)
+            .replace("SECONDS", seconds)
+            .replace("OFFSET", offset);
+        let mut outputs = Vec::new();
+        for backend in ["mir", "direct"] {
+            let result = run("chain-callee-trap", &source, backend);
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert!(result.stderr.contains("AU4002"), "{}", result.stderr);
+            assert!(result.stderr.contains(chain), "{}", result.stderr);
+            if backend == "direct" {
+                let (allocated, freed) = result.boxes.expect("direct runtime stats");
+                assert_eq!(allocated, freed, "{}", result.stderr);
+            }
+            outputs.push(result.stdout);
+        }
+        assert_eq!(outputs[0], outputs[1]);
+    }
+}
+
 #[test]
 fn a_decorated_module_function_owns_its_captures_until_shutdown() {
     let source = r#"

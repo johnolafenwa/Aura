@@ -6589,6 +6589,35 @@ pub unsafe extern "C-unwind" fn aura_direct_enter_call_with_frame(
     );
 }
 
+/// Enters the frame records a trap path of a function that runs without
+/// its record finds in `chain`, outermost first: each link is two words, a
+/// caller's descriptor, or 0 for a caller that pushed its own record, and
+/// the address of the next link out, or 0 at the end. A caller that defers
+/// its record lends such a link to a call of a function whose only failures
+/// are its own traps, so the call needs no push of its own.
+///
+/// # Safety
+///
+/// `chain` is null or the first of links generated code keeps on its stack
+/// for the call, each naming a descriptor as `aura_direct_enter_frame`
+/// requires.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_enter_caller_chain(chain: *const [usize; 2]) {
+    let mut descriptors = Vec::new();
+    let mut link = chain;
+    // SAFETY: the caller's contract.
+    while let Some([descriptor, next]) = unsafe { link.as_ref() } {
+        if *descriptor != 0 {
+            descriptors.push(*descriptor as *const DirectFrameDescriptor);
+        }
+        link = *next as *const [usize; 2];
+    }
+    for descriptor in descriptors.into_iter().rev() {
+        // SAFETY: the caller's contract.
+        unsafe { aura_direct_enter_frame(descriptor) };
+    }
+}
+
 /// Enters one generated Aura call frame described by static metadata.
 ///
 /// # Safety

@@ -16942,6 +16942,34 @@ fn native_runtime_frame_stack_accessor_follows_the_task_state() {
 }
 
 #[test]
+fn native_runtime_enters_a_caller_chain_outermost_first() {
+    let outer = leaked_frame_descriptor(1, 1, b"/workspace/main.au", b"outer") as usize;
+    let inner = leaked_frame_descriptor(5, 1, b"/workspace/main.au", b"inner") as usize;
+    super::with_direct_task_runtime_scope(|| {
+        // A null chain enters nothing.
+        unsafe { super::aura_direct_enter_caller_chain(std::ptr::null()) };
+        assert!(super::direct_runtime_call_frames().0.is_empty());
+        // A link of 0 is a caller that pushed its own record.
+        let last = [outer, 0];
+        let pushed = [0, std::ptr::from_ref(&last) as usize];
+        let first = [inner, std::ptr::from_ref(&pushed) as usize];
+        unsafe { super::aura_direct_enter_caller_chain(&first) };
+        let frames = super::direct_runtime_call_frames().0;
+        let names = frames
+            .iter()
+            .map(|frame| frame.function.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["inner", "outer"]);
+        unsafe {
+            super::aura_direct_exit_call();
+            super::aura_direct_exit_call();
+        }
+        Ok::<_, Diagnostic>(Value::Unit)
+    })
+    .expect("scope should complete");
+}
+
+#[test]
 fn native_runtime_sinks_and_returned_views_send_frame_pushes_to_the_runtime() {
     let caller = leaked_frame_descriptor(1, 1, b"/workspace/main.au", b"caller") as usize;
     let callee = leaked_frame_descriptor(5, 1, b"/workspace/main.au", b"callee") as usize;

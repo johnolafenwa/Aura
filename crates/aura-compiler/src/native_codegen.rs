@@ -742,6 +742,10 @@ struct NativeCodegen<'a> {
     frame_entry: Option<FuncHandle>,
     /// The functions a frameless function may call (see `total_leaves`).
     total_leaves: HashSet<String>,
+    /// The functions whose calls lend a caller chain link, and their chain
+    /// bodies (see `caller_chains`).
+    chain_callees: HashSet<String>,
+    chain_twins: HashMap<String, FuncHandle>,
     /// The parameters a call may pass an element a list keeps in place
     /// as its bytes (see `element_loans::block_params`).
     block_params: HashMap<(String, usize), element_loans::BlockParam>,
@@ -1118,6 +1122,13 @@ impl<'a> NativeCodegen<'a> {
             })
             .collect::<HashSet<_>>();
         let total_leaves = total_leaves(module, &classes);
+        let chain_callees = match freestanding {
+            Some(_) => HashSet::new(),
+            None => {
+                caller_chains::chain_callees(module, &classes, &total_leaves, &recursive_functions)
+            }
+        };
+        let mut chain_twins = HashMap::new();
         let block_params = element_loans::block_params(module, &classes);
         let frame_free_callees = frame_free_callees(module, &recursive_functions);
         let untagged_params = untagged_args::match_only_params(module, &frame_free_callees);
@@ -1191,6 +1202,23 @@ impl<'a> NativeCodegen<'a> {
                 object.mark_inline(func_id);
             }
             functions.insert(function.name.clone(), func_id);
+            if chain_callees.contains(&function.name) {
+                let mut signature = signature.clone();
+                signature.params.push(types::I64);
+                let chain_id = try_or_string_error!(
+                    object.declare_function(
+                        &format!("{}__chain", mangle_symbol(&function.name)),
+                        Linkage::Local,
+                        &signature
+                    ),
+                    "failed to declare the chain body of `{}`: {}",
+                    function.name
+                );
+                if small_leaf(function) {
+                    object.mark_inline(chain_id);
+                }
+                chain_twins.insert(function.name.clone(), chain_id);
+            }
             let mutable_leaf = leaf_variant(function, &classes);
             if freestanding.is_some() {
                 // Every body is frameless, and nothing enters a function
@@ -1394,6 +1422,8 @@ impl<'a> NativeCodegen<'a> {
             cycle_frame_entry,
             frame_entry,
             total_leaves,
+            chain_callees,
+            chain_twins,
             block_params,
             frame_free_callees,
             untagged_params,
@@ -1649,6 +1679,16 @@ impl<'a> NativeCodegen<'a> {
             &format!("direct function `{}`", function.name),
             |codegen, builder| codegen.emit_function(builder, function, func_id, false, None),
         )?;
+        if let Some(id) = self.chain_twins.get(&function.name).copied() {
+            let mut signature = signature.clone();
+            signature.params.push(types::I64);
+            self.define_body(
+                id,
+                &signature,
+                &format!("the chain body of `{}`", function.name),
+                |codegen, builder| codegen.emit_function(builder, function, id, false, None),
+            )?;
+        }
         if let Some(id) = self.recovery_functions.get(&function.name).copied() {
             let mut signature = signature.clone();
             signature.returns.push(types::I64);
@@ -1893,6 +1933,10 @@ impl<'a> NativeCodegen<'a> {
             }
         };
         builder.append_block_params_for_function_params(entry);
+        // A chain body's last parameter is the link its caller lent.
+        let chain_link = (self.chain_twins.get(&function.name) == Some(&func_id))
+            .then(|| builder.block_params(entry).last().copied())
+            .flatten();
         builder.switch_to_block(entry);
         let runtime_refs = self.runtime.map(|id| builder.import_function(*id));
         let descriptor = if self.freestanding.is_some() {
@@ -1918,7 +1962,8 @@ impl<'a> NativeCodegen<'a> {
             || self.freestanding.is_some()
             || frameless_leaf(function, &self.classes)
             || (without_sinks && leaf_body(function, &self.classes))
-            || calls_total_leaves;
+            || calls_total_leaves
+            || self.chain_callees.contains(&function.name);
         // Any other function with no `mut` parameter, cleanup, or second
         // frame pushes its record where it first calls out (see
         // `defer_frame`). One on no call cycle pushes it on entry after
@@ -2266,6 +2311,15 @@ impl<'a> NativeCodegen<'a> {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        // A chain body's caller lends it the link its trap paths read.
+        let mut chain_refs = HashMap::new();
+        let mut chain_twins = self.chain_twins.iter().collect::<Vec<_>>();
+        chain_twins.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, func_id) in chain_twins {
+            let func_ref = builder.import_function(*func_id);
+            free_callees.push(func_ref);
+            chain_refs.insert(name.clone(), func_ref);
+        }
         free_callees.sort_by_key(|callee| callee.0);
         free_callees.dedup();
         frame_free.extend(free_callees);
@@ -3235,6 +3289,9 @@ impl<'a> NativeCodegen<'a> {
             checks_cast: false,
             frameless_descriptor: frameless.then_some(descriptor),
             deferred_frame,
+            deferred_descriptor: deferred_frame.map(|_| descriptor),
+            chain_refs,
+            chain_link,
             forwarding_frame,
             deferred_traps: (frameless
                 && defers_lane_traps(function)
@@ -4797,6 +4854,12 @@ struct FunctionCompiler<'a> {
     /// The variable that is set once the function has pushed the frame
     /// record it defers (see `defers_frame`).
     deferred_frame: Option<Var>,
+    /// The descriptor of the record such a function defers.
+    deferred_descriptor: Option<Val>,
+    /// The chain body of each function whose calls lend a caller chain
+    /// link, and the link a chain body was lent (see `caller_chains`).
+    chain_refs: HashMap<String, FuncRef>,
+    chain_link: Option<Val>,
     /// The source frame of a closure implemented by its forwarded method.
     forwarding_frame: Option<Val>,
     /// The overflow checks of a lane method that wait for its return (see
@@ -9381,6 +9444,7 @@ impl<'a> FunctionCompiler<'a> {
             return;
         }
         if let Some(descriptor) = self.frameless_descriptor {
+            self.push_caller_chain();
             if let Some(outer) = self.forwarding_frame {
                 self.builder
                     .call(self.runtime[RuntimeFn::EnterCall], &[outer]);
@@ -11604,7 +11668,8 @@ impl<'a> FunctionCompiler<'a> {
             Some((twin, _)) => twin.callee(mutable_sinks.0.is_some()),
             None => {
                 let func_ref = self.sinkless_callee(name, func_ref, &mutable_sinks);
-                self.result_twin_callee(name, func_ref)
+                let func_ref = self.result_twin_callee(name, func_ref);
+                self.chain_callee(name, func_ref, &mut lowered_args)
             }
         };
         let inst = self.builder.call(func_ref, &lowered_args);
@@ -18934,7 +18999,8 @@ impl<'a> FunctionCompiler<'a> {
             None => {
                 let func_ref =
                     self.sinkless_callee(&method_function_name, func_ref, &mutable_sinks);
-                self.result_twin_callee(&method_function_name, func_ref)
+                let func_ref = self.result_twin_callee(&method_function_name, func_ref);
+                self.chain_callee(&method_function_name, func_ref, &mut lowered_args)
             }
         };
         let results =
@@ -25304,6 +25370,8 @@ mod str_slots;
 
 #[path = "native_codegen_callables.rs"]
 mod callables;
+#[path = "native_codegen_caller_chains.rs"]
+mod caller_chains;
 #[path = "native_codegen_classes.rs"]
 mod classes;
 

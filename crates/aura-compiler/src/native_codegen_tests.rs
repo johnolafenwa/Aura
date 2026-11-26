@@ -19289,3 +19289,69 @@ fn frame_free_callees_read_variants_and_compare_only() {
         assert!(!free.contains(name), "{name}");
     }
 }
+
+const CHAIN_SOURCE: &str = r#"
+copy class Stamp:
+    seconds: int64
+
+    def local(self) -> int64:
+        return self.seconds + 60
+
+def total(value: int64) -> int64:
+    return value // 2
+
+def sum(value: int64) -> int64:
+    return value + 1
+
+def nested(value: int64) -> int64:
+    return sum(value) * total(value)
+
+def method(stamp: Stamp) -> int64:
+    return stamp.local() - 1
+
+def looped(count: int64) -> int64:
+    mut acc = 0
+    for i in range(count):
+        acc += i
+    return acc
+
+def bump(acc: mut int64) -> int64:
+    acc += 1
+    return acc
+
+def countdown(n: int64) -> int64:
+    if n == 0:
+        return 0
+    return countdown(n - 1)
+
+def printed(value: int64) -> int64:
+    print(value)
+    return sum(value)
+
+def main():
+    mut acc = 0
+    print(nested(3) + method(Stamp(seconds=1)) + looped(3) + bump(acc) + countdown(2) + printed(1))
+"#;
+
+/// A function that can only trap, on no cycle, with no `mut` parameter or
+/// loop, whose calls name only total leaves and such functions, lends its
+/// callers' chain; a total leaf, a loop, a `mut` parameter, recursion, or a
+/// call of anything else keeps it out.
+#[test]
+fn chain_callees_trap_only_and_call_only_each_other() {
+    let mir = lower_source_to_mir(CHAIN_SOURCE).expect("the source should lower");
+    let recursive = crate::mir::recursion::recursive_functions(&mir);
+    let classes = mir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect::<HashMap<_, _>>();
+    let total = super::total_leaves(&mir, &classes);
+    let chained = super::caller_chains::chain_callees(&mir, &classes, &total, &recursive);
+    for name in ["Stamp.local", "sum", "nested", "method"] {
+        assert!(chained.contains(name), "{name}: {chained:?}");
+    }
+    for name in ["total", "looped", "bump", "countdown", "printed", "main"] {
+        assert!(!chained.contains(name), "{name}: {chained:?}");
+    }
+}

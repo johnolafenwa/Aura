@@ -62,6 +62,7 @@ runtime_functions! {
     RunRoot => ("aura_direct_run_root", [I64], Some(I32)),
     FrameStack => ("aura_direct_frame_stack", [], Some(I64)),
     EnterCall => ("aura_direct_enter_frame", [I64], None),
+    EnterCallerChain => ("aura_direct_enter_caller_chain", [I64], None),
     ExitCall => ("aura_direct_exit_call", [], None),
     StackExhausted => ("aura_direct_stack_exhausted", [], None),
     RecoverAssertion => ("aura_direct_recover_assertion_cell", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
