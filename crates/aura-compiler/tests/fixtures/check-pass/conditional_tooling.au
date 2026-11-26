@@ -1,0 +1,10 @@
+import build
+if build.hosted:
+    public def native_name() -> int64:
+        ensures result == 7
+        return 7
+else:
+    public def foreign_name(value: AbsentType) -> bool:
+        return not missing()
+def main():
+    print(native_name())

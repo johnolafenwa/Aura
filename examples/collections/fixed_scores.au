@@ -1,0 +1,9 @@
+def adjust(scores: mut fixed[uint8, 3], index: int64, score: uint8):
+    scores[index] = score
+
+def main():
+    mut scores: fixed[uint8, 3] = [0] * 3
+    adjust(scores, 1, 85)
+    print(len(scores))
+    for score in scores:
+        print(score)

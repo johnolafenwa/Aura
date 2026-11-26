@@ -1,0 +1,16 @@
+import build
+if build.hosted:
+    class Probe:
+        ready: bool
+    def configured() -> bool:
+        return Probe(ready=true).ready
+else:
+    extern "C" opaque class Probe
+    extern "C" def configured() -> bool
+const enabled = configured()
+if enabled:
+    const value = 7
+else:
+    import missing
+def main():
+    print(value)

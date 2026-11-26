@@ -1,0 +1,27 @@
+import mem
+
+extern "C" class Point:
+    x: uint16
+
+class Owner:
+    point: Point
+    words: fixed[uint16, 2]
+
+    def __drop__(mut self):
+        print(self.point.x)
+        print(self.words[1])
+
+def update(owner: mut Owner):
+    first = mem.address_of(owner.words[0])
+    assert first.read() == 5
+    owner.point.x = 17
+    owner.words[1] = 23
+
+def main():
+    mut owner = Owner(point=Point(x=3), words=[5, 7])
+    x = mem.address_of(owner.point.x)
+    word = mem.address_of(owner.words[1])
+    update(owner)
+    assert x.read() == 17
+    assert word.read() == 23
+    print("updated")

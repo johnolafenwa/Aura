@@ -1885,6 +1885,17 @@ impl<'a> FunctionChecker<'a> {
         display_name: &str,
         free_function: bool,
     ) -> Result<Type> {
+        crate::machine_attributes::check_callable(function, span)?;
+        if function.module_name == "mem"
+            && aura_core::atomic_order::AtomicOperation::of(&function.decl.name).is_some()
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2087",
+                span,
+                "atomic operations require a direct call so the compiler can check their orderings",
+            )
+            .with_help("wrap the atomic operation in a function with a literal memory ordering"));
+        }
         reject_span_parameter_value(
             &function.signature.params,
             &function.signature.return_type,
@@ -3326,6 +3337,7 @@ impl<'a> FunctionChecker<'a> {
                                 locals,
                             )?;
                         }
+                        self.reject_state_loan(&argument.value, locals)?;
                         if !self.is_mutable_place(&argument.value, locals)? {
                             return Err(Diagnostic::at(
                                 argument.span,

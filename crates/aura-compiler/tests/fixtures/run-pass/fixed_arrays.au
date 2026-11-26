@@ -1,0 +1,20 @@
+class Record:
+    words: fixed[uint16, 3]
+
+def fill(words: mut fixed[uint16, 3]) -> None:
+    words[1] = 8
+
+def total(words: fixed[uint16, 3]) -> uint64:
+    mut sum: uint64 = 0
+    for word in words:
+        sum = sum + (word as uint64)
+    return sum
+
+def main() -> int32:
+    mut record = Record(words=[2, 4, 6])
+    fill(record.words)
+    print(total(record.words))
+    row: fixed[uint8, 4] = [7] * 4
+    print(len(row))
+    print(row[3])
+    return 0

@@ -1,0 +1,8 @@
+import build
+def main():
+    mut names = ["old"]
+    view first = names[0]
+    if build.hosted:
+        print(first)
+        names[0] = "new"
+    print(names[0])

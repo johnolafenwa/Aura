@@ -3,7 +3,7 @@
 Aura FFI calls C functions through a fixed subset of the platform C ABI. A
 package declares each function it calls and names the native libraries they
 come from. It is an unsafe package capability for binding trusted native
-code. It is not a general system for pointers.
+code. Raw pointer values use the same package permission.
 
 ## Package Opt-In
 
@@ -296,8 +296,7 @@ rejects an `own` scalar with `AU3004`.
 ### Array Pointers
 
 `ptr[T]` is a pointer to the first of a run of scalars, such as
-`const double *` in C. The name is a type only in an extern parameter. The
-argument is a `list[T]`, and its elements are laid out as a C array of `T`.
+`const double *` in C. An extern pointer parameter accepts a typed pointer or a `list[T]`. A list passes its elements as a C array for the duration of the call.
 
 ```aura fragment
 extern "C" def getloadavg(averages: mut ptr[float64], count: int32) -> int32
@@ -323,7 +322,7 @@ def main() -> int32:
 - **Lifetime.** The pointer is valid only during the call. The callee must
   not keep it.
 - **Empty lists.** An empty list passes a null pointer.
-- **Reads.** A function must not write through a `ptr[T]`. Declare the
+- **Reads.** A C function receiving a list view must not write through a `ptr[T]`. Declare the
   parameter `mut ptr[T]` if it does.
 - **Writes.** What the function writes through a `mut ptr[T]` is in the list
   when the call returns. The list keeps its length. A `mut ptr[bool]` list
@@ -333,7 +332,7 @@ A built program passes the address of the list's own storage, with no copy,
 when the list keeps its elements unboxed. Lists of scalars do. A `ptr[T]`
 parameter accepts fixed-width scalars, `extern "C"` classes and `extern "C"`
 unions as its element type. Other element types produce `AU2002`, and
-`own ptr[T]` produces `AU3004`. `ptr[T]` cannot be a result, and
+`own ptr[T]` produces `AU3004`. A `ptr[T]` result returns a raw address, and
 `list[uint8]` remains the form for bytes with a length.
 
 
@@ -341,6 +340,24 @@ unions as its element type. Other element types produce `AU2002`, and
 `list[Name]` and passes a C array of `struct name`, as a vertex buffer or a
 list of points is passed. [Arrays Of Structs](#arrays-of-structs) has the
 rules.
+
+### Raw Pointer Values
+
+Use `ptr[T]` for a typed address supplied by C or by the platform. Copying a pointer copies its address. The C library specifies how long the storage stays valid and who releases it. The null value is `0 as ptr[T]`. Compare two pointers of the same type with `==` or `!=`.
+
+```aura fragment
+extern "C" def malloc(size: uint64) -> ptr[uint8]
+extern "C" def free(block: mut ptr[uint8]) -> None
+
+def example() -> None:
+    p = malloc(8)
+    if p != (0 as ptr[uint8]):
+        p.offset(7).write(42)
+        assert p.offset(7).read() == 42
+        free(p)
+```
+
+A raw pointer passed to a `mut ptr[T]` parameter lets C write the pointee. The pointer binding can be immutable. A list argument still needs a mutable list. Contracts on an extern list view use the list's bounds and require a list argument.
 
 ### Arrays
 
@@ -418,10 +435,7 @@ def main() -> int32:
   or a fixed-size [array](#array-fields) of values with those layouts.
   Any other field type is `AU2002`.
   The class needs at least one field.
-- **An ordinary value.** A struct is Copy when each field is a scalar or
-  another Copy struct. A struct that contains an array or a union moves on
-  assignment. Construct it with keyword arguments, read and assign its fields,
-  and keep it in a list or another class. It has no C identity until it crosses.
+- **An ordinary value.** A struct copies when each field copies, including a `fixed[T, N]` field with Copy elements. A hosted union or a list-backed `array[T, N]` field moves with its containing struct. Construct a struct with keyword arguments, read and assign its fields, and keep it in a list or another class.
 - **By value.** A `Name` parameter or result is passed the way the C calling
   convention passes that struct: in registers when it is small, and in
   memory otherwise.
@@ -433,10 +447,7 @@ def main() -> int32:
 - **Booleans.** A `bool` field that comes back with a byte other than `0` or
   `1` fails with `AU4001`.
 
-`own Name` is `AU3004`, and `Name | None` is `AU2010`. C
-bit-fields, pointer fields, and packed or over-aligned structs have no
-spelling. Declare a pointer field as `uint64` only when the code never
-dereferences it.
+`own Name` is `AU3004`, and `Name | None` is `AU2010`. Use `bits(N)` for a bit-field, `packed` for byte packing, and `align(N)` for explicit record alignment.
 
 Struct layout and passing follow the System V convention on x86-64 and the
 standard procedure call convention on AArch64, for Linux and macOS. A
@@ -542,6 +553,35 @@ def main() -> int32:
 `own ptr[Name]` is `AU3004`. Lists of C unions follow the same pointer
 rules as lists of C structs.
 
+#### Packing, Alignment And Bit-Fields
+
+Use `packed` for one-byte member packing and `align(N)` to request a minimum alignment for the whole class. The final size includes the padding required for an array of the class.
+
+```aura fragment
+import mem
+
+extern "C" packed align(8) class Header:
+    kind: uint8
+    serial: uint32
+    count: uint16 bits(5)
+    mode: uint16 bits(3)
+
+def field_offset() -> uint64:
+    return mem.offset_of(Header, serial)
+```
+
+| Form | Rule |
+| --- | --- |
+| `extern "C" packed class Header:` | Caps member alignment at one byte. A nested record retains its own internal layout. |
+| `align(N)` before `class` | Takes a literal power of two from 1 to 8192. Natural alignment still applies unless the record is packed. |
+| `field: uintN bits(W)` | Declares an unsigned bit-field. A positive literal width must fit the 8-, 16-, 32- or 64-bit base type. |
+| `mem.size_of(T)`, `mem.align_of(T)` | Give the target size and alignment in bytes as `uint64` constants. Use a C scalar, class, union, typed pointer or fixed array. |
+| `mem.offset_of(T, field)` | Gives the byte offset of an addressable field as a `uint64` constant. Union members start at zero. |
+
+A bit-field read returns its declared unsigned type. A write checks the value fits before updating the field. The platform C ABI determines bit allocation. In particular, Windows starts a new allocation unit when adjacent fields have different base widths. Use matching declarations in C and Aura.
+
+`AU2085` reports an invalid alignment or field width. Use a supported power of two for alignment and an unsigned field type with sufficient bits. `AU2086` reports a layout query whose type or field lacks the requested layout. For a bit-field, query an enclosing record or an addressable sibling. A borrow of a bit-field reports `AU3033`. Copy it to a local and assign the result back. A value too large for a bit-field reports `AU4033`.
+
 #### Unions
 
 `extern "C" union Name:` declares a C union. Every member starts at offset
@@ -586,15 +626,16 @@ parts:
 | Part | Meaning |
 | --- | --- |
 | `Name()` | a union of zero bytes |
-| `value.member` | a read-only property: the leading bytes of the union, read as the member's type |
+| `value.member` | the leading bytes of the union, read as the member's type |
+| `value.member = item` | stores the member in a mutable union, preserving bytes beyond that member |
 | `Name.from_member(value)` | a union that holds `value` in that member, with every other byte zero |
 | `value.bytes` | the bytes themselves, which the program can read and write |
 
 - **A member read makes a new value.** `event.key` is a `KeyEvent` built
   from the bytes at that moment. Changing it does not change the union.
-- **Members cannot be assigned.** `event.kind = 2` and
-  `event.key.code = 2` are `AU2045`, because a member is a property. Build a new union with `from_member`, or write
-  `bytes`.
+- **Assignment writes one member.** `event.kind = 2` sets the bytes of
+  `kind`. To update a nested field, read the member into a mutable
+  local, edit it and assign the member back.
 - **No member is the active one.** A C union carries no tag, and neither
   does this one. Which member holds meaning is the library's convention,
   usually a first field every member shares. Reading another member
@@ -604,9 +645,7 @@ parts:
 - **The bytes keep their length.** A union whose `bytes` list is not
   exactly as long as the C union fails with `AU4005` when it crosses or
   when a member is read.
-- **A union is not `Copy`.** It holds a list, so assignment moves it, as
-  for a class with an array field. A class that holds a union is not
-  `Copy` either.
+- **Assignment follows the storage profile.** In a hosted build a union moves with its backing byte list. In a freestanding build it copies its inline bytes.
 - **A member cannot be named `bytes`.**
 
 A union crosses wherever an `extern "C"` class does: by value, as `mut
@@ -801,14 +840,9 @@ classes, enum payloads, and generic specializations.
 - Consuming operations such as `pop`, `remove`, and replacement are allowed.
 - Equality and inequality are rejected for an opaque handle or any value that
   structurally contains one.
-- Arithmetic and ordering operators on a handle are rejected with dedicated
-  diagnostics. Raw pointer arithmetic and ordering by foreign address are not
-  language capabilities.
+- Opaque handles support neither arithmetic nor ordering. A first-class `ptr[T]` supports element offsets and equality.
 
-FFI does not expose foreign addresses. It does not assume that address
-identity is the native API's identity. When callers need to compare foreign
-objects, a binding should expose reviewed extern operations or a stable scalar
-or `str` key.
+An opaque handle keeps its foreign address private. To compare the objects it refers to, use the foreign API's identity operation or a stable key.
 
 ## Runtime Semantics
 
@@ -931,13 +965,11 @@ still name the host's actual C symbol.
 
 FFI does not:
 
-- define C bit-fields, or pass enums
-- assign one member of a union in place
+- pass enums
 - pass a struct that holds a pointer Aura can follow
-- allocate foreign memory or expose pointer arithmetic
+- allocate foreign memory
 - return views, or free a `cstr` result
-- pass typed pointers to anything but one scalar, one struct, one handle,
-  or the elements of a list of scalars or structs
+- marshal lists whose elements lack a C representation
 - accept variadics
 - pass a closure as a callback, pass a list or struct to one, or return
   text from one
@@ -971,7 +1003,7 @@ Implemented:
 - `Handle | None` results and parameters, and `mut Handle | None`
 - `drop` functions that release an opaque handle the program lets go of
 
-Reserved or unavailable: closures as callbacks, raw-pointer arithmetic, variadics, returned views,
+Reserved or unavailable: closures as callbacks, variadics, returned views,
 other nullable shapes, and Aura union types such as `int32 | float64`.
 Aura does not infer them from current syntax.
 

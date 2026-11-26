@@ -1,0 +1,25 @@
+trait Left:
+    def pick(self) -> int64
+
+trait Right:
+    def pick(self) -> int64
+
+class Inner:
+    def pick(self) -> int64:
+        return 1
+
+impl Left for Inner:
+    def pick(self) -> int64:
+        return 2
+
+impl Right for Inner:
+    def pick(self) -> int64:
+        return 3
+
+class Outer:
+    inner: Inner
+
+impl Left for Outer by inner
+
+def main():
+    print(Outer(inner=Inner()).pick())

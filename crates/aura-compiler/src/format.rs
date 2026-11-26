@@ -39,7 +39,7 @@ pub fn format_source(source: &str) -> Result<String, FormatError> {
         .replace("\r\n", "\n");
     let source = strip_trailing_whitespace(&source);
     let original = lex(&source).map_err(FormatError::Syntax)?;
-    crate::parser::parse(&source).map_err(FormatError::Syntax)?;
+    crate::parser::parse_all_syntax(&source).map_err(FormatError::Syntax)?;
     let formatted = Formatter::new(&source).format();
     verify(&original, &formatted)?;
     Ok(formatted)
@@ -77,7 +77,7 @@ fn verify(original: &[Token], formatted: &str) -> Result<(), FormatError> {
     };
     let tokens =
         lex(formatted).map_err(|error| unstable(format!("does not lex ({})", error.message)))?;
-    crate::parser::parse(formatted)
+    crate::parser::parse_all_syntax(formatted)
         .map_err(|error| unstable(format!("does not parse ({})", error.message)))?;
     let before = comparable_tokens(original);
     let after = comparable_tokens(&tokens);

@@ -38,6 +38,9 @@
 
 use super::*;
 
+#[path = "native_codegen_c_bits.rs"]
+mod c_bits;
+
 use crate::c_layout::{CAbi, CArgument, CPassing, CPiece, CStruct};
 use crate::ffi::CCallback;
 use crate::mir::MirExternParam;
@@ -723,6 +726,7 @@ impl ForeignArguments {
         for (index, ty) in self.signature.params.iter().enumerate() {
             let indirect = self.signature.indirects.iter().find(|(at, _)| *at == index);
             match (indirect, ty) {
+                (Some((_, Indirect::ByValueAligned { .. })), _) => {}
                 (Some((_, Indirect::ByValue { .. })), _) => {}
                 // A struct AArch64 put on the stack ends the use of the
                 // registers of its kind.
@@ -1312,7 +1316,13 @@ impl FunctionCompiler<'_> {
     /// piece of the struct loads and stores as one word.
     fn foreign_struct_slot(&mut self, layout: &CStruct) -> std::result::Result<Val, String> {
         let size = struct_slot_size(layout)?;
-        let slot = self.builder.create_sized_stack_slot(size, 3);
+        // An over-aligned struct gets a slot at its own alignment.
+        let align_shift = if layout.align() > 8 {
+            layout.align().trailing_zeros() as u8
+        } else {
+            3
+        };
+        let slot = self.builder.create_sized_stack_slot(size, align_shift);
         let address = self.builder.stack_addr(types::I64, slot, 0);
         let zero = self.builder.iconst(types::I64, 0);
         if size <= 256 {
@@ -1387,6 +1397,10 @@ impl FunctionCompiler<'_> {
                 self.builder.switch_to_block(done);
                 self.builder.seal_block(done);
             }
+            return Ok(());
+        }
+        if layout.has_controlled_layout() {
+            self.store_controlled_struct(layout, value, slot);
             return Ok(());
         }
         for (leaf, word) in layout.leaves().iter().zip(&value.values) {
@@ -1507,6 +1521,9 @@ impl FunctionCompiler<'_> {
         ty: DirectType,
         symbol: &str,
     ) -> std::result::Result<ValueRef, String> {
+        if layout.has_controlled_layout() {
+            return self.load_controlled_struct(layout, slot, ty, symbol);
+        }
         let mut values = Vec::new();
         for leaf in layout.leaves() {
             let scalar = foreign_scalar(leaf.scalar.ffi_type()).expect("a leaf is a scalar");
@@ -1555,6 +1572,13 @@ impl FunctionCompiler<'_> {
             }
             CArgument::Stack => {
                 arguments.push_word(slot);
+                if layout.align() > 8 {
+                    arguments.mark_last(Indirect::ByValueAligned {
+                        size: struct_slot_size(layout)?,
+                        alignment: layout.align() as u32,
+                    });
+                    return Ok(());
+                }
                 arguments.mark_last(Indirect::ByValue {
                     size: struct_slot_size(layout)?,
                 });
@@ -2059,6 +2083,9 @@ impl FunctionCompiler<'_> {
     }
 }
 
+#[path = "native_codegen_raw_cells.rs"]
+mod raw_cells;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2078,6 +2105,7 @@ mod tests {
                 })
                 .collect(),
             union: false,
+            layout_controls: Default::default(),
         }
     }
 
@@ -2170,6 +2198,7 @@ mod tests {
                 ),
             }],
             union: false,
+            layout_controls: Default::default(),
         };
         assert!(struct_slot_size(&four_gib).is_err());
 
@@ -2186,6 +2215,7 @@ mod tests {
                 ),
             }],
             union: false,
+            layout_controls: Default::default(),
         };
         assert!(struct_slot_size(&two_gib).is_err());
     }

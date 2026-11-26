@@ -16,6 +16,14 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Statement match arms cannot be inline. An expression match arm may put its expression on the same line after `case pattern:` or use an indented expression body.
 - A `for` loop binding cannot shadow a name already visible in the same scope.
 
+### Compile-Time Evaluation
+
+- Each initializer has 100,000 MIR steps and 8 MiB of cumulative logical allocation, shared with its callees.
+- A conditional declaration needs a boolean made from target properties and marked module constants. All arms must parse.
+- `check --all-targets` varies the target and keeps the chosen cfg values and profile. Supply different feature values to check other feature selections.
+
+[Compile-Time Evaluation And Conditional Compilation](/manual/compile-time)
+
 ### Numbers And Durations
 
 - Builtin integer types have fixed widths. For arbitrary-size integers use `numbers.BigInt`. [Numbers Module](/manual/numbers)
@@ -26,6 +34,11 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Duration literals have only the integral `ms`, `s`, and `m` suffixes. There is no `ns` suffix, no fractional Duration literal, and no unary `-Duration`. Use the associated constructors and checked Duration arithmetic for signed and sub-millisecond values.
 
 ### Types, Classes, And Returns
+
+- Classes compose traits through owned fields. A view cannot supply a delegated implementation.
+- A getter without a setter is read-only. A property result cannot provide a mutable place or a view.
+- Copy classes cannot define destructor hooks. Moving an owned field out of a class with a hook is rejected.
+- Decorated methods require a concrete callable signature. Generic methods, methods of generic classes, and initializers cannot be decorated.
 
 - Direct recursive fields require `indirect`.
 - Empty list, dictionary, and set literals need an expected collection type.
@@ -64,7 +77,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - A returned view of a list element or dictionary entry holds the whole collection at the call site. The caller cannot read a different element while it is live.
 - Beside a live element view of the same list, `set(index, value)` works only for a Copy element type. For other element types it is refused with `AU3011`, because it would move the old element out through the collection.
 - In a top-level script, an immutable binding above the first top-level statement is a module constant and cannot be the source of a view (`AU3004`). Bind it with `mut`, below the first statement, or inside a function.
-- View-bearing aggregates, module storage, multi-origin results, returned loan closures, and lifetime-parameterized structural callable types are not available.
+- View-bearing aggregates, views into module storage, multi-origin results, returned loan closures, and lifetime-parameterized structural callable types are not available.
 - Views and loan closures are never Transfer.
 
 ### Function Values
@@ -109,6 +122,12 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Keyed `sort`, `map`, and `filter` accept only their exact bare or shared callback parameter capabilities. The callback may be a named function, a repeatable closure, or a packed Shared callable value.
 - There is no comparator-form sort, lazy map or filter, parallel traversal, mutable standard-library algorithm callback contract, or algorithm callback with mutable or owned element access.
 
+### Static Storage and Fixed Arrays
+
+- Freestanding module cells require a static initializer. Hosted tasks can share an immutable binding to a synchronization handle. Task-local storage declarations are outside this release.
+- A fixed array has a positive compile-time length up to 1,048,576. The inline representation must fit in 2,147,483,647 bytes. Array parameters borrow storage for the call.
+- `mem.address_of` takes a writable module cell, fixed-array element or addressable C field. The caller controls the lifetime of raw addresses. A bit-field has no independent address.
+
 ### Numeric Arrays
 
 - Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, `float64`, or `bool`.
@@ -134,10 +153,19 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Calls run synchronously on the current worker.
 - The ABI accepts fixed-width scalars, pointers to one scalar, pointers to scalar or struct arrays, C structs and unions, temporary text and byte views, same-length mutable byte views, NUL-terminated `cstr` text, and opaque handles. Empty views use `(NULL, 0)`.
 - A callback is a named top-level function. Its parameters can be scalars, pointers to one scalar, or NUL-terminated UTF-8 text declared as `cstr`. Declare a handle parameter as `uint64`. The result is a scalar or `None`.
-- Variadic functions, pointer arithmetic, returned views, C bit-fields, and asynchronous foreign calls are unavailable. C union members are read-only.
+- Variadic functions, returned views and asynchronous foreign calls are unavailable. Raw pointers support element offsets. Named unsigned C bit-fields support checked assignment. A writable C union member overlaps the other members.
 - A `cstr` result is copied and never freed. A result the caller must free needs an opaque handle.
 - The nullable Aura types that cross are `Handle | None` and `cstr | None`. A C union uses an `extern "C" union` declaration. See [FFI](/manual/ffi).
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
+
+### Kernel code
+
+Machine assembly, hardware access and machine attributes require a
+64-bit freestanding target. The assembly checker validates declared
+operands and clobbers. The target assembler checks instruction text.
+Proof stops at assembly. The x86-64 kernel profile uses integer registers
+for floating-point values and may need software arithmetic helpers at link
+time. [Freestanding Builds](/manual/freestanding)
 
 ### Tasks
 

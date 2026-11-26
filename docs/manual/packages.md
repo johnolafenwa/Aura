@@ -36,6 +36,18 @@ rejected.
 | `version` | Must begin with an ASCII digit. The rest may contain only ASCII letters, digits, `.`, `-`, or `+`. |
 | `edition` | Must be exactly `"2026"` in Aura 0.17. |
 
+### Build Configuration
+
+Set feature defaults in the entry package's manifest. Its imports and dependencies see the same settings.
+
+```toml
+[build.cfg]
+board = "virt"
+tracing = true
+```
+
+A string keeps its contents. A boolean becomes `"true"` or `"false"`. An explicit `--cfg` overrides the corresponding manifest entry. Repeated command-line names take their last value. [Reading features in Aura](/manual/compile-time#target-properties)
+
 ### FFI Opt-In
 
 `allow_ffi = true` is an optional `[package]` field. Its default is `false`.

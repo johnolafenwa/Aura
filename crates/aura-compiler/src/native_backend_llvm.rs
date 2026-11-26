@@ -48,6 +48,9 @@ use inkwell::{
     OptimizationLevel,
 };
 
+#[path = "native_backend_llvm_machine.rs"]
+mod machine_attributes;
+
 use units::{Partition, Placement};
 
 use super::{
@@ -94,6 +97,7 @@ const UNIT_THREAD_STACK: usize = 8 << 20;
 
 /// One object built with LLVM for the host.
 pub(super) struct LlvmModule {
+    module_asm: String,
     functions: Vec<FunctionDecl>,
     data: Vec<DataDecl>,
     names: HashMap<String, Symbol>,
@@ -118,6 +122,7 @@ struct FunctionDecl {
     read_only: bool,
     inline: bool,
     weak_routine: bool,
+    machine: Option<Box<crate::machine_attributes::MachineAttributes>>,
     source: Option<FunctionSource>,
 }
 
@@ -134,6 +139,7 @@ impl LlvmModule {
         // LLVM target.
         host_target_machine()?;
         Ok(Self {
+            module_asm: String::new(),
             functions: Vec::new(),
             data: Vec::new(),
             names: HashMap::new(),
@@ -145,6 +151,7 @@ impl LlvmModule {
     pub(super) fn for_freestanding(target: super::FreestandingTarget) -> Result<Self, String> {
         freestanding_target_machine(target)?;
         Ok(Self {
+            module_asm: String::new(),
             functions: Vec::new(),
             data: Vec::new(),
             names: HashMap::new(),
@@ -179,6 +186,9 @@ impl LlvmModule {
             _ => format!("aura_direct.{unit}"),
         };
         let module = context.create_module(&name);
+        if unit == 0 && !self.module_asm.is_empty() {
+            module.set_inline_assembly(&self.module_asm);
+        }
         module.set_source_file_name(&name);
         module.set_triple(&machine.get_triple());
         module.set_data_layout(&machine.get_target_data().get_data_layout());
@@ -187,6 +197,16 @@ impl LlvmModule {
             .then(|| DebugInfo::new(context, &module, self));
         let lowerer = ObjectLowerer::new(context, &module, self, partition, unit, debug)?;
         lowerer.lower_bodies(self)?;
+        if self.freestanding.is_some() {
+            machine_attributes::apply(&lowerer, self)?;
+        }
+        if self.freestanding.is_some()
+            && module
+                .get_function(crate::native_codegen::wide_numbers::SYMBOL)
+                .is_some()
+        {
+            link_wide_integer_helpers(context, &module)?;
+        }
         if let Some(debug) = &lowerer.debug {
             debug.builder.finalize();
         }
@@ -214,6 +234,17 @@ fn merge_linkage(previous: Linkage, declared: Linkage) -> Linkage {
 }
 
 impl ModuleBackend for LlvmModule {
+    fn mark_machine(
+        &mut self,
+        id: FuncHandle,
+        attrs: crate::machine_attributes::MachineAttributes,
+    ) {
+        self.functions[id.0 as usize].machine = Some(Box::new(attrs));
+    }
+    fn set_module_asm(&mut self, fragments: &[String]) {
+        self.module_asm = fragments.join("\n");
+    }
+
     fn declare_function(
         &mut self,
         name: &str,
@@ -243,6 +274,7 @@ impl ModuleBackend for LlvmModule {
                     read_only: false,
                     inline: false,
                     weak_routine: false,
+                    machine: None,
                     source: None,
                 });
                 self.names.insert(name.to_string(), Symbol::Function(id));
@@ -572,9 +604,15 @@ impl LlvmModule {
                 return Err(format!("LLVM failed to optimize the module: {error}"));
             }
         }
+        if self.freestanding == Some(super::FreestandingTarget::X86_64Kernel) {
+            x86_kernel::disable_red_zone(&context, &module);
+        }
         place_functions_in_own_sections(&module, &machine.get_triple());
         if let Some(prefix) = std::env::var_os("AURA_DUMP_LLVM_IR") {
             dump_unit_ir(&module, prefix, unit)?;
+        }
+        if self.freestanding.is_some() {
+            return inline_asm::write_object(machine, &module);
         }
         match machine.write_to_memory_buffer(&module, FileType::Object) {
             Ok(buffer) => Ok(buffer.as_slice().to_vec()),
@@ -596,6 +634,10 @@ fn place_functions_in_own_sections(module: &Module<'_>, triple: &TargetTriple) {
     let coff = triple.contains("windows");
     let mut function = module.get_first_function();
     while let Some(current) = function {
+        if current.get_section().is_some() {
+            function = current.get_next_function();
+            continue;
+        }
         if current.count_basic_blocks() > 0 {
             if coff {
                 set_own_comdat(module, current);
@@ -689,6 +731,9 @@ fn host_target_machine_at(level: OptimizationLevel) -> Result<TargetMachine, Str
 /// while the system control register forbids it. RISC-V is RV64GC with
 /// the `lp64d` calling convention, and reaches every symbol relative to
 /// the program counter.
+///
+/// On x86-64 only the kernel profile enforces the no-red-zone rule. That
+/// profile also uses static relocation and the kernel code model (ADR-0148).
 fn freestanding_target_machine(target: super::FreestandingTarget) -> Result<TargetMachine, String> {
     use super::FreestandingTarget;
     static INITIALIZED: OnceLock<()> = OnceLock::new();
@@ -699,6 +744,7 @@ fn freestanding_target_machine(target: super::FreestandingTarget) -> Result<Targ
         Target::initialize_riscv(&config);
     });
     let (triple, cpu, features, abi, code_model) = match target {
+        FreestandingTarget::X86_64Kernel => x86_kernel::TARGET,
         FreestandingTarget::X86_64 => (
             "x86_64-unknown-none-elf",
             "x86-64",
@@ -730,6 +776,9 @@ fn freestanding_target_machine(target: super::FreestandingTarget) -> Result<Targ
         .set_level(OptimizationLevel::Default)
         .set_reloc_mode(RelocMode::PIC)
         .set_code_model(code_model);
+    if target == FreestandingTarget::X86_64Kernel {
+        options = options.set_reloc_mode(RelocMode::Static);
+    }
     if let Some(abi) = abi {
         options = options.set_abi(abi);
     }
@@ -805,11 +854,18 @@ fn target_machine_at(
 /// What a recorded instruction does. Result types live with its results.
 #[derive(Clone, Debug)]
 enum Op {
+    InlineAsm(crate::inline_asm::MachineAsm, Vec<Val>),
     Nop,
     Copy(Val),
     Iconst(i64),
     Fconst(f64),
     Unary(UnaryOp, Val),
+    IntegerBits(
+        aura_core::integer_bits::BitMethod,
+        aura_core::integer::IntegerKind,
+        Val,
+        Val,
+    ),
     Binary(BinaryOp, Val, Val),
     BinaryImm(BinaryOp, Val, i64),
     Icmp(IntCC, Val, Val),
@@ -820,6 +876,8 @@ enum Op {
     Load(LoadKind, MemFlags, Val, i32),
     Store(MemFlags, Val, Val, i32),
     Memory(MemoryAccess, ScalarType, Vec<Val>),
+    ArrayBorrow(Val, Val),
+    VarAddr(Var),
     StackAddr(Slot, i32),
     FuncAddr(FuncRef),
     SymbolValue(DataRef),
@@ -956,6 +1014,8 @@ struct FunctionIr {
     blocks: Vec<BlockIr>,
     layout: Vec<u32>,
     insts: Vec<InstIr>,
+    borrowed_arrays: BTreeMap<u32, usize>,
+    addressable: HashSet<u32>,
     vars: BTreeMap<u32, ScalarType>,
     slots: Vec<(u32, u8)>,
     func_refs: Vec<FuncHandle>,
@@ -988,20 +1048,24 @@ enum VarSource {
 /// The values `op` reads.
 fn op_operands(op: &Op) -> Vec<Val> {
     match op {
+        Op::InlineAsm(_, inputs) => inputs.clone(),
         Op::Nop
         | Op::Iconst(_)
         | Op::Fconst(_)
+        | Op::VarAddr(_)
         | Op::StackAddr(..)
         | Op::FuncAddr(_)
         | Op::SymbolValue(_)
         | Op::UseVar(_)
         | Op::Trap => Vec::new(),
+        Op::ArrayBorrow(value, address) => vec![*value, *address],
         Op::Copy(value)
         | Op::Unary(_, value)
         | Op::BinaryImm(_, value, _)
         | Op::IcmpImm(_, value, _) => {
             vec![*value]
         }
+        Op::IntegerBits(_, _, left, right) => vec![*left, *right],
         Op::Binary(_, left, right)
         | Op::Icmp(_, left, right)
         | Op::Fcmp(_, left, right)
@@ -1035,11 +1099,15 @@ fn op_targets(op: &Op) -> Vec<Blk> {
 fn map_op(op: &Op, value: impl Fn(Val) -> Val, block: impl Fn(Blk) -> Blk) -> Op {
     let values = |args: &[Val]| args.iter().map(|arg| value(*arg)).collect::<Vec<_>>();
     match op {
+        Op::InlineAsm(asm, inputs) => Op::InlineAsm(asm.clone(), values(inputs)),
         Op::Nop => Op::Nop,
         Op::Copy(source) => Op::Copy(value(*source)),
         Op::Iconst(constant) => Op::Iconst(*constant),
         Op::Fconst(constant) => Op::Fconst(*constant),
         Op::Unary(unary, source) => Op::Unary(*unary, value(*source)),
+        Op::IntegerBits(method, kind, word, count) => {
+            Op::IntegerBits(*method, *kind, value(*word), value(*count))
+        }
         Op::Binary(binary, left, right) => Op::Binary(*binary, value(*left), value(*right)),
         Op::BinaryImm(binary, left, imm) => Op::BinaryImm(*binary, value(*left), *imm),
         Op::Icmp(cc, left, right) => Op::Icmp(*cc, value(*left), value(*right)),
@@ -1054,6 +1122,8 @@ fn map_op(op: &Op, value: impl Fn(Val) -> Val, block: impl Fn(Blk) -> Blk) -> Op
             Op::Store(*flags, value(*stored), value(*address), *offset)
         }
         Op::Memory(access, width, operands) => Op::Memory(*access, *width, values(operands)),
+        Op::ArrayBorrow(v, addr) => Op::ArrayBorrow(value(*v), value(*addr)),
+        Op::VarAddr(var) => Op::VarAddr(*var),
         Op::StackAddr(slot, offset) => Op::StackAddr(*slot, *offset),
         Op::FuncAddr(function) => Op::FuncAddr(*function),
         Op::SymbolValue(data) => Op::SymbolValue(*data),
@@ -1085,6 +1155,8 @@ impl FunctionIr {
             blocks: Vec::new(),
             layout: Vec::new(),
             insts: Vec::new(),
+            borrowed_arrays: BTreeMap::new(),
+            addressable: HashSet::new(),
             vars: BTreeMap::new(),
             slots: Vec::new(),
             func_refs: Vec::new(),
@@ -1491,6 +1563,10 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.ir.blocks[block.0 as usize].cold = true;
     }
 
+    fn source_location(&self) -> Option<(u32, u32)> {
+        self.ir.location
+    }
+
     fn set_source_location(&mut self, line: u32, column: u32) {
         self.ir.location = Some((line, column));
     }
@@ -1524,6 +1600,19 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.ir.params_block = Some(block.0);
     }
 
+    fn borrow_array_argument(&mut self, v: Val, addr: Val) -> Val {
+        self.ir.push_value(Op::ArrayBorrow(v, addr), self.ir.ty(v))
+    }
+
+    fn bind_array_parameter(&mut self, var: Var, index: usize) {
+        self.ir.borrowed_arrays.insert(var.0, index);
+    }
+
+    fn var_addr(&mut self, var: Var) -> Val {
+        self.ir.addressable.insert(var.0);
+        self.ir.push_value(Op::VarAddr(var), ScalarType::I64)
+    }
+
     fn declare_var(&mut self, var: Var, ty: ScalarType) {
         self.ir.vars.insert(var.0, ty);
     }
@@ -1541,6 +1630,12 @@ impl FunctionBackend for LlvmFunction<'_> {
 
     fn use_var(&mut self, var: Var) -> Val {
         let ty = self.ir.vars.get(&var.0).copied().unwrap_or(ScalarType::I64);
+        if matches!(ty, ScalarType::OverAligned { .. }) {
+            return self.ir.push_value(Op::UseVar(var), ty);
+        }
+        if self.ir.addressable.contains(&var.0) || matches!(ty, ScalarType::Inline { .. }) {
+            return self.ir.push_value(Op::UseVar(var), ty);
+        }
         match self.ir.var_source(var) {
             VarSource::Value(value) => value,
             VarSource::Zero => match ty {
@@ -1848,6 +1943,17 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.overflow(OverflowOp::Umul, left, right)
     }
 
+    fn inline_asm(
+        &mut self,
+        asm: &crate::inline_asm::MachineAsm,
+        operands: &[Val],
+        results: &[ScalarType],
+    ) -> Vec<Val> {
+        self.ir
+            .push(Op::InlineAsm(asm.clone(), operands.to_vec()), results)
+            .1
+    }
+
     fn memory_access(
         &mut self,
         access: MemoryAccess,
@@ -1917,6 +2023,17 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.unary(UnaryOp::Fneg, ty, value)
     }
 
+    fn integer_bits(
+        &mut self,
+        method: aura_core::integer_bits::BitMethod,
+        kind: aura_core::integer::IntegerKind,
+        value: Val,
+        count: Val,
+    ) -> Val {
+        self.ir
+            .push_value(Op::IntegerBits(method, kind, value, count), ScalarType::I64)
+    }
+
     fn fsqrt(&mut self, value: Val) -> Val {
         let ty = self.ir.ty(value);
         self.unary(UnaryOp::Fsqrt, ty, value)
@@ -1958,6 +2075,18 @@ fn built<T>(result: Result<T, BuilderError>) -> Result<T, String> {
 
 fn basic_type<'ctx>(context: &'ctx Context, ty: ScalarType) -> BasicTypeEnum<'ctx> {
     match ty {
+        ScalarType::OverAligned { bytes, .. } => context.i8_type().array_type(bytes).into(),
+        ScalarType::Inline { bytes, align } => {
+            let element = match align {
+                1 => context.i8_type(),
+                2 => context.i16_type(),
+                4 => context.i32_type(),
+                8 => context.i64_type(),
+                16 => context.i128_type(),
+                _ => unreachable!("invalid inline array alignment"),
+            };
+            element.array_type(bytes / u32::from(align)).into()
+        }
         ScalarType::I8 => context.i8_type().into(),
         ScalarType::I16 => context.i16_type().into(),
         ScalarType::I32 => context.i32_type().into(),
@@ -1973,8 +2102,14 @@ fn function_type<'ctx>(context: &'ctx Context, signature: &Signature) -> Functio
         .iter()
         .enumerate()
         .map(|(index, ty)| {
+            if matches!(ty, ScalarType::OverAligned { .. }) {
+                return context.ptr_type(AddressSpace::default()).into();
+            }
             // A struct in memory travels as a real pointer, which `byval`
             // and `sret` need.
+            if matches!(ty, ScalarType::Inline { .. }) {
+                return context.ptr_type(AddressSpace::default()).into();
+            }
             match signature.indirects.iter().find(|(at, _)| *at == index) {
                 Some((_, Indirect::Aggregate { element, count })) => {
                     basic_type(context, *element).array_type(*count).into()
@@ -2036,6 +2171,8 @@ fn access_alignment(ty: ScalarType, flags: MemFlags) -> u32 {
         ScalarType::I8 => 1,
         ScalarType::I16 => 2,
         ScalarType::I32 | ScalarType::F32 => 4,
+        ScalarType::OverAligned { align, .. } => u32::from(align),
+        ScalarType::Inline { align, .. } => u32::from(align),
         ScalarType::I64 | ScalarType::F64 => 8,
     }
 }
@@ -2338,6 +2475,8 @@ fn split_source_path(path: &str) -> (String, String) {
 /// The width of a word of `ty`.
 fn scalar_bits(ty: ScalarType) -> u64 {
     match ty {
+        ScalarType::OverAligned { bytes, .. } => u64::from(bytes) * 8,
+        ScalarType::Inline { bytes, .. } => u64::from(bytes) * 8,
         ScalarType::I8 => 8,
         ScalarType::I16 => 16,
         ScalarType::I32 | ScalarType::F32 => 32,
@@ -2487,6 +2626,25 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
             };
             globals.push(global);
         }
+        let retained = initialized
+            .iter()
+            .filter(|(index, _)| {
+                object.data[*index]
+                    .contents
+                    .as_ref()
+                    .is_some_and(|data| data.preserve_address)
+            })
+            .map(|(index, _)| globals[*index].as_pointer_value())
+            .collect::<Vec<_>>();
+        if !retained.is_empty() {
+            let pointers = context
+                .ptr_type(AddressSpace::default())
+                .const_array(&retained);
+            let used = module.add_global(pointers.get_type(), None, "llvm.compiler.used");
+            used.set_linkage(LlvmLinkage::Appending);
+            used.set_section(Some("llvm.metadata"));
+            used.set_initializer(&pointers);
+        }
         let lowerer = Self {
             context,
             module,
@@ -2537,6 +2695,13 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
     fn lower_bodies(&self, object: &LlvmModule) -> Result<(), String> {
         for index in &self.bodies {
             let decl = &object.functions[*index];
+            if decl
+                .machine
+                .as_ref()
+                .is_some_and(|attrs| attrs.naked.is_some())
+            {
+                continue;
+            }
             if let Some(body) = &decl.body {
                 let mut lowerer = FunctionLowerer::new(self, self.functions[*index], body);
                 if let (Some(debug), Some(source)) = (&self.debug, &decl.source) {
@@ -2752,7 +2917,22 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         self.set_location(None);
         for (var, ty) in &self.ir.vars {
             let llvm_ty = basic_type(context, *ty);
+            if let Some(index) = self.ir.borrowed_arrays.get(var) {
+                let pointer = self
+                    .function
+                    .get_nth_param(*index as u32)
+                    .unwrap()
+                    .into_pointer_value();
+                self.vars.insert(*var, (pointer, llvm_ty));
+                continue;
+            }
             let slot = built(self.builder.build_alloca(llvm_ty, &format!("var{var}")))?;
+            if let ScalarType::OverAligned { align, .. } = ty {
+                slot.as_instruction_value()
+                    .expect("an alloca is an instruction")
+                    .set_alignment(u32::from(*align))
+                    .map_err(|_| "invalid fixed array variable alignment")?;
+            }
             built(self.builder.build_store(slot, llvm_ty.const_zero()))?;
             self.vars.insert(*var, (slot, llvm_ty));
         }
@@ -2787,6 +2967,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     return Err("the function parameters are not the entry block's".to_string());
                 }
                 let params = self.function.get_params();
+                let params = self.load_array_parameters(params)?;
                 if self.ir.params_block.is_some() {
                     let phis = &self.phis[first];
                     if phis.len() != params.len() {
@@ -2837,6 +3018,18 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     }
 
     fn args(&self, values: &[Val]) -> Result<Vec<BasicMetadataValueEnum<'ctx>>, String> {
+        if values
+            .iter()
+            .any(|v| matches!(self.ir.ty(*v), ScalarType::OverAligned { .. }))
+        {
+            return self.array_arguments(values);
+        }
+        if values
+            .iter()
+            .any(|v| matches!(self.ir.ty(*v), ScalarType::Inline { .. }))
+        {
+            return self.array_arguments(values);
+        }
         Ok(self
             .values(values)?
             .into_iter()
@@ -2862,6 +3055,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         if access == MemoryAccess::Fence {
             built(self.builder.build_fence(ORDER, false, ""))?;
             return Ok(None);
+        }
+        if let MemoryAccess::Ordered(op, success, failure) = access {
+            return self.ordered_atomic(op, success, failure, width, operands);
         }
         let ty = self.int_type(width);
         let natural = ty.get_bit_width() / 8;
@@ -2967,6 +3163,48 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 ))?;
                 let previous = built(self.builder.build_extract_value(pair, 0, ""))?;
                 widen(previous.into_int_value())
+            }
+            MemoryAccess::WideCopy {
+                volatile_read,
+                volatile_write,
+            } => {
+                let dst = built(self.builder.build_int_to_ptr(
+                    self.int(operands[1])?,
+                    self.context.ptr_type(AddressSpace::default()),
+                    "",
+                ))?;
+                let value = built(
+                    self.builder
+                        .build_load(self.context.i128_type(), pointer, ""),
+                )?;
+                let read = value.as_instruction_value().ok_or("missing wide load")?;
+                read.set_alignment(if volatile_read { 16 } else { 1 })
+                    .map_err(problem("invalid wide load alignment"))?;
+                read.set_volatile(volatile_read)
+                    .map_err(problem("invalid wide load volatility"))?;
+                let write = built(self.builder.build_store(dst, value))?;
+                write
+                    .set_alignment(if volatile_write { 16 } else { 1 })
+                    .map_err(problem("invalid wide store alignment"))?;
+                write
+                    .set_volatile(volatile_write)
+                    .map_err(problem("invalid wide store volatility"))?;
+                Ok(None)
+            }
+            MemoryAccess::PointerOffset => {
+                let displacement = built(self.builder.build_int_mul(
+                    self.int(operands[1])?,
+                    self.int(operands[2])?,
+                    "",
+                ))?;
+                built(
+                    self.builder
+                        .build_int_add(self.int(operands[0])?, displacement, ""),
+                )
+                .map(Some)
+            }
+            MemoryAccess::Ordered(op, success, failure) => {
+                self.ordered_atomic(op, success, failure, width, operands)
             }
             MemoryAccess::Fence => unreachable!("a fence was lowered above"),
         }
@@ -3153,10 +3391,31 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     fn lower_inst(&mut self, inst: &InstIr) -> Result<(), String> {
         let context = self.context;
         match &inst.op {
+            Op::InlineAsm(asm, inputs) => self.lower_inline_asm(inst, asm, inputs)?,
             Op::Nop => {}
             Op::Copy(value) => {
                 let value = self.value(*value)?;
                 self.define(inst, value);
+            }
+            Op::Iconst(0) if matches!(self.result_type(inst), ScalarType::OverAligned { .. }) => {
+                self.define(
+                    inst,
+                    basic_type(context, self.result_type(inst)).const_zero(),
+                );
+            }
+            Op::Iconst(0) if matches!(self.result_type(inst), ScalarType::Inline { .. }) => {
+                self.define(
+                    inst,
+                    basic_type(context, self.result_type(inst)).const_zero(),
+                );
+            }
+            Op::ArrayBorrow(value, _) => {
+                self.define(inst, self.value(*value)?);
+            }
+            Op::VarAddr(var) => {
+                let (slot, _) = self.vars[&var.0];
+                let address = self.pointer_to_int(slot)?;
+                self.define(inst, address);
             }
             Op::Iconst(constant) => {
                 let ty = self.int_type(self.result_type(inst));
@@ -3172,6 +3431,10 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             Op::Unary(op, operand) => {
                 let value = self.lower_unary(*op, self.result_type(inst), *operand)?;
                 self.define(inst, value);
+            }
+            Op::IntegerBits(method, kind, word, count) => {
+                let value = self.lower_integer_bits(*method, *kind, *word, *count)?;
+                self.define(inst, value.into());
             }
             Op::Binary(op, left, right) => {
                 let right = self.value(*right)?;
@@ -3371,6 +3634,24 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 ))?;
                 for (index, indirect) in &signature.indirects {
                     let (name, size) = match indirect {
+                        Indirect::ByValueAligned { size, alignment } => {
+                            let location = AttributeLoc::Param(*index as u32);
+                            call.add_attribute(
+                                location,
+                                context.create_type_attribute(
+                                    Attribute::get_named_enum_kind_id("byval"),
+                                    context.i8_type().array_type(*size).as_any_type_enum(),
+                                ),
+                            );
+                            call.add_attribute(
+                                location,
+                                context.create_enum_attribute(
+                                    Attribute::get_named_enum_kind_id("align"),
+                                    u64::from(*alignment),
+                                ),
+                            );
+                            continue;
+                        }
                         Indirect::ByValue { size } => ("byval", *size),
                         Indirect::Result { size } => ("sret", *size),
                         Indirect::Aggregate { .. } => continue,
@@ -3419,6 +3700,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 self.define(inst, value);
             }
             Op::DefVar(var, value) => {
+                if self.is_initial_array_binding(*var, *value) {
+                    return Ok(());
+                }
                 let (slot, _) = self
                     .vars
                     .get(&var.0)
@@ -3736,9 +4020,45 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     }
 }
 
+#[path = "native_backend_llvm_asm.rs"]
+mod inline_asm;
+
+#[path = "native_backend_x86_kernel.rs"]
+mod x86_kernel;
+
 #[path = "native_backend_llvm_units.rs"]
 mod units;
 
 #[cfg(test)]
 #[path = "native_backend_llvm_tests.rs"]
 mod tests;
+
+#[path = "native_llvm_atomics.rs"]
+mod ordered_atomics;
+
+#[path = "native_llvm_integer_bits.rs"]
+mod integer_bits;
+
+/// Supplies wide arithmetic in the target object, with no compiler support library.
+fn link_wide_integer_helpers<'ctx>(
+    context: &'ctx Context,
+    module: &Module<'ctx>,
+) -> Result<(), String> {
+    use inkwell::memory_buffer::MemoryBuffer;
+    let ir = include_str!("freestanding_i128.ll");
+    let buffer = MemoryBuffer::create_from_memory_range_copy(ir.as_bytes(), "freestanding_i128");
+    let helpers = context
+        .create_module_from_ir(buffer)
+        .map_err(|e| e.to_string())?;
+    helpers.set_triple(&module.get_triple());
+    helpers.set_data_layout(&module.get_data_layout());
+    module.link_in_module(helpers).map_err(|e| e.to_string())?;
+    module
+        .get_function(crate::native_codegen::wide_numbers::SYMBOL)
+        .expect("linked wide arithmetic function")
+        .set_linkage(LlvmLinkage::Internal);
+    Ok(())
+}
+
+#[path = "native_llvm_fixed_arrays.rs"]
+mod fixed_arrays;

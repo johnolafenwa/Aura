@@ -25,6 +25,7 @@ fn dummy_function(name: &str) -> FunctionDecl {
         span: Span::new(1, 1),
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: Vec::new(),
         spec: false,
@@ -54,6 +55,7 @@ fn item_name_matches_decl_name() {
         doc: None,
         c_layout: false,
         c_arrays: Default::default(),
+        layout_controls: Default::default(),
         c_union: None,
     });
     let enum_item = Item::Enum(EnumDecl {
@@ -107,6 +109,7 @@ fn item_name_matches_decl_name() {
         methods: vec![dummy_function("show")],
         span: Span::new(1, 1),
         derived: false,
+        delegation: None,
         assoc_types: Vec::new(),
     });
 

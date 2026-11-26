@@ -1,0 +1,5 @@
+error[AU2062]: trait `Named` is delegated twice for `Pair[U]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_delegation_duplicate_generic.au:9:37
+  |
+9 | impl[U: Named] Named for Pair[U] by second
+  |                                     ^
