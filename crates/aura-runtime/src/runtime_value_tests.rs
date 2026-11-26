@@ -9120,6 +9120,16 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
         .render(),
         "None"
     );
+    std::env::set_var("AURA_TEST_ENV_THAT_IS_SET_52D3", "present");
+    let present = call(
+        "sys::env",
+        vec![Value::String(
+            "AURA_TEST_ENV_THAT_IS_SET_52D3".to_string().into(),
+        )],
+    )
+    .render();
+    std::env::remove_var("AURA_TEST_ENV_THAT_IS_SET_52D3");
+    assert!(present.contains("present"), "{present}");
     assert!(call("sys::current_dir", vec![])
         .render()
         .starts_with("Result.Ok("));

@@ -1697,3 +1697,107 @@ fn a_list_of_structs_crosses_as_a_c_array_the_runtime_owns() {
         diagnostic.message
     );
 }
+
+/// The descriptor generated code passes for a `fixed[uint8, 3]` value: a
+/// layout whose one field is the array.
+fn fixed_bytes_layout() -> String {
+    use crate::c_layout::{CField, CFieldKind, CStruct};
+    use crate::ffi::FfiScalar;
+    let layout = CStruct {
+        name: "fixed".to_string(),
+        fields: vec![CField {
+            name: "elements".to_string(),
+            kind: CFieldKind::Array(Box::new(CFieldKind::Scalar(FfiScalar::U8)), 3),
+        }],
+        layout_controls: Default::default(),
+        union: false,
+    };
+    serde_json::to_string(&layout).expect("a layout serializes")
+}
+
+#[test]
+fn a_fixed_array_boxes_from_its_bytes_and_unboxes_back_into_a_slot() {
+    use super::{aura_direct_fixed_box, aura_direct_fixed_unbox};
+
+    let descriptor = fixed_bytes_layout();
+    let bytes = [4_u8, 5, 6];
+    unsafe {
+        let value = aura_direct_fixed_box(descriptor.as_ptr(), descriptor.len(), bytes.as_ptr());
+        assert_eq!(rendered(value), "[4, 5, 6]");
+        let mut slot = [0_u8; 3];
+        aura_direct_fixed_unbox(
+            value,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            slot.as_mut_ptr(),
+        );
+        assert_eq!(slot, bytes);
+        aura_direct_release_value(value);
+    }
+
+    // A value that is not a list of the element ends the task.
+    let diagnostic = capture_diagnostic(move || unsafe {
+        let descriptor = fixed_bytes_layout();
+        let text = string_value("abc");
+        let mut slot = [0_u8; 3];
+        aura_direct_fixed_unbox(
+            text,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            slot.as_mut_ptr(),
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4005", "{}", diagnostic.message);
+}
+
+#[test]
+fn a_fixed_array_index_out_of_bounds_ends_the_task_at_its_span() {
+    let diagnostic = capture_diagnostic(|| super::aura_direct_fixed_bounds(7, 3, 12, 5));
+    assert_eq!(diagnostic.code, "AU4031");
+    assert_eq!(
+        diagnostic.message,
+        "fixed array index `7` is out of bounds for length `3`"
+    );
+    let span = diagnostic.span.expect("the trap names its span");
+    assert_eq!((span.line, span.column), (12, 5));
+}
+
+#[test]
+fn wide_pointer_reads_and_writes_move_all_128_bits() {
+    use super::{aura_direct_pointer_wide_read, aura_direct_pointer_wide_write};
+
+    let mut cell = 0_u128;
+    let address = &mut cell as *mut u128;
+    unsafe {
+        let value = boxed_value(Value::Int(
+            IntegerValue::from_typed_signed(-2, IntegerKind::Int128).expect("an int128"),
+        ));
+        aura_direct_pointer_wide_write(address, value, 0);
+        aura_direct_release_value(value);
+        assert_eq!(cell, u128::MAX - 1);
+
+        let signed = aura_direct_pointer_wide_read(address, 1, 0);
+        assert_eq!(rendered(signed), "-2");
+        aura_direct_release_value(signed);
+        let unsigned = aura_direct_pointer_wide_read(address, 0, 1);
+        assert_eq!(rendered(unsigned), (u128::MAX - 1).to_string());
+        aura_direct_release_value(unsigned);
+
+        let value = boxed_value(Value::Int(
+            IntegerValue::from_typed_unsigned(u128::MAX, IntegerKind::Uint128).expect("a uint128"),
+        ));
+        aura_direct_pointer_wide_write(address, value, 1);
+        aura_direct_release_value(value);
+        assert_eq!(cell, u128::MAX);
+    }
+
+    // Only an integer can be written.
+    let target = Box::into_raw(Box::new(0_u128)) as usize;
+    let diagnostic = capture_diagnostic(move || unsafe {
+        let flag = boxed_value(Value::Bool(true));
+        aura_direct_pointer_wide_write(target as *mut u128, flag, 0);
+    });
+    assert_eq!(diagnostic.code, "AU4032");
+    assert_eq!(diagnostic.message, "wide memory write needs an integer");
+    drop(unsafe { Box::from_raw(target as *mut u128) });
+}
