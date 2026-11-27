@@ -2039,7 +2039,11 @@ fn nested_field_list_reads_follow_the_field_s_boxes() {
             "aura_direct_vec_check_index",
             "aura_direct_element_path_load",
         ] {
-            assert!(symbols.contains(expected), "{name}: {symbols:?}");
+            // Mach-O symbol names carry a leading underscore.
+            assert!(
+                symbols.iter().any(|symbol| symbol.ends_with(expected)),
+                "{name}: {symbols:?}"
+            );
         }
     }
 }
