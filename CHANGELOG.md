@@ -267,6 +267,12 @@ in this file.
   generator argument once, under the function's own name. Before, it was
   reported a second time under a name starting with `__aura_with_`. A
   module constant's initializer is reported under the constant's name.
+- Speed: more text steps make no copy that is thrown away. `join` builds
+  its result in one pass; `value.clone()` on a temporary that is released next
+  hands the temporary over; `map[key].clone()` on a `dict[str, str]` is one
+  lookup; `out.append(texts[i].clone())` copies the element straight into the
+  list; and a new `dict` takes its key and value types without comparing type
+  names. `template_render` now runs 39% fewer instructions than in 0.17.0.
 - Images: decoding checks a PNG's declared size against its compressed
   data and allocates every pixel buffer fallibly, and `resize` checks its
   target size before it allocates. An image too large to hold reports

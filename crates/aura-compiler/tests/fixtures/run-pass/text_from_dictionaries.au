@@ -1,0 +1,41 @@
+# Text read out of dictionaries: a clone of a value a lookup found takes over
+# the found text, and `map[key].clone()` copies the entry in one lookup.
+def lookup(name: str, row: dict[str, str], context: dict[str, str]) -> str:
+    match row.get(name):
+        case Lookup.Found(value):
+            return value.clone()
+        case Lookup.Missing:
+            return context[name].clone()
+
+
+def twice(text: str) -> str:
+    kept = f"{text}!"
+    copy = kept.clone()
+    return f"{kept}{copy}"
+
+
+def first(texts: list[str]) -> str:
+    return texts[0].clone()
+
+
+def main():
+    mut row: dict[str, str] = {}
+    row["name"] = "a name long enough to be kept on the heap, not in the value"
+    row["note"] = "n"
+    mut context: dict[str, str] = {}
+    context["user"] = "u<1>"
+    context["note"] = "hidden by the row"
+    print(lookup("name", row, context))
+    print(lookup("note", row, context))
+    print(lookup("user", row, context))
+    mut found = lookup("name", row, context)
+    found += " (changed)"
+    print(found)
+    print(lookup("name", row, context))
+    print(f"{row.len()} {context.len()} {row["name"].len()} {context["user"]}")
+    print(twice("x"))
+    print(first(["only", "other"]))
+    mut all: list[str] = []
+    for key in ["user", "note", "name"]:
+        all.append(lookup(key, row, context))
+    print("|".join(all))

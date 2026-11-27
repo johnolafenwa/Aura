@@ -1,0 +1,6 @@
+error[AU4003]: dict key `missing` was not present
+ --> crates/aura-compiler/tests/fixtures/run-fail/dict_str_clone_missing_key.au:2:20
+  |
+2 |     return context[name].clone()
+  |                    ^
+  = note: Aura call chain (innermost first): lookup at 1:1 -> main at 5:1

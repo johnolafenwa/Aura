@@ -15750,6 +15750,159 @@ fn owned_replace_receiver_needs_a_released_temporary_and_literals() {
     assert_eq!(super::owned_replace_receiver(&computed), None);
 }
 
+#[test]
+fn owned_clone_receiver_needs_the_temporary_released_next() {
+    let source = "def lookup(name: str, row: dict[str, str]) -> str:\n    match row.get(name):\n        case Lookup.Found(value):\n            return value.clone()\n        case Lookup.Missing:\n            return \"\"\n\n\ndef main():\n    mut row: dict[str, str] = {}\n    row[\"a\"] = \"b\"\n    print(lookup(\"a\", row))\n";
+    let mir = lower_source_to_mir(source).expect("the lookup should lower");
+    let lookup = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "lookup")
+        .expect("lookup");
+    // The arm clones the payload, then releases the scrutinee and the
+    // payload.
+    let (instructions, (receiver, release)) = lookup
+        .blocks
+        .iter()
+        .find_map(|block| {
+            super::owned_clone_receiver(&block.instructions)
+                .map(|found| (&block.instructions, found))
+        })
+        .expect("the arm that clones the payload");
+    assert!(receiver.starts_with('%'), "{receiver}");
+    assert!(
+        matches!(&instructions[release], Instruction::Release { place } if place == receiver),
+        "{:?}",
+        instructions[release]
+    );
+    // Without the release, something later may still read the temporary.
+    assert_eq!(super::owned_clone_receiver(&instructions[..release]), None);
+    let clone = instructions[0].clone();
+    let release_of = |place: &str| Instruction::Release {
+        place: place.to_string(),
+    };
+    let next = [clone.clone(), release_of(receiver)];
+    assert_eq!(super::owned_clone_receiver(&next), Some((receiver, 1)));
+    let after_another = [clone.clone(), release_of("name"), release_of(receiver)];
+    assert_eq!(
+        super::owned_clone_receiver(&after_another),
+        Some((receiver, 2))
+    );
+    // A release of something inside the temporary reads it first.
+    let inside = format!("{receiver}.0");
+    let after_inside = [clone.clone(), release_of(&inside), release_of(receiver)];
+    assert_eq!(super::owned_clone_receiver(&after_inside), None);
+    let too_late = [
+        clone.clone(),
+        release_of("name"),
+        release_of("row"),
+        release_of(receiver),
+    ];
+    assert_eq!(super::owned_clone_receiver(&too_late), None);
+    assert_eq!(
+        super::owned_clone_receiver(&[clone, release_of("name")]),
+        None
+    );
+    // A clone of a local the function keeps is a copy.
+    let source = "def copy(text: str) -> str:\n    kept = text.clone()\n    return kept\n\n\ndef main():\n    print(copy(\"a\"))\n";
+    let mir = lower_source_to_mir(source).expect("the copy should lower");
+    let copy = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "copy")
+        .expect("copy");
+    assert_eq!(
+        super::owned_clone_receiver(&copy.blocks[0].instructions),
+        None
+    );
+}
+
+#[test]
+fn pushed_str_clone_needs_the_clone_moved_straight_into_the_append() {
+    let source = "def copy_all(texts: list[str], out: mut list[str]):\n    for i in range(texts.len()):\n        out.append(texts[i].clone())\n\n\ndef main():\n    mut out: list[str] = []\n    copy_all([\"a\"], out)\n    print(out.len())\n";
+    let mir = lower_source_to_mir(source).expect("the loop should lower");
+    let copy_all = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "copy_all")
+        .expect("copy_all");
+    let (instructions, start) = copy_all
+        .blocks
+        .iter()
+        .find_map(|block| {
+            (0..block.instructions.len())
+                .find(|&start| super::pushed_str_clone(&block.instructions[start..]).is_some())
+                .map(|start| (&block.instructions, start))
+        })
+        .expect("the clone and its append");
+    let fused = &instructions[start..];
+    let (loan, list) = super::pushed_str_clone(fused).expect("found above");
+    assert!(loan.starts_with('%'), "{loan}");
+    assert_eq!(list, "out");
+    // The clone alone, or the append alone, is compiled as usual.
+    assert_eq!(super::pushed_str_clone(&fused[..1]), None);
+    assert_eq!(super::pushed_str_clone(&fused[1..]), None);
+    // An append of anything but the clone leaves the clone to be made.
+    let mut other = fused.to_vec();
+    let Instruction::Assign {
+        value: Rvalue::Call { args, .. },
+        ..
+    } = &mut other[1]
+    else {
+        panic!("the append is a call");
+    };
+    args[0].value = Operand::MovePlace("%other".to_string());
+    assert_eq!(super::pushed_str_clone(&other), None);
+    let mut copied = fused.to_vec();
+    let Instruction::Assign {
+        value: Rvalue::Call { args, .. },
+        ..
+    } = &mut copied[1]
+    else {
+        panic!("the append is a call");
+    };
+    let Operand::MovePlace(moved) = args[0].value.clone() else {
+        panic!("the append moves the clone");
+    };
+    args[0].value = Operand::Place(moved);
+    assert_eq!(super::pushed_str_clone(&copied), None);
+}
+
+#[test]
+fn dict_str_clone_needs_a_checked_loan_cloned_and_ended() {
+    let source = "def lookup(name: str, context: dict[str, str]) -> str:\n    return context[name].clone()\n\n\ndef main():\n    mut context: dict[str, str] = {}\n    context[\"a\"] = \"b\"\n    print(lookup(\"a\", context))\n";
+    let mir = lower_source_to_mir(source).expect("the lookup should lower");
+    let lookup = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "lookup")
+        .expect("lookup");
+    let instructions = &lookup.blocks[0].instructions;
+    let (target, map, key, _) = super::dict_str_clone(instructions).expect("the fused lookup");
+    assert!(target.starts_with('%'), "{target}");
+    assert_eq!((map, key), ("context", "name"));
+    // The loan alone, or one that outlives the clone, is still a loan.
+    assert_eq!(super::dict_str_clone(&instructions[..2]), None);
+    assert_eq!(super::dict_str_clone(&instructions[1..]), None);
+    let mut inside = instructions.to_vec();
+    let Instruction::BeginElementLoan { projection, .. } = &mut inside[0] else {
+        panic!("the lookup starts with a loan");
+    };
+    *projection = "name".to_string();
+    assert_eq!(super::dict_str_clone(&inside), None);
+    let mut unchecked = instructions.to_vec();
+    let Instruction::BeginElementLoan { checked, .. } = &mut unchecked[0] else {
+        panic!("the lookup starts with a loan");
+    };
+    *checked = false;
+    assert_eq!(super::dict_str_clone(&unchecked), None);
+    let mut other_loan = instructions.to_vec();
+    other_loan[2] = Instruction::EndLoan {
+        loan: "other".to_string(),
+    };
+    assert_eq!(super::dict_str_clone(&other_loan), None);
+}
+
 /// The lookup slots of `LOOKUP_MATCH_SOURCE`'s `main` after `change`.
 fn lookup_slots_after(change: impl FnOnce(&mut MirFunction, &str)) -> BTreeSet<String> {
     let mir = lower_source_to_mir(LOOKUP_MATCH_SOURCE).expect("the lookup match should lower");
@@ -16251,7 +16404,7 @@ def main():
     mut names: list[str] = []
     for key in words.keys():
         names.append(key.clone())
-    print(names[0])
+    print(names.len())
 "#;
     let mir = lower_source_to_mir(source).expect("the loop should lower");
     let object = emit_host_object(&mir).expect("the loop should compile directly");

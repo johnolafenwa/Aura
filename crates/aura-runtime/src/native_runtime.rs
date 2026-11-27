@@ -134,6 +134,8 @@ pub mod foreign_calls;
 mod frame_stack;
 #[path = "native_owned_values.rs"]
 mod owned_values;
+#[path = "native_str_views.rs"]
+pub mod str_views;
 // Generated code reaches typed layouts through plain layouts (step 2c of
 // the typed-layout work); the rest of the converters only tests use until
 // values with handles live in layouts.
@@ -3925,9 +3927,59 @@ unsafe fn take_owned_contents(ptr: *mut OpaqueValue) -> Value {
 unsafe fn consume_owned_value(ptr: *mut OpaqueValue) -> Value {
     let value = unsafe { take_owned_contents(ptr) };
     unsafe {
-        aura_direct_release_value(ptr);
+        if !free_emptied_box(ptr) {
+            aura_direct_release_value(ptr);
+        }
     }
     value
+}
+
+/// Frees a box whose value was taken out, leaving `Unit`, when the caller's
+/// reference is the only one and the running task's ledger links it, and
+/// returns whether it did. Only the block is left to free then, so the
+/// general release of a value is skipped: a value appended to a list or
+/// stored in a dict leaves its box this way.
+///
+/// # Safety
+///
+/// `ptr` is null or a live box the caller owns one reference to, which
+/// this takes when it returns true.
+#[inline]
+unsafe fn free_emptied_box(ptr: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller owns a reference, so the box is live, and a count
+    // of one cannot grow while it holds the only reference.
+    let Some(header) = (unsafe { ptr.as_ref() }) else {
+        return false;
+    };
+    if header.ref_count.load(Ordering::Acquire) != 1 || header.shared_lock().is_some() {
+        return false;
+    }
+    // SAFETY: no other access to a confined box with one reference is in
+    // progress.
+    let (held, named) = unsafe { (&*header.value.get(), &*header.runtime_type_name.get()) };
+    if !matches!(held, Value::Unit) || named.is_some() {
+        return false;
+    }
+    let unlinked = current_direct_frame_stack().is_some_and(|stack| {
+        // SAFETY: the stack belongs to the running task, and the box is
+        // live.
+        unsafe {
+            (*stack.as_ptr())
+                .owned_values
+                .remove_last(stack.as_ptr(), ptr)
+        }
+    });
+    if !unlinked {
+        return false;
+    }
+    header.ref_count.store(0, Ordering::Relaxed);
+    crate::runtime_value::representation_stats::note_box_freed();
+    #[cfg(coverage)]
+    DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
+    // SAFETY: the last reference is gone, no ledger links the box, and it
+    // holds `Unit`, no type name and no lock, so only the block is left.
+    unsafe { std::alloc::dealloc(ptr.cast(), std::alloc::Layout::new::<OpaqueValue>()) };
+    true
 }
 
 unsafe fn consume_untracked_value(ptr: *mut OpaqueValue) -> Value {
@@ -9390,31 +9442,49 @@ pub extern "C-unwind" fn aura_direct_string_join(
     separator: *mut OpaqueValue,
     parts: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let Value::Vec(parts) = (unsafe { take_value(parts) }) else {
-            runtime_error("`join` requires `list[str]`");
-        };
-        unsafe {
+    task_runtime_boundary(|| unsafe {
+        // The parts are read where the list keeps them, into one buffer of
+        // the final size.
+        let joined = with_value(parts, |parts| {
+            let Value::Vec(parts) = parts else {
+                runtime_error("`join` requires `list[str]`");
+            };
             with_value(separator, |value| match value {
-                Value::String(separator) => {
-                    let mut rendered_parts = Vec::new();
-                    for value in parts.elements {
-                        let Value::String(part) = value else {
-                            runtime_error("`join` requires `list[str]`");
-                        };
-                        rendered_parts.push(part);
-                    }
-                    let joined = crate::text_methods::join_checked(&rendered_parts, separator)
-                        .unwrap_or_else(|error| runtime_diagnostic_error(error));
-                    boxed_value(Value::String(joined.into()))
-                }
+                Value::String(separator) => join_parts(&parts.elements, separator),
                 other => runtime_error(format!(
                     "expected `str`, found `{}`",
                     value_type_name(other)
                 )),
             })
-        }
+        });
+        boxed_value(Value::String(joined))
     })
+}
+
+/// The `str` elements of a list with `separator` between them.
+fn join_parts(elements: &ListElements, separator: &crate::text::Text) -> crate::text::Text {
+    let count = elements.len();
+    let part = |index: usize| match elements.value_at(index) {
+        Some(Value::String(part)) => part,
+        _ => runtime_error("`join` requires `list[str]`"),
+    };
+    let mut len = separator.len().checked_mul(count.saturating_sub(1));
+    let mut ascii = count < 2 || separator.is_ascii();
+    for index in 0..count {
+        let part = part(index);
+        len = len.and_then(|len| len.checked_add(part.len()));
+        ascii &= part.is_ascii();
+    }
+    // Refused with `AU4005` before it is built when over the string limit.
+    let mut joined = crate::text_methods::reserved_string(len)
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+    for index in 0..count {
+        if index > 0 {
+            joined.push_str(separator);
+        }
+        joined.push_str(part(index));
+    }
+    crate::text::Text::from_string_with(joined, ascii)
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -10494,9 +10564,9 @@ unsafe fn grow_box_list(vec: *mut OpaqueValue, element: ElementBox) -> Option<El
 
 /// Appends the text of `value` to the list `vec` when `value` is a `str`
 /// box with one reference, which the caller hands over, and returns
-/// whether it did. The text moves into the list and the emptied box is
-/// freed here, without the general release of a value: appending a string
-/// that was just built is what a text program's output loop does.
+/// whether it did. The text moves into the list without the checks an
+/// append of any value makes: appending a string that was just built is
+/// what a text program's output loop does.
 ///
 /// # Safety
 ///
@@ -10531,27 +10601,12 @@ unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> b
             elements => elements.push(std::mem::replace(cell, Value::Unit)),
         }
     });
-    let unlinked = current_direct_frame_stack().is_some_and(|stack| {
-        // SAFETY: the stack belongs to the running task, and the box is
-        // live.
-        unsafe {
-            (*stack.as_ptr())
-                .owned_values
-                .remove_last(stack.as_ptr(), value)
+    // SAFETY: the caller's reference, which this function took.
+    unsafe {
+        if !free_emptied_box(value) {
+            aura_direct_release_value(value);
         }
-    });
-    if !unlinked {
-        // SAFETY: the caller's reference, which this function took.
-        unsafe { aura_direct_release_value(value) };
-        return true;
     }
-    header.ref_count.store(0, Ordering::Relaxed);
-    crate::runtime_value::representation_stats::note_box_freed();
-    #[cfg(coverage)]
-    DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
-    // SAFETY: the last reference is gone, no ledger links the box, and it
-    // holds `Unit`, no type name and no lock, so only the block is left.
-    unsafe { std::alloc::dealloc(value.cast(), std::alloc::Layout::new::<OpaqueValue>()) };
     true
 }
 
@@ -16486,10 +16541,58 @@ pub extern "C-unwind" fn aura_direct_set_take_index_in_place(
 pub extern "C-unwind" fn aura_direct_clone_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         crate::runtime_value::representation_stats::note_clone();
+        // A confined `str` is copied where it lies: it has no type name to
+        // carry over and holds no Array.
+        // SAFETY: generated code passes a live box, and no write to a
+        // confined box is in progress while its task reads it.
+        let text = unsafe { value.as_ref() }.and_then(|header| {
+            if header.shared_lock().is_some() {
+                return None;
+            }
+            match unsafe { (&*header.value.get(), &*header.runtime_type_name.get()) } {
+                (Value::String(text), None) => Some(text.clone()),
+                _ => None,
+            }
+        });
+        if let Some(text) = text {
+            return boxed_value(Value::String(text));
+        }
         let runtime_type_name = unsafe { explicit_runtime_type_tag(value) };
         let cloned = unsafe { with_value(value, try_clone_array_containing_value) };
         boxed_value_with_type(direct_array_result(cloned, 0, 0), runtime_type_name)
     })
+}
+
+/// `value.clone()` on a `str` box the caller owns one reference to and
+/// hands over, as `return found.clone()` does with a temporary it releases
+/// next. The only reference to a confined `str` box is the clone: nothing
+/// else can read the box, so a copy of its text would be freed unread. Any
+/// other box is cloned and the caller's reference released.
+///
+/// # Safety
+///
+/// `value` is a live box the caller owns one reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_clone_str_owned(
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    // SAFETY: the caller owns a reference, so the box is live, and a count
+    // of one cannot grow while it holds the only reference.
+    let only = unsafe { value.as_ref() }.is_some_and(|header| {
+        header.ref_count.load(Ordering::Acquire) == 1
+            && header.shared_lock().is_none()
+            // SAFETY: no other access to a confined box with one reference
+            // is in progress.
+            && matches!(unsafe { &*header.value.get() }, Value::String(_))
+    });
+    if only {
+        crate::runtime_value::representation_stats::note_clone();
+        return value;
+    }
+    let cloned = aura_direct_clone_value(value);
+    // SAFETY: the caller's contract.
+    unsafe { aura_direct_release_value(value) };
+    cloned
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
