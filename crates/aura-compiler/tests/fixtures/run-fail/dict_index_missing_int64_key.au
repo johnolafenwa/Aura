@@ -1,0 +1,4 @@
+def main():
+    values = {1: 10, 2: 20}
+    print(values[2])
+    print(values[-3])

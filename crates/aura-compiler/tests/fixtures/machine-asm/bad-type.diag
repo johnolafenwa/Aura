@@ -1,0 +1,5 @@
+error[AU2091]: assembly register `reg` cannot hold a `float64` operand
+ --> bad-type.au:2:29
+  |
+2 |     asm("nop", input("reg", value))
+  |                             ^

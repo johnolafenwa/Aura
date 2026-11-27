@@ -1,0 +1,5 @@
+error[AU2083]: ptr[T] needs a scalar, a C class or a fixed array of those types
+ --> crates/aura-compiler/tests/fixtures/check-fail/raw_pointer_element.au:1:16
+  |
+1 | def observe(p: ptr[str]) -> None:
+  |                ^

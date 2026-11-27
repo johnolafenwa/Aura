@@ -12,7 +12,7 @@
 //! whole call: a shared argument has no writer, and a `mut` argument has no
 //! other reader.
 
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{c_char, c_void, CStr};
 use std::slice;
 use std::str;
 
@@ -130,9 +130,10 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_bytes_view(
                 write_view(out, &[]);
                 return std::ptr::null_mut();
             }
-            let copy = Box::leak(bytes.into_boxed_slice());
-            write_view(out, copy);
-            copy.as_mut_ptr()
+            let copy = allocate_structs(bytes.len(), free_structs_block);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), copy, bytes.len());
+            write_view(out, slice::from_raw_parts(copy, bytes.len()));
+            copy
         })
     })
 }
@@ -141,15 +142,12 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_bytes_view(
 ///
 /// # Safety
 ///
-/// `copy` and `length` are one non-null result of that function and the
+/// `copy` and `_length` are one non-null result of that function and the
 /// length it wrote, not freed before.
 #[cfg_attr(not(coverage), no_mangle)]
-pub unsafe extern "C-unwind" fn aura_direct_ffi_release_bytes(copy: *mut u8, length: usize) {
-    if copy.is_null() {
-        return;
-    }
-    // SAFETY: the caller's contract names a boxed slice of this length.
-    drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(copy, length)) });
+pub unsafe extern "C-unwind" fn aura_direct_ffi_release_bytes(copy: *mut u8, _length: usize) {
+    // SAFETY: `copy` is null or a tracked buffer allocated by `allocate_structs`.
+    unsafe { aura_direct_ffi_release_structs(copy) };
 }
 
 /// Writes the bytes of the `list[uint8]` `value` to `out` for a foreign
@@ -194,7 +192,16 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_handle_address(
 ) -> *mut c_void {
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| match value {
-            Value::FfiHandle(handle) => handle.as_ptr(),
+            Value::FfiHandle(handle) => {
+                let pointer = handle.as_ptr();
+                if pointer.is_null() {
+                    runtime_error(format!(
+                        "FFI opaque handle `{}` has already been released",
+                        handle.type_name()
+                    ));
+                }
+                pointer
+            }
             other => runtime_error(format!(
                 "FFI argument expected opaque handle, but received `{}`",
                 value_type_name(other)
@@ -397,7 +404,16 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_nullable_handle_address(
 ) -> *mut c_void {
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| match active_member(value) {
-            Value::FfiHandle(handle) => handle.as_ptr(),
+            Value::FfiHandle(handle) => {
+                let pointer = handle.as_ptr();
+                if pointer.is_null() {
+                    runtime_error(format!(
+                        "FFI opaque handle `{}` has already been released",
+                        handle.type_name()
+                    ));
+                }
+                pointer
+            }
             Value::Unit => std::ptr::null_mut(),
             other => runtime_error(format!(
                 "FFI argument expected opaque handle or None, but received `{}`",
@@ -425,14 +441,24 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_c_string(
 ) -> *mut c_char {
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| match active_member(value) {
-            Value::String(text) => match CString::new(text.as_bytes()) {
-                Ok(copy) => copy.into_raw(),
-                Err(_) => foreign_call_failure(
-                    metadata_text(symbol, symbol_length),
-                    "AU4005",
-                    crate::ffi::FfiError::InteriorNul { index },
-                ),
-            },
+            Value::String(text) => {
+                let bytes = text.as_bytes();
+                if bytes.contains(&0) {
+                    foreign_call_failure(
+                        metadata_text(symbol, symbol_length),
+                        "AU4005",
+                        crate::ffi::FfiError::InteriorNul { index },
+                    );
+                }
+                let len = bytes
+                    .len()
+                    .checked_add(1)
+                    .unwrap_or_else(|| runtime_error("a C string copy is too large"));
+                let copy = allocate_structs(len, free_structs_block);
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), copy, bytes.len());
+                copy.add(bytes.len()).write(0);
+                copy.cast::<c_char>()
+            }
             Value::Unit => std::ptr::null_mut(),
             other => runtime_error(format!(
                 "FFI argument expected cstr, but received `{}`",
@@ -449,12 +475,8 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_c_string(
 /// `copy` is one result of that function, not freed before.
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aura_direct_ffi_release_c_string(copy: *mut c_char) {
-    if copy.is_null() {
-        return;
-    }
-    // SAFETY: the caller's contract names a `CString` given up with
-    // `into_raw`.
-    drop(unsafe { CString::from_raw(copy) });
+    // SAFETY: `copy` is null or a tracked buffer allocated by `allocate_structs`.
+    unsafe { aura_direct_ffi_release_structs(copy.cast()) };
 }
 
 /// A new `str` that copies the NUL-terminated text the foreign function
@@ -559,7 +581,12 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_give_up_handle(value: *mut Opaqu
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| {
             if let Value::FfiHandle(handle) = value {
-                handle.give_up();
+                if handle.take_ptr().is_null() {
+                    runtime_error(format!(
+                        "FFI opaque handle `{}` has already been released",
+                        handle.type_name()
+                    ));
+                }
             }
         })
     })
@@ -617,6 +644,26 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_bad_bool(
     })
 }
 
+/// Sanitizes any non-canonical byte (`> 1`) left in the `list[bool]` `value`
+/// to `1` (`true`). Returns the first offending byte (`2..=255`), or `0`
+/// when every element was canonical (`0` or `1`) or `value` is not a bool list.
+///
+/// # Safety
+///
+/// `value` is a live value its caller holds exclusively.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_sanitize_flags(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| unsafe {
+        let bad = value_mut(value, |value| {
+            let Value::Vec(vector) = value else {
+                return None;
+            };
+            vector.elements.sanitize_bool_bytes()
+        });
+        bad.map_or(0, i64::from)
+    })
+}
+
 /// Ends the task with `AU4001` when the foreign function `symbol` left a
 /// byte that is neither 0 nor 1 in the `list[bool]` `value` it wrote
 /// through a `mut ptr[bool]`. The byte becomes `true` first, so the list
@@ -637,16 +684,7 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_check_flags(
             let Value::Vec(vector) = value else {
                 return None;
             };
-            let length = vector.elements.len();
-            let flags = vector.elements.scalars_mut(ListForm::Bool)?;
-            // SAFETY: a `bool` list keeps one byte per element, and the
-            // bytes are read and written as bytes.
-            let bytes = std::slice::from_raw_parts_mut(flags, length);
-            let bad = bytes.iter().copied().find(|byte| *byte > 1);
-            for byte in bytes.iter_mut().filter(|byte| **byte > 1) {
-                *byte = 1;
-            }
-            bad
+            vector.elements.sanitize_bool_bytes()
         });
         if let Some(byte) = bad {
             foreign_call_failure(
@@ -685,10 +723,26 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
     with_callback_guard(|| unsafe { body(frame) });
 }
 
+/// Conservative stack size assumed for a foreign OS thread that invokes an
+/// Aura callback without an active Aura task stack bound (fits macOS 512 KiB
+/// secondary threads while leaving headroom above `DIRECT_STACK_RESERVE`).
+const FOREIGN_THREAD_CALLBACK_STACK_SIZE: usize = 512 * 1024;
+
 fn with_callback_guard(body: impl FnOnce()) {
+    let foreign_stack_bounds = crate::runtime_value::current_task_stack_floor()
+        .is_none()
+        .then(|| {
+            crate::runtime_value::enter_thread_stack_bounds(FOREIGN_THREAD_CALLBACK_STACK_SIZE)
+        });
     let previous = super::with_direct_task_runtime_state(|state| {
         if state.foreign_callback_failure.is_some() {
             return None;
+        }
+        if foreign_stack_bounds.is_some() {
+            state.refresh_stack_limit();
+        }
+        if !state.owned_values().tracking() {
+            state.owned_values_mut().set_tracking(true);
         }
         Some(
             state
@@ -697,11 +751,14 @@ fn with_callback_guard(body: impl FnOnce()) {
         )
     });
     let Some(previous) = previous else {
+        drop(foreign_stack_bounds);
         return;
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+    drop(foreign_stack_bounds);
     super::with_direct_task_runtime_state(|state| {
         state.foreign_callback_cleanup_base = previous;
+        state.refresh_stack_limit();
         if let Err(payload) = outcome {
             state.foreign_callback_failure = Some(payload);
             MAY_HAVE_CALLBACK_FAILURE.set(true);
@@ -863,6 +920,9 @@ unsafe fn foreign_layout(descriptor: *const u8, length: usize) -> &'static CStru
     let Ok(layout) = serde_json::from_str::<CStruct>(text) else {
         runtime_error("a foreign call names a C layout that does not read");
     };
+    if let Err(reason) = layout.validate_bounds() {
+        runtime_error(reason);
+    }
     let layout = layout.interned();
     layouts.insert(descriptor as usize, (text.into(), layout));
     layout
@@ -877,6 +937,58 @@ fn c_value_failure(symbol: &str, error: CValueError) -> ! {
         ),
         other => runtime_diagnostic_error(Diagnostic::coded(other.code(), other.to_string())),
     }
+}
+
+/// # Safety
+///
+/// The descriptor names one fixed array field and the slot holds its bytes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_fixed_box(
+    descriptor: *const u8,
+    length: usize,
+    slot: *const u8,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, length);
+        let kind = &layout.fields[0].kind;
+        let bytes = slice::from_raw_parts(slot, kind.size());
+        match c_values::unpack_kind(kind, bytes) {
+            Ok(value) => boxed_value(value),
+            Err(error) => c_value_failure("fixed", error),
+        }
+    })
+}
+
+/// # Safety
+///
+/// The descriptor names one fixed array field, value is live, and slot has
+/// room for the full array.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_fixed_unbox(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    length: usize,
+    slot: *mut u8,
+) {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, length);
+        let kind = &layout.fields[0].kind;
+        let bytes = slice::from_raw_parts_mut(slot, kind.size());
+        if let Err(error) = with_value(value, |value| {
+            c_values::pack_kind(value, kind, "fixed", bytes)
+        }) {
+            c_value_failure("fixed", error)
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_fixed_bounds(index: i64, length: i64, line: i64, column: i64) {
+    task_runtime_boundary(|| {
+        let message = format!("fixed array index `{index}` is out of bounds for length `{length}`");
+        let span = aura_core::diag::Span::new(line as usize, column as usize);
+        runtime_diagnostic_error(Diagnostic::coded_at("AU4031", span, message));
+    })
 }
 
 /// Writes the class instance `value` at `slot` in the C layout that
@@ -1151,4 +1263,37 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_release_structs(array: *mut u8) 
     // SAFETY: only a live allocation produced by allocate_structs reaches here.
     let owner = unsafe { (*array.cast::<StructArrayHeader>().sub(1)).owner };
     unsafe { super::aura_direct_release_value(owner) };
+}
+
+/// # Safety
+/// The pointer satisfies the raw 128-bit scalar read contract.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_pointer_wide_read(
+    address: *const u128,
+    signed: i64,
+    volatile: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(unsafe { crate::raw_wide_memory::read(address, signed != 0, volatile != 0) })
+    })
+}
+
+/// # Safety
+/// The pointer satisfies the raw 128-bit scalar write contract and value is live.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_pointer_wide_write(
+    address: *mut u128,
+    value: *mut OpaqueValue,
+    volatile: i64,
+) {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |held| {
+            if !crate::raw_wide_memory::write(address, held, volatile != 0) {
+                runtime_diagnostic_error(Diagnostic::coded(
+                    "AU4032",
+                    "wide memory write needs an integer",
+                ));
+            }
+        })
+    })
 }

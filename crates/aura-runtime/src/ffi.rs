@@ -220,6 +220,9 @@ pub struct CCallback {
 /// back through the pointer. The result word starts as zero.
 pub type CallbackHandler = Box<dyn Fn(&mut [u64])>;
 
+/// A thread-safe handler for a [`ScopedCallback`].
+pub type SharedCallbackHandler = Box<dyn Fn(&mut [u64]) + Send + Sync>;
+
 struct CallbackState {
     signature: CCallback,
     handler: CallbackHandler,
@@ -231,44 +234,53 @@ unsafe extern "C" fn callback_entry(
     args: *const *const c_void,
     state: &CallbackState,
 ) {
-    let params = &state.signature.params;
-    let mut frame = vec![0_u64; params.len() + 1];
-    let mut pointees = Vec::with_capacity(params.len());
-    for (index, param) in params.iter().enumerate() {
-        // SAFETY: libffi passes one pointer for each parameter of the
-        // signature the closure was made for, to storage of that type.
-        let argument = unsafe { *args.add(index) } as *mut u8;
-        let source = match param.pointer {
-            true => unsafe { *(argument as *const *mut u8) },
-            false => argument,
-        };
-        pointees.push(source);
-        if !source.is_null() {
-            // SAFETY: the storage holds a scalar of this size. A pointer
-            // parameter's pointee is the caller's to keep valid.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    source,
-                    frame.as_mut_ptr().add(index).cast::<u8>(),
-                    param.scalar.size(),
-                );
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let params = &state.signature.params;
+        let mut frame = vec![0_u64; params.len() + 1];
+        let mut pointees = Vec::with_capacity(params.len());
+        for (index, param) in params.iter().enumerate() {
+            // SAFETY: libffi passes one pointer for each parameter of the
+            // signature the closure was made for, to storage of that type.
+            let argument = unsafe { *args.add(index) } as *mut u8;
+            let source = match param.pointer {
+                true => unsafe { *(argument as *const *mut u8) },
+                false => argument,
+            };
+            pointees.push(source);
+            if !source.is_null() {
+                // SAFETY: the storage holds a scalar of this size. A pointer
+                // parameter's pointee is the caller's to keep valid.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        source,
+                        frame.as_mut_ptr().add(index).cast::<u8>(),
+                        param.scalar.size(),
+                    );
+                }
             }
         }
-    }
-    (state.handler)(&mut frame);
-    for ((index, param), target) in params.iter().enumerate().zip(pointees) {
-        if param.pointer && !target.is_null() {
-            // SAFETY: as for the read above.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    frame.as_ptr().add(index).cast::<u8>(),
-                    target,
-                    param.scalar.size(),
-                );
+        (state.handler)(&mut frame);
+        for ((index, param), target) in params.iter().enumerate().zip(pointees) {
+            if param.pointer && !target.is_null() {
+                // SAFETY: as for the read above.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        frame.as_ptr().add(index).cast::<u8>(),
+                        target,
+                        param.scalar.size(),
+                    );
+                }
             }
         }
-    }
-    let word = frame[params.len()];
+        frame[params.len()]
+    }));
+    let Ok(word) = outcome else {
+        // Never unwind across an `extern "C"` boundary; return zero on panic.
+        if state.signature.result.is_some() {
+            *result = 0;
+        }
+        return;
+    };
     // libffi reads an integer result narrower than a register as a whole
     // register, extended as its type says, and a float in its own size.
     match state.signature.result {
@@ -306,18 +318,76 @@ pub(crate) unsafe fn checked_callback_text<'a>(address: usize) -> Result<&'a str
         .map_err(|_| FfiError::InvalidUtf8CallbackText)
 }
 
-/// The address of new code with the C signature `signature` that runs
-/// `handler`. The code lives until the process ends, so foreign code may
-/// keep the address.
-pub fn callback_code(signature: CCallback, handler: CallbackHandler) -> usize {
+/// A libffi C-callable trampoline whose executable closure and Rust callback
+/// state stay alive until this handle is dropped.
+pub struct ScopedCallback {
+    // Dropped before `state` is freed in `Drop`.
+    closure: Option<libffi::middle::Closure<'static>>,
+    state: *mut CallbackState,
+    code: usize,
+}
+
+// SAFETY: `ScopedCallback` is constructed only from a `Send + Sync` handler,
+// and its `CallbackState` is immutable once created until `Drop`.
+unsafe impl Send for ScopedCallback {}
+unsafe impl Sync for ScopedCallback {}
+
+impl ScopedCallback {
+    /// The C-callable function pointer address for this trampoline.
+    pub fn code(&self) -> usize {
+        self.code
+    }
+}
+
+impl Drop for ScopedCallback {
+    fn drop(&mut self) {
+        // Drop the libffi closure before freeing `CallbackState` so the
+        // closure's userdata pointer is never dangling while the closure exists.
+        self.closure.take();
+        // SAFETY: `state` was allocated with `Box::into_raw` in
+        // `callback_code_scoped` and is freed exactly once here.
+        unsafe {
+            drop(Box::from_raw(self.state));
+        }
+    }
+}
+
+fn callback_cif(signature: &CCallback) -> Cif {
     let scalar = |param: &CCallbackParam| match param.pointer {
         true => Type::pointer(),
         false => scalar_type(param.scalar),
     };
-    let cif = Cif::new(
+    Cif::new(
         signature.params.iter().map(scalar).collect::<Vec<_>>(),
         signature.result.map_or_else(Type::void, scalar_type),
-    );
+    )
+}
+
+/// Builds a scoped libffi trampoline whose closure and state are freed when
+/// the returned [`ScopedCallback`] drops.
+pub fn callback_code_scoped(
+    signature: CCallback,
+    handler: SharedCallbackHandler,
+) -> ScopedCallback {
+    let cif = callback_cif(&signature);
+    let state = Box::into_raw(Box::new(CallbackState { signature, handler }));
+    // SAFETY: `state` remains valid and immovable until `ScopedCallback::drop`
+    // drops `closure` first.
+    let state_ref: &'static CallbackState = unsafe { &*state };
+    let closure = libffi::middle::Closure::new(cif, callback_entry, state_ref);
+    let code = *closure.code_ptr() as usize;
+    ScopedCallback {
+        closure: Some(closure),
+        state,
+        code,
+    }
+}
+
+/// The address of new code with the C signature `signature` that runs
+/// `handler`. The code lives until the process ends, so foreign code may
+/// keep the address.
+pub fn callback_code(signature: CCallback, handler: CallbackHandler) -> usize {
+    let cif = callback_cif(&signature);
     let state: &'static CallbackState = Box::leak(Box::new(CallbackState { signature, handler }));
     let closure = libffi::middle::Closure::new(cif, callback_entry, state);
     let code = *closure.code_ptr() as usize;
@@ -366,6 +436,15 @@ pub struct FfiSignature {
 }
 
 impl FfiSignature {
+    /// SysV passes these records on a stack aligned beyond libffi's call area.
+    pub fn needs_aligned_stack(&self) -> bool {
+        crate::c_layout::CAbi::host() == Some(crate::c_layout::CAbi::SysV64)
+            && self
+                .parameters
+                .iter()
+                .any(|ty| matches!(ty, FfiType::Struct(layout) if layout.align() > 16))
+    }
+
     pub fn new(parameters: Vec<FfiType>, result: FfiType) -> Self {
         Self { parameters, result }
     }
@@ -468,6 +547,7 @@ impl HostFunction {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FfiError {
+    CallAdapter(String),
     InvalidSymbolName,
     SymbolNotFound {
         symbol: String,
@@ -503,11 +583,13 @@ pub enum FfiError {
     InvalidUtf8Return,
     NullCallbackText,
     InvalidUtf8CallbackText,
+    InvalidLayout(String),
 }
 
 impl fmt::Display for FfiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CallAdapter(detail) => write!(formatter, "C ABI call adapter: {detail}"),
             Self::InvalidSymbolName => {
                 formatter.write_str("FFI symbol names cannot contain a NUL byte")
             }
@@ -562,6 +644,7 @@ impl fmt::Display for FfiError {
             Self::InvalidUtf8CallbackText => {
                 formatter.write_str("the C caller passed a cstr that is not valid UTF-8")
             }
+            Self::InvalidLayout(detail) => formatter.write_str(detail),
             Self::InvalidUtf8Return => {
                 formatter.write_str("FFI function returned a cstr that is not UTF-8")
             }
@@ -629,25 +712,49 @@ struct CallStorage {
     elements: Vec<(usize, Vec<u64>)>,
     /// The bytes of each struct argument, in storage aligned for every
     /// scalar, with the index of the argument.
-    structs: Vec<(usize, Vec<u64>)>,
+    structs: Vec<(usize, AlignedWords)>,
 }
 
-/// `bytes` in storage aligned for every scalar, with room for at least
-/// `least` words.
-fn aligned_bytes(bytes: &[u8], least: usize) -> Vec<u64> {
-    let mut words = vec![0_u64; bytes.len().div_ceil(8).max(least)];
-    // SAFETY: the storage holds at least `bytes.len()` bytes.
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), words.as_mut_ptr().cast(), bytes.len());
+/// A heap allocation and the naturally or explicitly aligned slice within it.
+/// Moving the owner keeps the address passed to libffi stable.
+struct AlignedWords {
+    allocation: Vec<u64>,
+    start: usize,
+    len: usize,
+}
+
+impl AlignedWords {
+    fn new(bytes: &[u8], least: usize, align: usize) -> Self {
+        let len = bytes.len().div_ceil(8).max(least);
+        let mut allocation = vec![0u64; len + (align.saturating_sub(1) / 8)];
+        let start = allocation.as_ptr().align_offset(align.max(8));
+        // SAFETY: the aligned subslice holds at least bytes.len() bytes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                allocation[start..].as_mut_ptr().cast(),
+                bytes.len(),
+            )
+        }
+        Self {
+            allocation,
+            start,
+            len,
+        }
     }
-    words
+
+    fn words(&mut self) -> &mut [u64] {
+        &mut self.allocation[self.start..self.start + self.len]
+    }
 }
 
-/// The first `count` bytes of `words`.
 fn leading_bytes(words: &[u64], count: usize) -> Vec<u8> {
     // SAFETY: every caller made `words` with room for `count` bytes.
     unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), count) }.to_vec()
 }
+
+#[path = "ffi_controlled_struct.rs"]
+mod controlled_struct;
 
 /// The libffi description of a C struct or union.
 ///
@@ -656,25 +763,32 @@ fn leading_bytes(words: &[u64], count: usize) -> Vec<u8> {
 /// the same way. A struct that is or holds a union is described by what
 /// decides how it is passed: its size, its alignment, and the class of
 /// each of its register pieces on this machine.
-fn struct_type(layout: &CStruct) -> Type {
-    if layout.holds_union() {
-        return overlapping_struct_type(layout);
-    }
-    Type::structure(
-        layout
-            .fields
-            .iter()
-            .map(|field| field_type(&field.kind))
-            .collect::<Vec<_>>(),
-    )
+fn struct_type(layout: &CStruct) -> Result<Type, FfiError> {
+    layout.validate_bounds().map_err(FfiError::InvalidLayout)?;
+    struct_type_unchecked(layout)
 }
 
-fn field_type(kind: &CFieldKind) -> Type {
-    match kind {
-        CFieldKind::Scalar(scalar) => scalar_type(*scalar),
-        CFieldKind::Struct(inner) => struct_type(inner),
-        CFieldKind::Array(element, count) => Type::structure(vec![field_type(element); *count]),
+fn struct_type_unchecked(layout: &CStruct) -> Result<Type, FfiError> {
+    if layout.has_controlled_layout() {
+        return Ok(controlled_struct::descriptor(layout));
     }
+    if layout.holds_union() {
+        return Ok(overlapping_struct_type(layout));
+    }
+    let fields = layout
+        .fields
+        .iter()
+        .map(|field| field_type(&field.kind))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Type::structure(fields))
+}
+
+fn field_type(kind: &CFieldKind) -> Result<Type, FfiError> {
+    Ok(match kind {
+        CFieldKind::Scalar(scalar) => scalar_type(*scalar),
+        CFieldKind::Struct(inner) => struct_type_unchecked(inner)?,
+        CFieldKind::Array(element, count) => Type::structure(vec![field_type(element)?; *count]),
+    })
 }
 
 /// A struct of scalars with the size, alignment, and register classes of
@@ -688,7 +802,22 @@ fn overlapping_struct_type(layout: &CStruct) -> Type {
         4 => FfiScalar::U32,
         _ => FfiScalar::U64,
     };
-    let words = |size: usize| std::iter::repeat_n(scalar_type(word), size / align);
+    let words = |size: usize| {
+        let mut remaining = size;
+        std::iter::from_fn(move || {
+            if remaining == 0 {
+                return None;
+            }
+            let ty = match remaining.min(word.size()) {
+                8 => FfiScalar::U64,
+                4..=7 => FfiScalar::U32,
+                2..=3 => FfiScalar::U16,
+                _ => FfiScalar::U8,
+            };
+            remaining -= ty.size();
+            Some(scalar_type(ty))
+        })
+    };
     let pieces = match CAbi::host().map(|abi| layout.passing(abi)) {
         Some(CPassing::Registers(pieces)) => pieces,
         _ => return Type::structure(words(layout.size()).collect::<Vec<_>>()),
@@ -725,12 +854,15 @@ fn scalar_type(scalar: FfiScalar) -> Type {
 /// `words`, one scalar each, packed as C lays out an array of `scalar`.
 fn pack_elements(scalar: FfiScalar, words: &[u64]) -> Vec<u64> {
     let size = scalar.size();
-    let mut packed = vec![0_u64; (words.len() * size).div_ceil(8)];
-    // SAFETY: the storage holds at least `words.len() * size` bytes, and a
-    // byte has no alignment.
-    let bytes = unsafe {
-        std::slice::from_raw_parts_mut(packed.as_mut_ptr().cast::<u8>(), words.len() * size)
-    };
+    let byte_len = words
+        .len()
+        .checked_mul(size)
+        .expect("FFI packed element byte length overflows usize");
+    let mut packed = vec![0_u64; byte_len.div_ceil(8)];
+    // SAFETY: the storage holds at least `byte_len` bytes, and a byte has no
+    // alignment.
+    let bytes =
+        unsafe { std::slice::from_raw_parts_mut(packed.as_mut_ptr().cast::<u8>(), byte_len) };
     for (chunk, word) in bytes.chunks_exact_mut(size).zip(words) {
         chunk.copy_from_slice(&word.to_le_bytes()[..size]);
     }
@@ -741,8 +873,19 @@ fn pack_elements(scalar: FfiScalar, words: &[u64]) -> Vec<u64> {
 /// [`pack_elements`].
 fn unpack_elements(scalar: FfiScalar, packed: &[u64], count: usize) -> Vec<u64> {
     let size = scalar.size();
-    // SAFETY: `packed` was made by `pack_elements` for `count` scalars.
-    let bytes = unsafe { std::slice::from_raw_parts(packed.as_ptr().cast::<u8>(), count * size) };
+    let byte_len = count
+        .checked_mul(size)
+        .expect("FFI unpacked element byte length overflows usize");
+    let capacity = packed
+        .len()
+        .checked_mul(8)
+        .expect("FFI packed buffer byte capacity overflows usize");
+    assert!(
+        byte_len <= capacity,
+        "FFI unpacked element byte length exceeds packed buffer capacity"
+    );
+    // SAFETY: `packed` holds at least `byte_len` bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(packed.as_ptr().cast::<u8>(), byte_len) };
     bytes
         .chunks_exact(size)
         .map(|chunk| {
@@ -915,19 +1058,33 @@ fn append_argument(
             // Moving the `Vec` keeps its heap buffer where it is.
             storage.elements.push((index, packed));
         }
-        (FfiType::Struct(layout), FfiValue::Struct(_, bytes)) => {
-            let words = aligned_bytes(bytes, 1);
-            types.push(struct_type(layout));
-            // Moving the `Vec` keeps its heap buffer where it is.
-            values.push(AbiArgument::Struct(words.as_ptr(), words.len()));
+        (FfiType::Struct(layout), FfiValue::Struct(_, bytes))
+            if layout.align() > 16
+                && crate::c_layout::CAbi::host().is_some_and(|abi| {
+                    layout.passing(abi) == crate::c_layout::CPassing::Memory
+                }) =>
+        {
+            layout.validate_bounds().map_err(FfiError::InvalidLayout)?;
+            // AArch64 and Win64 pass an over-aligned memory argument as the
+            // address of a private copy. Its allocation must meet the C alignment.
+            let mut words = AlignedWords::new(bytes, 1, layout.align());
+            types.push(Type::pointer());
+            values.push(AbiArgument::MutPointer(words.words().as_mut_ptr().cast()));
             storage.structs.push((index, words));
         }
-        (FfiType::StructPointer(_), FfiValue::Struct(_, bytes)) => {
-            let mut words = aligned_bytes(bytes, 1);
+        (FfiType::Struct(layout), FfiValue::Struct(_, bytes)) => {
+            let mut words = AlignedWords::new(bytes, 1, layout.align());
+            types.push(struct_type(layout)?);
+            // Moving the `Vec` keeps its heap buffer where it is.
+            values.push(AbiArgument::Struct(words.words().as_ptr(), words.len));
+            storage.structs.push((index, words));
+        }
+        (FfiType::StructPointer(layout), FfiValue::Struct(_, bytes)) => {
+            let mut words = AlignedWords::new(bytes, 1, layout.align());
             // An empty run passes a null pointer, as an empty view does.
             let pointer = match bytes.is_empty() {
                 true => std::ptr::null_mut(),
-                false => words.as_mut_ptr().cast(),
+                false => words.words().as_mut_ptr().cast(),
             };
             types.push(Type::pointer());
             values.push(AbiArgument::MutPointer(pointer));
@@ -967,7 +1124,7 @@ fn result_type(ffi_type: FfiType) -> Result<Type, FfiError> {
         | FfiType::NullableOpaqueHandle
         | FfiType::CString
         | FfiType::NullableCString => Type::pointer(),
-        FfiType::Struct(layout) => struct_type(layout),
+        FfiType::Struct(layout) => struct_type(layout)?,
         FfiType::StringView
         | FfiType::BytesView
         | FfiType::BytesViewMut
@@ -1044,11 +1201,12 @@ unsafe fn invoke(
         }
         FfiType::Struct(layout) => {
             // libffi widens a small result to a whole register.
-            let mut words = aligned_bytes(&[], layout.size().div_ceil(8).max(2));
+            let mut words =
+                AlignedWords::new(&[], layout.size().div_ceil(8).max(2), layout.align());
             unsafe {
-                cif.call_return_into(function, arguments, Ret::new(words.as_mut_slice()));
+                cif.call_return_into(function, arguments, Ret::new(words.words()));
             }
-            FfiValue::Struct(layout, leading_bytes(&words, layout.size()))
+            FfiValue::Struct(layout, leading_bytes(words.words(), layout.size()))
         }
         // `result_type` refused these before the call was built.
         _ => return Err(FfiError::UnsupportedReturnType(result)),
@@ -1081,6 +1239,11 @@ pub unsafe fn call_host_function(
         });
     }
 
+    if signature.needs_aligned_stack() {
+        return Err(FfiError::CallAdapter(
+            "the System V signature requires an aligned stack adapter".into(),
+        ));
+    }
     // Reject an unsupported return before resolving or invoking the symbol.
     let result_type = result_type(signature.result)?;
     let mut mutable_byte_buffers: Vec<Option<Vec<u8>>> = signature
@@ -1128,11 +1291,11 @@ pub unsafe fn call_host_function(
         }
     }
     // A struct passed by pointer takes the bytes the function left.
-    for (index, words) in storage.structs {
+    for (index, mut words) in storage.structs {
         if let (FfiType::StructPointer(_), FfiValue::Struct(_, bytes)) =
             (signature.parameters[index], &mut arguments[index])
         {
-            *bytes = leading_bytes(&words, bytes.len());
+            *bytes = leading_bytes(words.words(), bytes.len());
         }
     }
     // A `mut` pointer argument takes the scalars the function left.
@@ -1167,7 +1330,6 @@ pub unsafe fn call_host_function(
 #[derive(Default)]
 struct LoadedLibraries {
     by_request: std::collections::BTreeSet<(u8, String, Vec<PathBuf>)>,
-    loaded_names: std::collections::BTreeSet<(u8, String)>,
     handles: Vec<usize>,
 }
 
@@ -1191,15 +1353,23 @@ fn host_image_base() -> *mut libc::c_void {
     }
 }
 
-#[cfg(unix)]
-fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
-    if symbol.starts_with("aura_direct_")
+fn is_internal_host_symbol_name(symbol: &str) -> bool {
+    symbol.starts_with("aura_direct_")
         || symbol.starts_with("aura_debug_")
         || symbol.starts_with("LLVM")
         || symbol.starts_with("_ZN")
         || symbol.starts_with("__rust_")
         || symbol == "rust_eh_personality"
-    {
+}
+
+fn is_internal_host_image_name(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower.starts_with("libllvm") || lower.starts_with("llvm")
+}
+
+#[cfg(unix)]
+fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
+    if is_internal_host_symbol_name(symbol) {
         return true;
     }
     if pointer.is_null() {
@@ -1222,7 +1392,7 @@ fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
                 .file_name()
                 .and_then(|n| n.to_str())
             {
-                if base_name.starts_with("libLLVM") || base_name.starts_with("LLVM") {
+                if is_internal_host_image_name(base_name) {
                     return true;
                 }
             }
@@ -1231,16 +1401,32 @@ fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
     false
 }
 
-fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
+/// Resolves a symbol through the package libraries and the permitted host namespace.
+pub fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
     let c_symbol = CString::new(symbol).map_err(|_| FfiError::InvalidSymbolName)?;
+    if is_internal_host_symbol_name(symbol) {
+        return Err(FfiError::SymbolNotFound {
+            symbol: symbol.to_owned(),
+            detail: "symbol resolves to internal Aura host image".to_owned(),
+        });
+    }
     let handles = loaded_libraries_registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .handles
         .clone();
     for handle in handles {
-        if let Some(function) = HostFunction::new(library_symbol(handle, &c_symbol)) {
-            return Ok(function);
+        let pointer = library_symbol(handle, &c_symbol);
+        if !pointer.is_null() {
+            if is_internal_host_symbol(symbol, pointer) {
+                return Err(FfiError::SymbolNotFound {
+                    symbol: symbol.to_owned(),
+                    detail: "symbol resolves to internal Aura host image".to_owned(),
+                });
+            }
+            if let Some(function) = HostFunction::new(pointer) {
+                return Ok(function);
+            }
         }
     }
 
@@ -1326,15 +1512,23 @@ fn host_image_base() -> *mut c_void {
 /// symbol.
 #[cfg(windows)]
 fn default_namespace_symbol(symbol: &std::ffi::CStr) -> *mut c_void {
-    use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
+    use windows_sys::Win32::System::LibraryLoader::{
+        LoadLibraryExW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+    };
     use windows_sys::Win32::System::ProcessStatus::K32EnumProcessModules;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     static C_RUNTIME: std::sync::Once = std::sync::Once::new();
     C_RUNTIME.call_once(|| {
         let name: Vec<u16> = "ucrtbase.dll\0".encode_utf16().collect();
-        // SAFETY: `name` is NUL terminated. The module stays loaded.
-        unsafe { LoadLibraryW(name.as_ptr()) };
+        // SAFETY: `name` is NUL terminated and restricted to default dirs.
+        unsafe {
+            LoadLibraryExW(
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            )
+        };
     });
 
     let host = host_image_base();
@@ -1364,7 +1558,7 @@ fn default_namespace_symbol(symbol: &std::ffi::CStr) -> *mut c_void {
     }
     modules
         .into_iter()
-        .filter(|module| *module != host)
+        .filter(|module| *module != host && !is_internal_host_module(*module))
         .map(|module| library_symbol(module as usize, symbol))
         .find(|pointer| !pointer.is_null())
         .unwrap_or(std::ptr::null_mut())
@@ -1376,6 +1570,36 @@ fn symbol_lookup_failure() -> String {
     "no module loaded into the process exports the symbol".to_owned()
 }
 
+#[cfg(windows)]
+fn is_internal_host_module(module: *mut c_void) -> bool {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
+
+    if std::ptr::eq(module, host_image_base()) {
+        return true;
+    }
+    let mut buffer = vec![0u16; 1024];
+    loop {
+        // SAFETY: `buffer` is writable for `buffer.len()` UTF-16 code units.
+        let len =
+            unsafe { GetModuleFileNameW(module as _, buffer.as_mut_ptr(), buffer.len() as u32) };
+        if len == 0 {
+            return false;
+        }
+        if (len as usize) < buffer.len() {
+            let path = std::ffi::OsString::from_wide(&buffer[..len as usize]);
+            return Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(is_internal_host_image_name);
+        }
+        if buffer.len() >= 32_768 {
+            return false;
+        }
+        buffer.resize(buffer.len() * 2, 0);
+    }
+}
+
 /// Whether `symbol` is one of Aura's own, which no program may call as a
 /// foreign function.
 #[cfg(windows)]
@@ -1384,13 +1608,7 @@ fn is_internal_host_symbol(symbol: &str, pointer: *const c_void) -> bool {
         GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
     };
-    if symbol.starts_with("aura_direct_")
-        || symbol.starts_with("aura_debug_")
-        || symbol.starts_with("LLVM")
-        || symbol.starts_with("_ZN")
-        || symbol.starts_with("__rust_")
-        || symbol == "rust_eh_personality"
-    {
+    if is_internal_host_symbol_name(symbol) {
         return true;
     }
     if pointer.is_null() {
@@ -1406,7 +1624,7 @@ fn is_internal_host_symbol(symbol: &str, pointer: *const c_void) -> bool {
             &mut module,
         )
     };
-    found != 0 && std::ptr::eq(module, host_image_base())
+    found != 0 && is_internal_host_module(module)
 }
 
 /// The function `symbol` among the libraries loaded into the process, as
@@ -1472,34 +1690,42 @@ fn parse_soname_version(suffix: &str) -> Option<Vec<u64>> {
 /// `libsqlite3.so.0` for `libsqlite3.so`, sorted by descending numeric version.
 fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
     let prefix = format!("{file_name}.");
-    let mut files = std::fs::read_dir(directory)
+    let mut versioned = std::fs::read_dir(directory)
         .map(|entries| {
             entries
                 .filter_map(|entry| entry.ok())
-                .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
-                .map(|entry| entry.path())
+                .filter_map(|entry| {
+                    let name = entry.file_name();
+                    let suffix = name.to_str()?.strip_prefix(&prefix)?;
+                    let version = parse_soname_version(suffix)?;
+                    Some((version, entry.path()))
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    files.sort_by(|left, right| {
-        let left_ver = left
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.strip_prefix(&prefix))
-            .and_then(parse_soname_version);
-        let right_ver = right
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.strip_prefix(&prefix))
-            .and_then(parse_soname_version);
-        match (left_ver, right_ver) {
-            (Some(l), Some(r)) => r.cmp(&l).then(left.cmp(right)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => left.cmp(right),
-        }
+    versioned.sort_by(|(left_ver, left_path), (right_ver, right_path)| {
+        right_ver
+            .cmp(left_ver)
+            .then_with(|| left_path.cmp(right_path))
     });
-    files
+    versioned.into_iter().map(|(_, path)| path).collect()
+}
+
+#[cfg(any(windows, test))]
+const WIN_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
+#[cfg(any(windows, test))]
+const WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+
+/// Computes restricted `LoadLibraryExW` search flags for Windows DLL loads.
+/// Bare names search only default application/system directories (excluding
+/// CWD), while canonicalized absolute paths also search the DLL's own folder.
+#[cfg(any(windows, test))]
+fn windows_load_library_flags(is_absolute: bool) -> u32 {
+    if is_absolute {
+        WIN_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+    } else {
+        WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+    }
 }
 
 /// Loads the library at `path`, or the one the loader finds for a bare
@@ -1508,20 +1734,33 @@ fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
 fn open_library(path: &Path) -> Result<usize, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::System::LibraryLoader::{
-        LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH,
+        LoadLibraryExW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
     };
-    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    debug_assert_eq!(
+        WIN_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+    );
+    debug_assert_eq!(
+        WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+    );
+    // Candidates with an explicit directory (from search paths) are
+    // canonicalized so `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` receives a full path.
+    // Bare names stay bare so the current working directory is never searched.
+    let has_directory = path
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty());
+    let resolved = if has_directory {
+        aura_core::host_path::canonicalize(path).map_err(|error| error.to_string())?
+    } else {
+        path.to_path_buf()
+    };
+    let mut wide: Vec<u16> = resolved.as_os_str().encode_wide().collect();
     if wide.contains(&0) {
         return Err("the path contains a NUL character".to_string());
     }
     wide.push(0);
-    // A library named by its full path finds the libraries it needs beside
-    // itself. The flag is only valid with such a path.
-    let flags = if path.is_absolute() {
-        LOAD_WITH_ALTERED_SEARCH_PATH
-    } else {
-        0
-    };
+    let flags = windows_load_library_flags(resolved.is_absolute());
     // SAFETY: `wide` is NUL terminated, and the reserved handle is null.
     let handle = unsafe { LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), flags) };
     if handle.is_null() {
@@ -1602,6 +1841,18 @@ fn load_first(library: &str, candidates: &[PathBuf]) -> Result<usize, FfiError> 
     })
 }
 
+/// Returns whether `name` is a safe bare library or macOS framework name
+/// (matching `[ffi]` manifest rules and rejecting path separators, traversal,
+/// NUL/control bytes, drive prefixes, and leading `-` or `.`).
+fn is_valid_library_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(['-', '.'])
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_+.-".contains(character))
+}
+
 /// Loads every library and framework a program links into this process,
 /// once per `(kind, name, canonical_search_paths)` tuple, so the symbols
 /// resolve via explicit `RTLD_LOCAL` handles as they do in a built program.
@@ -1614,7 +1865,15 @@ pub fn load_libraries(
     const KIND_LIBRARY: u8 = 0;
     const KIND_FRAMEWORK: u8 = 1;
 
-    let raw_paths = search_paths.to_vec();
+    for name in libraries.iter().chain(frameworks.iter()) {
+        if !is_valid_library_name(name) {
+            return Err(FfiError::LibraryNotFound {
+                library: name.clone(),
+                detail: "invalid library or framework name".to_owned(),
+            });
+        }
+    }
+
     let canonical_paths = search_paths
         .iter()
         .map(|path| aura_core::host_path::canonicalize(path).unwrap_or_else(|_| path.clone()))
@@ -1626,38 +1885,23 @@ pub fn load_libraries(
             (
                 KIND_LIBRARY,
                 name,
-                raw_paths.clone(),
                 canonical_paths.clone(),
-                library_candidates(name, search_paths),
+                library_candidates(name, &canonical_paths),
             )
         })
-        .chain(frameworks.map(|name| {
-            (
-                KIND_FRAMEWORK,
-                name,
-                Vec::new(),
-                Vec::new(),
-                framework_candidates(name),
-            )
-        }));
+        .chain(
+            frameworks.map(|name| (KIND_FRAMEWORK, name, Vec::new(), framework_candidates(name))),
+        );
     let mut loaded = loaded_libraries_registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for (kind, name, req_raw, req_canon, candidates) in wanted {
-        let raw_key = (kind, name.clone(), req_raw);
+    for (kind, name, req_canon, candidates) in wanted {
         let canon_key = (kind, name.clone(), req_canon);
-        let bare_satisfied =
-            raw_key.2.is_empty() && loaded.loaded_names.contains(&(kind, name.clone()));
-        if !bare_satisfied
-            && !loaded.by_request.contains(&raw_key)
-            && !loaded.by_request.contains(&canon_key)
-        {
+        if !loaded.by_request.contains(&canon_key) {
             let handle = load_first(name, &candidates)?;
             if !loaded.handles.contains(&handle) {
                 loaded.handles.push(handle);
             }
-            loaded.loaded_names.insert((kind, name.clone()));
-            loaded.by_request.insert(raw_key);
             loaded.by_request.insert(canon_key);
         }
     }
@@ -1733,6 +1977,7 @@ mod tests {
                     name: "value".to_string(),
                     kind: CFieldKind::Scalar(scalar),
                 }],
+                layout_controls: Default::default(),
                 union: false,
             }
             .interned()
@@ -2020,6 +2265,7 @@ mod tests {
                     kind,
                 })
                 .collect(),
+            layout_controls: Default::default(),
             union: false,
         }
         .interned()
@@ -2199,6 +2445,44 @@ mod tests {
                 actual: FfiType::U64,
             })
         );
+    }
+
+    #[test]
+    fn callback_entry_catches_rust_panic_without_unwinding_across_c() {
+        extern "C" fn invoke_i32(f: extern "C" fn(i32) -> i32, x: i32) -> i32 {
+            f(x)
+        }
+        let sig = CCallback {
+            params: vec![CCallbackParam {
+                scalar: FfiScalar::I32,
+                pointer: false,
+                text: false,
+            }],
+            result: Some(FfiScalar::I32),
+        };
+        let scoped = callback_code_scoped(
+            sig.clone(),
+            Box::new(|frame| {
+                if frame[0] == 1 {
+                    panic!("contained callback panic");
+                }
+                frame[1] = frame[0] + 10;
+            }),
+        );
+        let ok = call(
+            invoke_i32 as *const (),
+            FfiSignature::new(vec![FfiType::Callback, FfiType::I32], FfiType::I32),
+            &mut [FfiValue::Callback(scoped.code()), FfiValue::I32(5)],
+        );
+        assert_eq!(ok, Ok(FfiValue::I32(15)));
+
+        let panicked = call(
+            invoke_i32 as *const (),
+            FfiSignature::new(vec![FfiType::Callback, FfiType::I32], FfiType::I32),
+            &mut [FfiValue::Callback(scoped.code()), FfiValue::I32(1)],
+        );
+        assert_eq!(panicked, Ok(FfiValue::I32(0)));
+        drop(scoped);
     }
 
     #[test]
@@ -3252,9 +3536,16 @@ mod tests {
             Ok(FfiValue::I32(41))
         );
 
-        // A loaded library is not searched for again.
+        // A library loaded from a search path is cached for that canonical search path
+        // without satisfying an unrelated bare lookup.
+        std::fs::remove_file(&file).expect("the fixture file should be removable");
+        load_libraries(&libraries, std::slice::from_ref(&directory), &[])
+            .expect("the library is already loaded for this search path");
+        assert!(matches!(
+            load_libraries(&libraries, &[], &[]),
+            Err(FfiError::LibraryNotFound { .. })
+        ));
         std::fs::remove_dir_all(&directory).expect("the scratch directory should be removable");
-        load_libraries(&libraries, &[], &[]).expect("the library is already loaded");
     }
 
     #[cfg(unix)]
@@ -3352,9 +3643,40 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn versioned_library_files_order_equal_versions_by_path() {
+        let directory = scratch_directory("version-ties");
+        for suffix in ["1", "01", "001", "2"] {
+            std::fs::write(directory.join(format!("libtie.so.{suffix}")), b"")
+                .expect("touch versioned file");
+        }
+        let ordered = versioned_library_files(&directory, "libtie.so")
+            .into_iter()
+            .map(|path| {
+                path.file_name()
+                    .expect("file name")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        std::fs::remove_dir_all(&directory).expect("cleanup scratch directory");
+        assert_eq!(
+            ordered,
+            [
+                "libtie.so.2",
+                "libtie.so.001",
+                "libtie.so.01",
+                "libtie.so.1",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn versioned_library_files_sort_numerically_descending() {
         let directory = scratch_directory("version-order");
-        for suffix in ["0", "1", "2", "10", "1.2", "1.10"] {
+        for suffix in [
+            "0", "1", "2", "10", "1.2", "1.10", "bak", "disabled", "1.bak",
+        ] {
             std::fs::write(directory.join(format!("libver.so.{suffix}")), b"")
                 .expect("touch versioned file");
         }
@@ -3454,5 +3776,164 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir_a).expect("cleanup dir_a");
         std::fs::remove_dir_all(&dir_b).expect("cleanup dir_b");
+    }
+
+    #[test]
+    fn windows_open_library_uses_restricted_search_flags() {
+        assert_eq!(
+            windows_load_library_flags(false),
+            WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            "bare DLL names must use LOAD_LIBRARY_SEARCH_DEFAULT_DIRS to exclude CWD"
+        );
+        assert_eq!(
+            windows_load_library_flags(true),
+            WIN_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            "absolute DLL paths must use LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_symbol_rejects_internal_host_symbol_from_loaded_handle() {
+        let dir = scratch_directory("internal-sym");
+        let file_name = &library_file_names("aura_ffi_internal_sym")[0];
+        let lib_path = dir.join(file_name);
+        build_fixture_library(&lib_path, "aura_direct_probe_from_handle", 77);
+        load_libraries(
+            &["aura_ffi_internal_sym".to_owned()],
+            std::slice::from_ref(&dir),
+            &[],
+        )
+        .expect("load fixture library");
+        let lookup = process_symbol("aura_direct_probe_from_handle");
+        std::fs::remove_dir_all(&dir).expect("cleanup internal-sym dir");
+        assert!(
+            matches!(
+                lookup,
+                Err(FfiError::SymbolNotFound { ref detail, .. })
+                    if detail.contains("internal Aura host image")
+            ),
+            "process_symbol must reject internal-prefix symbols even from loaded handles: {lookup:?}"
+        );
+    }
+
+    #[test]
+    fn internal_host_image_name_filters_llvm_libraries_case_insensitively() {
+        for blocked in [
+            "libLLVM-22.so",
+            "libLLVM.dylib",
+            "LLVM-C.dll",
+            "llvm-22.dll",
+            "libllvm-22.dll",
+        ] {
+            assert!(
+                is_internal_host_image_name(blocked),
+                "`{blocked}` must be classified as an internal host image"
+            );
+        }
+        for allowed in [
+            "libsqlite3.so",
+            "ucrtbase.dll",
+            "kernel32.dll",
+            "mylib.dylib",
+        ] {
+            assert!(
+                !is_internal_host_image_name(allowed),
+                "`{allowed}` must not be blocked as an internal host image"
+            );
+        }
+    }
+
+    #[test]
+    fn load_libraries_rejects_path_separators_and_traversal_names() {
+        for bad in [
+            "", ".", "..", "../evil", "a/b", r"a\b", "-evil", "a\0b", "C:evil",
+        ] {
+            let err = load_libraries(&[bad.to_owned()], &[], &[])
+                .expect_err(&format!("library name `{bad}` must be rejected"));
+            assert!(
+                matches!(
+                    err,
+                    FfiError::LibraryNotFound { ref detail, .. }
+                        if detail.contains("invalid library or framework name")
+                ),
+                "expected invalid name error for library `{bad}`, got {err:?}"
+            );
+            let fw_err = load_libraries(&[], &[], &[bad.to_owned()])
+                .expect_err(&format!("framework name `{bad}` must be rejected"));
+            assert!(
+                matches!(
+                    fw_err,
+                    FfiError::LibraryNotFound { ref detail, .. }
+                        if detail.contains("invalid library or framework name")
+                ),
+                "expected invalid name error for framework `{bad}`, got {fw_err:?}"
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            let dir = scratch_directory("nested-name");
+            let sub = dir.join("libsub");
+            std::fs::create_dir_all(&sub).expect("create subdir");
+            let ext = if cfg!(target_os = "macos") {
+                "dylib"
+            } else {
+                "so"
+            };
+            build_fixture_library(&sub.join(format!("nested.{ext}")), "aura_nested_probe", 5);
+            let err = load_libraries(&["sub/nested".to_owned()], std::slice::from_ref(&dir), &[])
+                .expect_err("path separator in library name must not load nested file");
+            std::fs::remove_dir_all(&dir).expect("cleanup nested-name");
+            assert!(
+                matches!(
+                    err,
+                    FfiError::LibraryNotFound { ref detail, .. }
+                        if detail.contains("invalid library or framework name")
+                ),
+                "unexpected error: {err:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_libraries_cache_keys_strictly_by_canonical_search_paths() {
+        let root = scratch_directory("canon-cache");
+        let dir_a = root.join("dir_a");
+        let dir_b = root.join("dir_b");
+        std::fs::create_dir_all(&dir_a).expect("create dir_a");
+        std::fs::create_dir_all(&dir_b).expect("create dir_b");
+        let file_name = &library_file_names("aura_ffi_symlink_target")[0];
+        build_fixture_library(&dir_a.join(file_name), "aura_ffi_symlink_sym_a", 101);
+        build_fixture_library(&dir_b.join(file_name), "aura_ffi_symlink_sym_b", 202);
+
+        let link = root.join("current");
+        std::os::unix::fs::symlink(&dir_a, &link).expect("symlink to dir_a");
+        let names = ["aura_ffi_symlink_target".to_owned()];
+        load_libraries(&names, std::slice::from_ref(&link), &[]).expect("load via link -> dir_a");
+        assert_eq!(
+            call_fixture("aura_ffi_symlink_sym_a"),
+            Ok(FfiValue::I32(101))
+        );
+
+        // Repointing the symlink to a different canonical target must not hit
+        // a stale raw-path cache entry.
+        std::fs::remove_file(&link).expect("remove old symlink");
+        std::os::unix::fs::symlink(&dir_b, &link).expect("symlink to dir_b");
+        load_libraries(&names, std::slice::from_ref(&link), &[]).expect("load via link -> dir_b");
+        assert_eq!(
+            call_fixture("aura_ffi_symlink_sym_b"),
+            Ok(FfiValue::I32(202))
+        );
+
+        // A bare request (empty search_paths) must not reuse a library that
+        // was only loaded from a private search_path.
+        let bare = load_libraries(&names, &[], &[]);
+        std::fs::remove_dir_all(&root).expect("cleanup canon-cache");
+        assert!(
+            matches!(bare, Err(FfiError::LibraryNotFound { .. })),
+            "bare load_libraries must not hit cache populated from a private search_path: {bare:?}"
+        );
     }
 }

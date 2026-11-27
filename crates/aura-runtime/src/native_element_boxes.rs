@@ -20,6 +20,12 @@
 //! field that is a handle in such a box too (see `native_class_layouts.rs`),
 //! under the same rules: the instance is the one holder, and generated code
 //! reaches a field's box only while the instance is confined to its thread.
+//!
+//! Generated code appends scalars and plain records to a list in a box in
+//! place, as it does to any confined list with room, so the box's list view
+//! may run ahead of the list. Every way to the value from the holder
+//! (`value`, `value_mut`, `into_value`, `refresh_view`) takes those
+//! elements in first.
 
 use std::fmt;
 use std::ops::{Deref, DerefMut};
@@ -54,7 +60,17 @@ impl ElementBox {
     ///
     /// `ptr` is a live box, and the caller hands its only reference over.
     pub(super) unsafe fn from_raw(ptr: *mut OpaqueValue) -> Self {
-        Self(NonNull::new(ptr).expect("a held box is never null"))
+        let non_null = NonNull::new(ptr).expect("a held box is never null");
+        let header = unsafe { non_null.as_ref() };
+        debug_assert!(
+            header.is_frozen() || header.ref_count.load(Ordering::Acquire) == 1,
+            "ElementBox must hold the sole reference or a frozen box"
+        );
+        debug_assert!(
+            header.owner.get().is_null(),
+            "ElementBox must not be linked into a task ledger"
+        );
+        Self(non_null)
     }
 
     /// The box, which generated code reads the element through.
@@ -72,7 +88,10 @@ impl ElementBox {
     }
 
     /// Brings the box's list view up to date after its holder changed it.
+    /// The elements generated code appended in place are taken in first,
+    /// since the view is all that records them.
     pub(super) fn refresh_view(&self) {
+        self.header().settle_held_list_for_write();
         self.header().refresh_list_view();
     }
 
@@ -93,6 +112,8 @@ impl ElementBox {
         if self.is_shared() {
             *self = self.clone();
         }
+        // The change starts from every element generated code appended.
+        self.header().settle_held_list_for_write();
         ElementMut(self)
     }
 
@@ -102,6 +123,7 @@ impl ElementBox {
         if self.is_shared() {
             return self.value().clone();
         }
+        self.header().settle_held_list_for_write();
         // SAFETY: the list holds the only reference, so nothing else reads
         // the value, and the box is freed below.
         unsafe { std::mem::replace(&mut *self.header().value.get(), Value::Unit) }

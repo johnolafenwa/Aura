@@ -1,0 +1,111 @@
+"""An interrupt-driven PC kernel. Boot with run.sh x86_64."""
+
+import mem
+
+extern "C" def board_idt() -> uint64
+extern "C" def board_idtr() -> uint64
+extern "C" def board_events() -> uint64
+extern "C" def board_breakpoint() -> uint64
+extern "C" def board_timer() -> uint64
+extern "C" def serial_text(text: str) -> None
+
+COM1: uint16 = 0x3f8
+PIC_COMMAND: uint16 = 0x20
+PIC_MASK: uint16 = 0x21
+SECONDARY_COMMAND: uint16 = 0xa0
+SECONDARY_MASK: uint16 = 0xa1
+
+
+def start_serial() -> None:
+    mem.out_uint8(COM1 + 1, 0)
+    mem.out_uint8(COM1 + 3, 0x80)
+    mem.out_uint8(COM1, 1)
+    mem.out_uint8(COM1 + 1, 0)
+    mem.out_uint8(COM1 + 3, 3)
+    mem.out_uint8(COM1 + 2, 7)
+
+
+export "C" def serial_bytes(address: uint64, length: uint64) -> None:
+    mut i: uint64 = 0
+    while i < length:
+        while (mem.in_uint8(COM1 + 5) & 0x20) == 0:
+            pass
+        mem.out_uint8(COM1, mem.read_uint8(address + i))
+        i = i + 1
+
+
+def gate(base: uint64, vector: uint64, handler: uint64) -> None:
+    entry = base + vector * 16
+    mem.write_uint16(entry, (handler & 0xffff) as uint16)
+    mem.write_uint16(entry + 2, 8)  # Long-mode code segment.
+    mem.write_uint8(entry + 4, 0)  # Use the current stack.
+    mem.write_uint8(entry + 5, 0x8e)  # Present ring-zero interrupt gate.
+    mem.write_uint16(entry + 6, ((handler >> 16) & 0xffff) as uint16)
+    mem.write_uint32(entry + 8, (handler >> 32) as uint32)
+    mem.write_uint32(entry + 12, 0)
+
+
+def install_vectors() -> None:
+    table = board_idt()
+    gate(table, 3, board_breakpoint())
+    gate(table, 32, board_timer())
+    descriptor = board_idtr()
+    mem.write_uint16(descriptor, 4095)
+    mem.write_uint64(descriptor + 2, table)
+    asm("lidt ($0)", input("reg", descriptor))
+
+
+def start_timer() -> None:
+    # Map the two 8259 interrupt controllers to vectors 32 and 40.
+    mem.out_uint8(PIC_COMMAND, 0x11)
+    mem.out_uint8(SECONDARY_COMMAND, 0x11)
+    mem.out_uint8(PIC_MASK, 32)
+    mem.out_uint8(SECONDARY_MASK, 40)
+    mem.out_uint8(PIC_MASK, 4)
+    mem.out_uint8(SECONDARY_MASK, 2)
+    mem.out_uint8(PIC_MASK, 1)
+    mem.out_uint8(SECONDARY_MASK, 1)
+    mem.out_uint8(SECONDARY_MASK, 0xff)
+    # PIT channel 0, rate generator, divisor 11932 (about 100 Hz).
+    mem.out_uint8(0x43, 0x34)
+    mem.out_uint8(0x40, 0x9c)
+    mem.out_uint8(0x40, 0x2e)
+    mem.out_uint8(PIC_MASK, 0xfe)
+
+
+@machine.interrupt("x86_64")
+export "C" def breakpoint_handler() -> None:
+    serial_text("breakpoint\n")
+    mem.volatile_write_uint8(board_events(), 1)
+
+
+@machine.interrupt("x86_64")
+export "C" def timer_handler() -> None:
+    mem.out_uint8(PIC_MASK, 0xff)
+    mem.out_uint8(PIC_COMMAND, 0x20)  # End of interrupt.
+    serial_text("timer\n")
+    mem.volatile_write_uint8(board_events() + 1, 1)
+
+
+export "C" def aura_trap(code: uint32, file: uint64, length: uint64, line: uint32, column: uint32) -> None:
+    mem.out_uint32(0xf4, 0x11)
+    while true:
+        mem.halt()
+
+
+export "C" def kernel_main() -> None:
+    mem.disable_interrupts()
+    start_serial()
+    install_vectors()
+    asm("int3")
+    events = board_events()
+    assert mem.volatile_read_uint8(events) == 1
+    start_timer()
+    while mem.volatile_read_uint8(events + 1) == 0:
+        # Enable interrupts and sleep as a pair. IRQ0 cannot be delivered
+        # between STI and HLT; the handler returns to CLI after waking us.
+        asm("sti\nhlt\ncli")
+    serial_text("ok\n")
+    mem.out_uint32(0xf4, 0x10)
+    while true:
+        mem.halt()

@@ -18,6 +18,7 @@ use crate::ast::{
     Argument, AssignTarget, ComprehensionOutput, ContractClause, ContractKind, FormatPart,
     OldValue, Stmt,
 };
+use aura_core::integer_bits::BitMethod;
 use aura_core::ops::ReceiverKind;
 
 const CODE: &str = "AU2048";
@@ -657,7 +658,9 @@ impl FunctionChecker<'_> {
                 .resolve_class_info(class)
                 .and_then(|class| class.methods.get(method))
                 .is_some_and(|method| method.decl.spec));
-            if spec_method {
+            if spec_method
+                || (super::properties::is_integer_type(&ty) && BitMethod::of(method).is_some())
+            {
                 continue;
             }
             // A tensor never changes, and the verifier models its shape.
@@ -949,7 +952,9 @@ fn reject_impure_condition<'e>(
                 ExprKind::Member { object, field } => {
                     check!(object)?;
                     receivers.push((object, field.as_str()));
-                    PURE_METHODS.contains(&field.as_str()) || is_spec(&format!(".{field}"))
+                    PURE_METHODS.contains(&field.as_str())
+                        || BitMethod::of(field).is_some()
+                        || is_spec(&format!(".{field}"))
                 }
                 _ => false,
             };

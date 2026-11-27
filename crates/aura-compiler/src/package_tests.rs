@@ -1037,6 +1037,7 @@ fn package_resolver_reports_graph_limit_and_workspace_lookup_edges() {
         resolver.packages.insert(
             name.clone(),
             PackageSource {
+                cfg: BTreeMap::new(),
                 name,
                 version: "0.1.0".to_string(),
                 allow_ffi: false,
@@ -2299,6 +2300,7 @@ fn package_unix_cache_helpers_reject_symlinked_manifest_and_missing_dirs() {
 #[test]
 fn dependency_paths_skip_revisited_packages_and_backtrack_dead_ends() {
     let source = |name: &str, dependencies: &[&str]| PackageSource {
+        cfg: BTreeMap::new(),
         name: name.to_string(),
         version: "0.1.0".to_string(),
         allow_ffi: false,
@@ -2479,6 +2481,42 @@ fn ffi_link_settings_reject_empty_and_control_character_paths() {
             )
         );
     }
+}
+
+#[test]
+fn ffi_link_settings_reject_run_path_separators_and_tokens() {
+    for path in [
+        "lib:/tmp",
+        "lib:.",
+        "native:",
+        "$ORIGIN/../evil",
+        "${ORIGIN}",
+        "lib/$LIB",
+        "C:/vendor",
+    ] {
+        if cfg!(windows) && path == "C:/vendor" {
+            continue;
+        }
+        for os in ["linux", "macos"] {
+            let error = expect_diag(
+                host_link_plan(
+                    &format!("library_paths = [{}]\n", toml_string(path)),
+                    true,
+                    os,
+                ),
+                "a library path that a run path would split or expand must be rejected",
+            );
+            assert_eq!(error.code, "AU2999");
+            assert!(
+                error.message.contains("`:` or `$`"),
+                "unexpected error for `{path}`: {}",
+                error.message
+            );
+        }
+    }
+    let plan = host_link_plan("library_paths = [\"native/lib\"]\n", true, "linux")
+        .expect("a plain library path is accepted");
+    assert_eq!(plan.library_paths, [Path::new("/pkg").join("native/lib")]);
 }
 
 #[test]
@@ -2804,4 +2842,334 @@ library_paths = ["escaped-lib"]
         "unexpected error: {}",
         sym_err.message
     );
+}
+
+#[test]
+fn lockfile_git_revision_is_a_commit_id_for_every_selector() {
+    let _env = lock_package_env();
+    let temp = TempDir::new("aura-package-lockfile-rev");
+    for (selector, rev) in [
+        ("branch = \"main\"\n", "../../../../victim"),
+        ("tag = \"v1\"\n", "--orphan=x"),
+        ("branch = \"main\"\n", "HEAD"),
+        ("", "0123abc/../x"),
+        ("branch = \"main\"\n", " 0123abcd"),
+        ("branch = \"main\"\n", "0123abcd\n"),
+    ] {
+        temp.write(
+            "Aura.lock",
+            &format!(
+                "version = 1\n\n[[package]]\nname = \"util\"\nversion = \"0.1.0\"\nsource = \"git\"\ngit = \"https://example.invalid/util.git\"\nrev = {}\n{selector}",
+                toml_string(rev)
+            ),
+        );
+        let error = expect_diag(
+            load_lockfile(&temp.path),
+            "a lockfile rev that is not a commit id must be refused",
+        );
+        assert!(
+            error.message.contains("invalid git revision"),
+            "unexpected error for `{rev}`: {}",
+            error.message
+        );
+    }
+    temp.write(
+        "Aura.lock",
+        "version = 1\n\n[[package]]\nname = \"util\"\nversion = \"0.1.0\"\nsource = \"git\"\ngit = \"https://example.invalid/util.git\"\nrev = \"0123abcd\"\nbranch = \"main\"\n",
+    );
+    let locked = load_lockfile(&temp.path).expect("a hex rev with a branch loads");
+    assert!(matches!(
+        &locked["util"].source,
+        LockedPackageSource::Git { rev, selector: GitSelector::Branch(branch), .. }
+            if rev == "0123abcd" && branch == "main"
+    ));
+}
+
+#[test]
+fn git_checkout_cache_refuses_a_revision_that_names_a_path() {
+    let _env = lock_package_env();
+    let temp = TempDir::new("aura-package-checkout-rev");
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+    let victim = temp.write("victim/keep.txt", "keep");
+    fs::create_dir_all(temp.path.join("cache/aura/git")).expect("create cache root");
+    let error = expect_diag(
+        ensure_git_checkout("https://example.invalid/util.git", "../../../../victim"),
+        "a checkout revision that is a path must be refused",
+    );
+    assert!(
+        error.message.contains("invalid git revision"),
+        "{}",
+        error.message
+    );
+    assert!(victim.exists(), "nothing outside the cache is removed");
+}
+
+#[cfg(unix)]
+#[test]
+fn git_packages_depend_only_on_their_own_files_and_remote_sources() {
+    let _env = lock_package_env();
+    let temp = TempDir::new("aura-package-git-confined");
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+    let outside = write_package(&temp, "outside", "outside", "");
+    let outside = aura_core::host_path::canonicalize(outside).expect("outside dir");
+    let repo = init_git_package_repo(&temp, "util-repo", "util");
+    let repo_source = aura_core::host_path::canonicalize(&repo)
+        .expect("repo")
+        .to_string_lossy()
+        .to_string();
+    let main_path = write_package(
+        &temp,
+        "app",
+        "app",
+        &format!(
+            "\n[dependencies]\nutil = {{ git = {}, branch = \"main\" }}\n",
+            toml_string(&repo_source)
+        ),
+    )
+    .join("src/main.au");
+    let set_util_dependencies = |dependencies: &str| {
+        fs::write(
+            repo.join(MANIFEST_NAME),
+            format!(
+                "[package]\nname = \"util\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n{dependencies}"
+            ),
+        )
+        .expect("write util manifest");
+        run_git(&repo, &["add", "."]);
+        run_git(&repo, &["commit", "-m", "dependencies"]);
+    };
+
+    // A path inside the package's own repository is fine.
+    fs::create_dir_all(repo.join("helper/src")).expect("helper dir");
+    fs::write(
+        repo.join("helper/Aura.toml"),
+        "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("helper manifest");
+    fs::write(
+        repo.join("helper/src/lib.au"),
+        "public def one() -> int32:\n    return 1\n",
+    )
+    .expect("helper source");
+    set_util_dependencies("helper = { path = \"helper\" }\n");
+    let graph = PackageGraph::discover_for_entry(&main_path)
+        .expect("a path inside the repository resolves")
+        .expect("a package graph");
+    assert!(graph.packages.contains_key("helper"));
+
+    // A path that leaves the checkout, given either way, is refused.
+    for path in [
+        toml_string(&outside.to_string_lossy()),
+        "\"../../../../../outside\"".to_string(),
+    ] {
+        set_util_dependencies(&format!("outside = {{ path = {path} }}\n"));
+        let error = expect_diag(
+            PackageGraph::discover_for_entry(&main_path),
+            "a git package's path dependency outside its checkout must be refused",
+        );
+        assert!(
+            error.message.contains("outside the git checkout"),
+            "unexpected error for {path}: {}",
+            error.message
+        );
+    }
+
+    // So is a local git source.
+    set_util_dependencies(&format!(
+        "outside = {{ git = {}, branch = \"main\" }}\n",
+        toml_string(&outside.to_string_lossy())
+    ));
+    let error = expect_diag(
+        PackageGraph::discover_for_entry(&main_path),
+        "a git package's local git source must be refused",
+    );
+    assert!(
+        error.message.contains("local git source"),
+        "unexpected error: {}",
+        error.message
+    );
+}
+
+#[test]
+fn git_commands_run_in_a_neutral_directory_without_inherited_repositories() {
+    let _env = lock_package_env();
+    let temp = TempDir::new("aura-package-git-neutral");
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+    let args = vec!["ls-remote".to_string()];
+    let command = configured_git_command(None, &args);
+    let cache_root = git_cache_root().expect("cache root");
+    assert_eq!(command.get_current_dir(), Some(cache_root.as_path()));
+    let envs = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().to_string(),
+                value.map(|value| value.to_string_lossy().to_string()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for removed in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+    ] {
+        assert_eq!(envs.get(removed), Some(&None), "{removed} is cleared");
+    }
+    assert_eq!(
+        envs.get("GIT_CEILING_DIRECTORIES"),
+        Some(&Some(cache_root.to_string_lossy().to_string()))
+    );
+    let count: usize = envs["GIT_CONFIG_COUNT"]
+        .as_deref()
+        .expect("count")
+        .parse()
+        .expect("number");
+    let config = (0..count)
+        .map(|index| {
+            (
+                envs[&format!("GIT_CONFIG_KEY_{index}")]
+                    .clone()
+                    .expect("key"),
+                envs[&format!("GIT_CONFIG_VALUE_{index}")]
+                    .clone()
+                    .expect("value"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        config.get("submodule.recurse").map(String::as_str),
+        Some("false")
+    );
+    assert_eq!(
+        config.get("core.symlinks").map(String::as_str),
+        Some("false")
+    );
+
+    let checkout = temp.path.join("checkout");
+    let command = configured_git_command(Some(&checkout), &args);
+    assert_eq!(command.get_current_dir(), Some(checkout.as_path()));
+}
+
+#[test]
+fn build_cfg_reads_entry_defaults_and_validates_names_and_values() {
+    use crate::BuildConfig;
+    let temp = TempDir::new("aura-package-build-cfg");
+    let root = write_package(
+        &temp,
+        "demo",
+        "demo",
+        "[build.cfg]\nplatform = 'portable'\nlogging = false\n",
+    );
+    let path = root.join("src/main.au");
+    let manifest = canonical_manifest_path(&temp, "demo");
+    let (config, reads) = crate::with_source_reads(|| BuildConfig::for_path(&path).unwrap());
+    assert!(reads.contains(&manifest));
+    assert_eq!(config.cfg["logging"], "false");
+    assert_eq!(config.cfg["platform"], "portable");
+
+    write_package(&temp, "demo", "demo", "[build]\ncfg = false");
+    assert_eq!(BuildConfig::for_path(&path).unwrap_err().code, "AU2070");
+    for bad in ["123", "[]", "{ x = true }"] {
+        write_package(
+            &temp,
+            "demo",
+            "demo",
+            &format!("[build.cfg]\nplatform = {bad}\n"),
+        );
+        assert_eq!(BuildConfig::for_path(&path).unwrap_err().code, "AU2070");
+        assert_eq!(
+            PackageGraph::discover_for_entry(&path).unwrap_err().code,
+            "AU2070"
+        );
+    }
+    write_package(&temp, "demo", "demo", "[build.cfg]\n'bad-name' = true\n");
+    assert_eq!(BuildConfig::for_path(&path).unwrap_err().code, "AU2070");
+    temp.write("Aura.toml", "[workspace]\nmembers = ['demo']\n");
+    assert!(BuildConfig::for_path(&temp.path.join("other.au"))
+        .unwrap()
+        .cfg
+        .is_empty());
+}
+
+#[test]
+fn build_cfg_uses_the_entry_packages_selection_for_dependencies() {
+    let temp = TempDir::new("aura-dependency-build-cfg");
+    write_package(
+        &temp,
+        "app",
+        "app",
+        "[build.cfg]\nboard = 'pico'\n[dependencies]\nio_driver = { path = '../driver' }",
+    );
+    write_package(&temp, "driver", "io_driver", "[build.cfg]\nboard = 'pc'\n");
+    temp.write(
+        "driver/src/lib.au",
+        "import build\npublic def board() -> str:\n    return build.cfg[\"board\"].clone()\n",
+    );
+    let main = temp.write(
+        "app/src/main.au",
+        "from io_driver.lib import board\ndef main():\n    print(board())\n",
+    );
+    assert_eq!(crate::run_path(&main).unwrap().stdout, "pico\n");
+    let mut override_config = crate::BuildConfig::default();
+    override_config.apply_option("board=pc").unwrap();
+    crate::with_build_config(override_config, || {
+        assert_eq!(crate::run_path(&main).unwrap().stdout, "pc\n");
+    });
+}
+
+#[test]
+fn build_cfg_cache_material_is_order_independent_and_separates_delimiters() {
+    use crate::BuildConfig;
+    let mut a = BuildConfig::default();
+    let mut b = BuildConfig::default();
+    for flag in ["a=:b", "x", "_"] {
+        a.apply_option(flag).unwrap();
+    }
+    for flag in ["_", "x=true", "a=:b"] {
+        b.apply_option(flag).unwrap();
+    }
+    assert_eq!(a.cache_key_material(), b.cache_key_material());
+    for bad in ["", "a-b", "3", "é", " space", "=x"] {
+        assert_eq!(a.apply_option(bad).unwrap_err().code, "AU2070");
+    }
+    b.apply_option("a=b:").unwrap();
+    assert_ne!(a.cache_key_material(), b.cache_key_material());
+    b = a.clone();
+    b.target.push_str("-different");
+    assert_ne!(a.cache_key_material(), b.cache_key_material());
+    b = a.clone();
+    b.debug = !b.debug;
+    assert_ne!(a.cache_key_material(), b.cache_key_material());
+    b = a.clone();
+    b.release = !b.release;
+    assert_ne!(a.cache_key_material(), b.cache_key_material());
+    b = a.clone();
+    b.hosted = !b.hosted;
+    assert_ne!(a.cache_key_material(), b.cache_key_material());
+}
+
+#[test]
+fn fixed_array_size_uses_the_imported_c_records_declared_alignment() {
+    let temp = TempDir::new("aura-imported-fixed-array-layout");
+    write_package(&temp, "app", "consumer", "allow_ffi = true");
+    temp.write(
+        "app/src/wire.au",
+        "public extern \"C\" align(128) class Header:\n    public tag: uint8\n",
+    );
+    // Each row occupies 128 KiB. One more row crosses the object-size limit.
+    for row_count in [16_383, 16_384] {
+        let source = format!(
+            "from wire import Header\n\ndef consume(rows: fixed[fixed[Header, 1024], {row_count}]):\n    pass\n"
+        );
+        let path = temp.write("app/src/main.au", &source);
+        let result = crate::check_path(&path);
+        if row_count == 16_383 {
+            result.expect("the imported layout fits below two GiB");
+        } else {
+            let error = result.expect_err("two GiB exceeds the maximum fixed object size");
+            assert_eq!(error.code, "AU2081");
+            assert_eq!(error.span.unwrap().line, 3);
+        }
+    }
 }

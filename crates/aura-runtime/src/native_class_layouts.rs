@@ -17,10 +17,12 @@
 //! The block is reached only through its instance, under the instance's
 //! access, so a field box takes no lock of its own and records no thread.
 //! Generated code changes the block and the field boxes only while the
-//! instance is confined to its thread, and it appends to or pops from a
-//! list in a field box only through the runtime, so the box's list view
-//! never runs ahead of the list and a reader on another thread writes
-//! nothing.
+//! instance is confined to its thread. It appends to a list in a field box
+//! in place while the list has room, so the box's list view may run ahead
+//! of the list, and the runtime takes the appended elements in when it
+//! next reaches the box through the instance (see
+//! `OpaqueValue::held_value`). It pops from such a list only through the
+//! runtime.
 
 use std::alloc::Layout as AllocLayout;
 use std::any::Any;
@@ -316,9 +318,21 @@ struct Place {
 ///
 /// # Safety
 ///
+/// `slot` is the address of a box slot in a live block, and nothing mutates
+/// the slot for as long as the result lives.
+unsafe fn field_box_ref<'a>(slot: *const u8) -> &'a Option<ElementBox> {
+    // SAFETY: a box slot holds a pointer that is null or owns its box, and
+    // `ElementBox` is a transparent `NonNull`.
+    unsafe { &*slot.cast::<Option<ElementBox>>() }
+}
+
+/// The box a slot of the block holds, mutably, null while its value is moved out.
+///
+/// # Safety
+///
 /// `slot` is the address of a box slot in a live block, and nothing else
 /// borrows the slot for as long as the result lives.
-unsafe fn field_box<'a>(slot: *mut u8) -> &'a mut Option<ElementBox> {
+unsafe fn field_box_mut<'a>(slot: *mut u8) -> &'a mut Option<ElementBox> {
     // SAFETY: a box slot holds a pointer that is null or owns its box, and
     // `ElementBox` is a transparent `NonNull`.
     unsafe { &mut *slot.cast::<Option<ElementBox>>() }
@@ -369,7 +383,12 @@ impl TypedFields {
         self.data.as_ptr()
     }
 
-    fn address(&self, place: Place) -> *mut u8 {
+    fn address(&self, place: Place) -> *const u8 {
+        // SAFETY: every place lies inside the block.
+        unsafe { self.data.as_ptr().cast_const().add(place.offset) }
+    }
+
+    fn address_mut(&mut self, place: Place) -> *mut u8 {
         // SAFETY: every place lies inside the block.
         unsafe { self.data.as_ptr().add(place.offset) }
     }
@@ -395,7 +414,7 @@ impl TypedFields {
 
     fn is_present(&self, place: Place) -> bool {
         // SAFETY: a box place is a box slot.
-        !self.is_box(place) || unsafe { field_box(self.address(place)) }.is_some()
+        !self.is_box(place) || unsafe { field_box_ref(self.address(place)) }.is_some()
     }
 
     /// Writes `value` into the place's dead bytes.
@@ -404,7 +423,7 @@ impl TypedFields {
     ///
     /// The place's bytes are dead, and `value` fits its layout.
     unsafe fn write_dead(&mut self, place: Place, value: Value) {
-        let address = self.address(place);
+        let address = self.address_mut(place);
         let table = self.layout.table();
         if self.is_box(place) {
             let boxed = (self.layout.ops.field_box)(value, self.layout.type_of(place.layout));
@@ -420,7 +439,7 @@ impl TypedFields {
         let address = self.address(place);
         if self.is_box(place) {
             // SAFETY: the slot holds a box pointer.
-            return unsafe { field_box(address) }
+            return unsafe { field_box_ref(address) }
                 .as_ref()
                 .map(|boxed| Cow::Borrowed(boxed.value()));
         }
@@ -447,10 +466,10 @@ impl TypedFields {
     /// the place keeps its value.
     fn set(&mut self, place: Place, value: Value) -> Result<(), String> {
         self.fits(place, &value)?;
-        let address = self.address(place);
+        let address = self.address_mut(place);
         if self.is_box(place) {
             // SAFETY: the slot holds a box pointer.
-            match unsafe { field_box(address) } {
+            match unsafe { field_box_mut(address) } {
                 Some(boxed) => *boxed.value_mut() = value,
                 // SAFETY: the slot is moved out, so its bytes are dead.
                 None => unsafe { self.write_dead(place, value) },
@@ -469,10 +488,10 @@ impl TypedFields {
     /// Moves the value at `place` out. A place held inline is left zeroed,
     /// so dropping the instance drops nothing of it again.
     fn take(&mut self, place: Place) -> Option<Value> {
-        let address = self.address(place);
+        let address = self.address_mut(place);
         if self.is_box(place) {
             // SAFETY: the slot holds a box pointer.
-            return unsafe { field_box(address) }
+            return unsafe { field_box_mut(address) }
                 .take()
                 .map(ElementBox::into_value);
         }
@@ -491,10 +510,10 @@ impl TypedFields {
     /// out for the edit and written back after it; one the edit leaves
     /// `None`, as a move does, stays zeroed.
     fn edit<R>(&mut self, place: Place, edit: impl FnOnce(&mut Value) -> R) -> Result<R, String> {
-        let address = self.address(place);
+        let address = self.address_mut(place);
         if self.is_box(place) {
             // SAFETY: the slot holds a box pointer.
-            let boxed = unsafe { field_box(address) }.as_mut().ok_or_else(|| {
+            let boxed = unsafe { field_box_mut(address) }.as_mut().ok_or_else(|| {
                 format!(
                     "a field of class `{}` was used after it moved out",
                     self.layout.class_name
@@ -637,7 +656,9 @@ impl TypedFields {
     pub fn refresh_views(&self) {
         for offset in &self.layout.boxes {
             // SAFETY: each offset is a box slot of the block.
-            if let Some(boxed) = unsafe { field_box(self.data.as_ptr().add(*offset)) } {
+            if let Some(boxed) =
+                unsafe { field_box_ref(self.data.as_ptr().cast_const().add(*offset)) }
+            {
                 boxed.refresh_view();
             }
         }

@@ -16,6 +16,7 @@ fn layout(name: &str, union: bool, fields: Vec<(&str, CFieldKind)>) -> CStruct {
                 kind,
             })
             .collect(),
+        layout_controls: Default::default(),
         union,
     }
 }
@@ -344,4 +345,81 @@ fn a_struct_array_crosses_element_by_element() {
         kind_type(&array(CFieldKind::Struct(point), 3)).to_string(),
         "list[Point]"
     );
+}
+
+#[test]
+fn pack_elements_rejects_overflowing_layout() {
+    let overflowing = layout(
+        "Huge",
+        false,
+        vec![("data", array(scalar(U64), usize::MAX / 4))],
+    );
+    let value = list("Huge", vec![instance("Huge", vec![])]);
+    let error = pack_elements(&value, &overflowing).expect_err("overflowing layout must fail");
+    assert_eq!(error.code(), "AU4005");
+    assert!(error.to_string().contains("overflows"), "{error}");
+
+    // Each element fits, but the whole array would pass `isize::MAX` bytes.
+    let large = layout("Large", false, vec![("data", array(scalar(U8), 1 << 60))]);
+    let value = list("Large", (0..8).map(|_| instance("Large", vec![])).collect());
+    let error = pack_elements(&value, &large).expect_err("an oversized array must fail");
+    assert_eq!(error.code(), "AU4005");
+    assert_eq!(
+        error.to_string(),
+        "C layout `Large` byte size overflows addressable memory"
+    );
+}
+
+#[test]
+fn bit_field_pack_checks_width_and_keeps_the_other_bits() {
+    let mut record = layout(
+        "Tiny",
+        false,
+        vec![("tag", CFieldKind::Scalar(FfiScalar::U8))],
+    );
+    record.layout_controls.bit_widths.insert("tag".into(), 3);
+    let mut value = unpack(&record, &[0xf5]).unwrap();
+    let mut bytes = [0xa0];
+    pack(&value, &record, &mut bytes).unwrap();
+    assert_eq!(bytes, [0xa5]);
+    let Value::Instance(instance) = &mut value else {
+        panic!("expected a Tiny")
+    };
+    instance
+        .fields
+        .insert("tag", Value::Int(IntegerValue::from_u64(8)))
+        .unwrap();
+    let problem = pack(&value, &record, &mut bytes).unwrap_err();
+    assert_eq!(problem.code(), "AU4033");
+    assert!(problem.to_string().contains("3-bit"));
+}
+
+#[test]
+fn fixed_array_wide_element_codecs_preserve_all_bits() {
+    for (name, integer, bits) in [
+        (
+            "int128",
+            IntegerValue::from_signed(i128::MIN),
+            i128::MIN as u128,
+        ),
+        ("uint128", IntegerValue::from_literal(u128::MAX), u128::MAX),
+    ] {
+        let kind = CFieldKind::Struct(layout(
+            &format!("#fixed.{name}"),
+            false,
+            vec![("low", scalar(U64)), ("high", scalar(U64))],
+        ));
+        let mut bytes = [0; 16];
+        assert_eq!(kind_type(&kind), Type::named(name));
+        pack_kind(&Value::Int(integer), &kind, "words", &mut bytes).unwrap();
+        assert_eq!(u128::from_le_bytes(bytes), bits);
+        let Value::Int(round_trip) = unpack_kind(&kind, &bytes).unwrap() else {
+            panic!("expected integer")
+        };
+        assert_eq!(round_trip, integer);
+        assert!(matches!(
+            pack_kind(&Value::Bool(false), &kind, "words", &mut bytes),
+            Err(CValueError::Shape { .. })
+        ));
+    }
 }

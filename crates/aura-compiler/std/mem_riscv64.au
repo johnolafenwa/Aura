@@ -1,0 +1,180 @@
+public def read_mhartid() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, mhartid", output("reg", value), options("preserves_flags"))
+    return value
+
+public def read_misa() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, misa", output("reg", value), options("preserves_flags"))
+    return value
+
+public def read_cycle() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, cycle", output("reg", value), options("preserves_flags"))
+    return value
+
+public def read_time() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, time", output("reg", value), options("preserves_flags"))
+    return value
+
+public def read_mstatus() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, mstatus", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_mstatus(value: uint64) -> None:
+    asm("csrw mstatus, $0", input("reg", value), options("preserves_flags"))
+
+public def read_mie() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, mie", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_mie(value: uint64) -> None:
+    asm("csrw mie, $0", input("reg", value), options("preserves_flags"))
+
+public def read_mip() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, mip", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_mip(value: uint64) -> None:
+    asm("csrw mip, $0", input("reg", value), options("preserves_flags"))
+
+public def read_mtvec() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, mtvec", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_mtvec(value: uint64) -> None:
+    asm("csrw mtvec, $0", input("reg", value), options("preserves_flags"))
+
+public def read_mscratch() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, mscratch", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_mscratch(value: uint64) -> None:
+    asm("csrw mscratch, $0", input("reg", value), options("preserves_flags"))
+
+public def read_mepc() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, mepc", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_mepc(value: uint64) -> None:
+    asm("csrw mepc, $0", input("reg", value), options("preserves_flags"))
+
+public def read_mcause() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, mcause", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_mcause(value: uint64) -> None:
+    asm("csrw mcause, $0", input("reg", value), options("preserves_flags"))
+
+public def read_mtval() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, mtval", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_mtval(value: uint64) -> None:
+    asm("csrw mtval, $0", input("reg", value), options("preserves_flags"))
+
+public def read_medeleg() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, medeleg", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_medeleg(value: uint64) -> None:
+    asm("csrw medeleg, $0", input("reg", value), options("preserves_flags"))
+
+public def read_mideleg() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, mideleg", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_mideleg(value: uint64) -> None:
+    asm("csrw mideleg, $0", input("reg", value), options("preserves_flags"))
+
+public def read_sstatus() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, sstatus", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_sstatus(value: uint64) -> None:
+    asm("csrw sstatus, $0", input("reg", value), options("preserves_flags"))
+
+public def read_sie() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, sie", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_sie(value: uint64) -> None:
+    asm("csrw sie, $0", input("reg", value), options("preserves_flags"))
+
+public def read_sip() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, sip", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_sip(value: uint64) -> None:
+    asm("csrw sip, $0", input("reg", value), options("preserves_flags"))
+
+public def read_stvec() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, stvec", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_stvec(value: uint64) -> None:
+    asm("csrw stvec, $0", input("reg", value), options("preserves_flags"))
+
+public def read_sscratch() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, sscratch", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_sscratch(value: uint64) -> None:
+    asm("csrw sscratch, $0", input("reg", value), options("preserves_flags"))
+
+public def read_sepc() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, sepc", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_sepc(value: uint64) -> None:
+    asm("csrw sepc, $0", input("reg", value), options("preserves_flags"))
+
+public def read_scause() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, scause", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_scause(value: uint64) -> None:
+    asm("csrw scause, $0", input("reg", value), options("preserves_flags"))
+
+public def read_stval() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, stval", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_stval(value: uint64) -> None:
+    asm("csrw stval, $0", input("reg", value), options("preserves_flags"))
+
+public def read_satp() -> uint64:
+    mut value: uint64 = 0
+    asm("csrr $0, satp", output("reg", value), options("preserves_flags"))
+    return value
+
+public def write_satp(value: uint64) -> None:
+    asm("csrw satp, $0", input("reg", value), options("preserves_flags"))
+
+public def enable_interrupts() -> None:
+    asm("csrsi mstatus, 8", options("preserves_flags"))
+
+public def disable_interrupts() -> None:
+    asm("csrci mstatus, 8", options("preserves_flags"))
+
+public def halt() -> None:
+    asm("wfi", options("preserves_flags"))

@@ -1,0 +1,4 @@
+import build
+if build.os:
+    def value() -> int64:
+        return 1

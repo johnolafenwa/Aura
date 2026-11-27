@@ -331,14 +331,14 @@ fn s1_sema_fourth_match_statements_and_expressions_pin_shape_diagnostics() {
 fn s1_sema_fifth_entry_module_rules_and_constant_plan_are_observable() {
     let mutable_module = crate::check_source("mut state = 1\n\ndef main():\n    pass\n")
         .expect_err("module-level mutable state must be rejected before entrypoint checking");
-    assert_eq!(mutable_module.code, "AU3003");
+    assert_eq!(mutable_module.code, "AU3030");
     assert_eq!(
         mutable_module.message,
-        "module bindings are immutable; `mut` module state is not supported"
+        "hosted module bindings are immutable"
     );
     assert_eq!(
         mutable_module.help,
-        vec!["put mutable state in a local value owned by `main` or another explicit owner"]
+        vec!["share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task"]
     );
 
     let return_type = crate::check_source("def main() -> str:\n    return \"bad\"\n")
@@ -7964,6 +7964,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         span: Span::new(1, 1),
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: Vec::new(),
         spec: false,
@@ -8032,6 +8033,7 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         doc: None,
         c_layout: false,
         c_arrays: Default::default(),
+        layout_controls: Default::default(),
         c_union: None,
     }
 }
@@ -8227,6 +8229,7 @@ fn assign_stmt(
     value: Expr,
 ) -> AssignStmt {
     AssignStmt {
+        member_span: None,
         mutable,
         target,
         annotation,
@@ -8623,6 +8626,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 methods: vec![not_decl.clone()],
                 span: Span::new(1, 1),
                 derived: false,
+                delegation: None,
                 assoc_types: Vec::new(),
             },
             type_params: Vec::new(),
@@ -8651,6 +8655,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 methods: vec![neg_decl.clone()],
                 span: Span::new(1, 1),
                 derived: false,
+                delegation: None,
                 assoc_types: Vec::new(),
             },
             type_params: Vec::new(),
@@ -20351,6 +20356,9 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     };
     let program = check_with_context(
         Module {
+            inactive_lines: Vec::new(),
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("main"))],
@@ -20366,6 +20374,9 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_class = check_with_context(
         Module {
+            inactive_lines: Vec::new(),
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Class(class_decl("RemoteBox", false, Vec::new()))],
@@ -20389,6 +20400,9 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_enum = check_with_context(
         Module {
+            inactive_lines: Vec::new(),
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Enum(EnumDecl {
@@ -20420,6 +20434,9 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_function = check_with_context(
         Module {
+            inactive_lines: Vec::new(),
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("remote_fn"))],
@@ -33392,6 +33409,11 @@ def run() -> int32:
     };
     assert!(matches!(args[0].value.kind, ExprKind::Int(24)));
 
+    check_ffi_source_for_test(
+        "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    mut u = U()\n    u.a = 1\n",
+    )
+    .expect("assigning a mutable union member checks");
+
     for (source, message, code) in [
         (
             "extern \"C\" union U:\n    name: str\n",
@@ -33402,11 +33424,6 @@ def run() -> int32:
             "extern \"C\" union U:\n    names: array[str, 2]\n",
             "member `names` of `extern \"C\"` union `U` is an array of `str`, which has no C layout",
             "AU2002",
-        ),
-        (
-            "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    mut u = U()\n    u.a = 1\n",
-            "",
-            "",
         ),
         (
             "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    u = U()\n    v = u\n    print(u.a)\n",
@@ -33572,6 +33589,69 @@ def run() -> None:
             diagnostic.message
         );
     }
+}
+
+#[test]
+fn extern_c_rejects_oversized_nested_array_structs() {
+    let four_gib = r#"extern "C" class Huge:
+    data: array[array[uint8, 65536], 65536]
+"#;
+    let err = check_ffi_source_for_test(four_gib)
+        .expect_err("oversized nested C array struct must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+
+    let too_many_leaves = r#"extern "C" class ManyLeaves:
+    data: array[array[uint8, 2048], 1024]
+"#;
+    let err = check_ffi_source_for_test(too_many_leaves)
+        .expect_err("C array struct exceeding leaf limit must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+
+    let union_overflow = r#"extern "C" union HugeUnion:
+    a: array[array[uint64, 65536], 65536]
+    b: uint64
+"#;
+    let err =
+        check_ffi_source_for_test(union_overflow).expect_err("oversized C union must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+}
+
+#[test]
+fn union_clone_rejects_collections_with_opaque_handles_or_resources() {
+    let list_handle = r#"extern "C" opaque class Handle
+extern "C" def open_h() -> Handle
+
+def run() -> None:
+    xs: list[Handle] | None = [open_h()]
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(list_handle)
+        .expect_err("cloning list[Handle] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+
+    let dict_handle = r#"extern "C" opaque class Handle
+extern "C" def open_h() -> Handle
+
+def run() -> None:
+    xs: dict[str, Handle] | None = {"a": open_h()}
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(dict_handle)
+        .expect_err("cloning dict[str, Handle] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+
+    let list_resource = r#"import fs
+
+def run(f: own fs.File) -> None:
+    xs: list[fs.File] | None = [f]
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(list_resource)
+        .expect_err("cloning list[fs.File] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
 }
 
 #[test]
@@ -33767,6 +33847,36 @@ extern "C" def rows(cursor: Cursor) -> int32
         let error = check_ffi_source_for_test(source).expect_err(message);
         assert_eq!(error.code, "AU2005", "{source}");
         assert!(error.message.contains(message), "{}", error.message);
+    }
+}
+
+#[test]
+fn ffi_drop_rejects_float_return_types() {
+    for ret in ["float32", "float64"] {
+        let source = format!(
+            "extern \"C\" opaque class Handle drop close_h\nextern \"C\" def close_h(h: own Handle) -> {ret}\n"
+        );
+        let error = check_ffi_source_for_test(&source)
+            .expect_err(&format!("drop returning `{ret}` must be rejected"));
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert!(
+            error.message.contains("floating-point"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn ffi_drop_rejects_contracted_extern_functions() {
+    for clause in ["requires true", "ensures result == 0"] {
+        let source = format!(
+            "extern \"C\" opaque class Handle drop close_h\nextern \"C\" def close_h(h: own Handle) -> int32:\n    {clause}\n"
+        );
+        let error = check_ffi_source_for_test(&source)
+            .expect_err(&format!("drop with `{clause}` must be rejected"));
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert!(error.message.contains("contracts"), "{}", error.message);
     }
 }
 
@@ -34208,5 +34318,396 @@ fn numbers_require_explicit_conversion_for_arithmetic() {
     assert!(
         error.message.contains("BigInt") && error.message.contains("int64"),
         "{error:?}"
+    );
+}
+
+#[test]
+fn calling_a_callable_field_borrows_its_owner_and_respects_view_locks() {
+    let cases = [
+        (
+            "mut argument overlapping callable field owner",
+            r#"
+class Holder:
+    cb: Callable[def(x: int64) -> int64]
+
+def replace(h: mut Holder) -> int64:
+    h.cb = lambda x: x + 1
+    return 1
+
+def main():
+    mut h = Holder(cb=lambda x: x)
+    _ = h.cb(replace(h))
+"#,
+        ),
+        (
+            "mutable callable field with mut overlapping argument",
+            r#"
+class Count:
+    value: int64
+
+    def bump(mut self, x: int64) -> int64:
+        self.value += x
+        return self.value
+
+class Holder:
+    cb: Callable[mut def(x: int64) -> int64]
+
+def replace(h: mut Holder) -> int64:
+    c = Count(value=10)
+    h.cb = lambda [own c] x: c.bump(x)
+    return 1
+
+def main():
+    c = Count(value=0)
+    mut h = Holder(cb=lambda [own c] x: c.bump(x))
+    _ = h.cb(replace(h))
+"#,
+        ),
+        (
+            "own argument overlapping callable field owner",
+            r#"
+class Holder:
+    cb: Callable[def(x: int64) -> int64]
+
+def consume(h: own Holder) -> int64:
+    return 1
+
+def main():
+    h = Holder(cb=lambda x: x)
+    _ = h.cb(consume(h))
+"#,
+        ),
+        (
+            "mutable callable field called under live shared view",
+            r#"
+class Count:
+    value: int64
+
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+class Counter:
+    cb: Callable[mut def() -> int64]
+
+def make_counter() -> Counter:
+    count = Count(value=0)
+    return Counter(cb=lambda [own count]: count.bump())
+
+def main():
+    mut c = make_counter()
+    view v = c
+    _ = c.cb()
+    _ = v
+"#,
+        ),
+        (
+            "mutable local callable called under live shared view",
+            r#"
+class Count:
+    value: int64
+
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+def make_cb() -> Callable[mut def() -> int64]:
+    count = Count(value=0)
+    return lambda [own count]: count.bump()
+
+def main():
+    mut cb = make_cb()
+    view v = cb
+    _ = cb()
+    _ = v
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let error = crate::check_source(source)
+            .expect_err(&format!("expected `{label}` to be rejected with AU3002"));
+        assert_eq!(error.code, "AU3002", "{label}: {error:?}");
+    }
+}
+
+#[test]
+fn sync_map_get_rejects_non_cloneable_values() {
+    let cases = [
+        (
+            "TaskCallable[mut def]",
+            "AU3007",
+            r#"
+import sync
+
+def main():
+    m = sync.Map[str, TaskCallable[mut def() -> int64]]()
+    _ = m.get("k")
+"#,
+        ),
+        (
+            "TaskCallable[own def]",
+            "AU3007",
+            r#"
+import sync
+
+def main():
+    m = sync.Map[str, TaskCallable[own def() -> int64]]()
+    _ = m.get("k")
+"#,
+        ),
+        (
+            "Task[list[int64]]",
+            "AU3009",
+            r#"
+import sync
+
+def main():
+    m = sync.Map[str, Task[list[int64]]]()
+    _ = m.get("k")
+"#,
+        ),
+        (
+            "dyn TransferTrait",
+            "AU3007",
+            r#"
+import sync
+
+trait Job: Transfer:
+    def id(self) -> int64
+
+def main():
+    m = sync.Map[str, dyn Job]()
+    _ = m.get("k")
+"#,
+        ),
+    ];
+    for (label, expected_code, source) in cases {
+        let error = crate::check_source(source)
+            .expect_err(&format!("expected `{label}` in sync.Map.get to fail"));
+        assert_eq!(error.code, expected_code, "{label}: {error:?}");
+    }
+}
+
+#[test]
+fn fixed_arrays_check_element_counts_and_iteration() {
+    let good = include_str!("../tests/fixtures/run-pass/fixed_arrays.au");
+    crate::check_source(good).expect("the inline array should type check");
+    let bad = include_str!("../tests/fixtures/check-fail/fixed_array_wrong_length.au");
+    assert_eq!(crate::check_source(bad).unwrap_err().code, "AU2082");
+}
+
+#[test]
+fn fixed_array_layouts_reject_heap_elements_and_oversized_objects() {
+    for ty in [
+        "fixed[int32, 0]",
+        "fixed[fixed[uint64, 1048576], 1048576]",
+        "fixed[str, 2]",
+        "fixed[Message, 2]",
+    ] {
+        let source = format!(
+            "class Message:\n    text: str\n\ndef f(row: {ty}) -> int64:\n    return len(row)\n"
+        );
+        let error = crate::check_source(&source).expect_err(ty);
+        assert_eq!(error.code, "AU2081", "{ty}: {error}");
+    }
+}
+
+#[test]
+fn loan_closure_cannot_be_stored_in_tuple_literal() {
+    let cases = [
+        (
+            "match_tuple_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    match (lambda [xs]: len(xs), 1):
+        case (g, _):
+            xs.append(4)
+            print(g())
+"#,
+        ),
+        (
+            "destructure_tuple_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    g, _ = (lambda [xs]: len(xs), 1)
+    xs.append(4)
+    print(g())
+"#,
+        ),
+        (
+            "index_tuple_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    print((lambda [xs]: len(xs), 1)[0]())
+"#,
+        ),
+        (
+            "list_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    items = [lambda [xs]: len(xs)]
+    xs.append(4)
+    print(items[0]())
+"#,
+        ),
+        (
+            "dict_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    items = {"k": lambda [xs]: len(xs)}
+    xs.append(4)
+    print(items["k"]())
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let error = crate::check_source(source)
+            .expect_err(&format!("expected `{label}` to fail with AU3010"));
+        assert_eq!(error.code, "AU3010", "{label}: {error:?}");
+    }
+}
+
+#[test]
+fn extern_c_layouts_beyond_the_size_and_scalar_bounds_are_rejected() {
+    let size = "exceeds the maximum C layout size of 16777216 bytes";
+    let leaves = "exceeds the maximum C layout scalar count of 1048576";
+    for (source, owner, reason) in [
+        // Nested array lengths multiply past the byte bound.
+        (
+            "extern \"C\" class P:\n    v: array[array[uint64, 4096], 4096]\n",
+            "class `P`",
+            size,
+        ),
+        // Nested array lengths multiply past the scalar bound.
+        (
+            "extern \"C\" class P:\n    v: array[array[uint8, 2048], 1024]\n",
+            "class `P`",
+            leaves,
+        ),
+        // Fields that fit alone add up past the scalar bound.
+        (
+            "extern \"C\" class P:\n    a: array[uint8, 1048576]\n    b: uint8\n",
+            "class `P`",
+            leaves,
+        ),
+        // Overlapping union members still count every scalar.
+        (
+            "extern \"C\" union U:\n    a: array[uint8, 1048576]\n    b: uint8\n",
+            "union `U`",
+            leaves,
+        ),
+        // A nested class carries its scalars into its holder.
+        (
+            "extern \"C\" class Q:\n    v: array[uint8, 1048576]\nextern \"C\" class P:\n    q: Q\n    w: uint8\n",
+            "class `P`",
+            leaves,
+        ),
+        // Padded elements fill the byte bound, and one more field ends past it.
+        (
+            "extern \"C\" align(4096) class Q:\n    b: uint8\nextern \"C\" class P:\n    v: array[Q, 4096]\n    w: uint8\n",
+            "class `P`",
+            size,
+        ),
+    ] {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the oversized layout must fail");
+        assert_eq!(diagnostic.code, "AU2002", "{source}: {}", diagnostic.message);
+        assert_eq!(
+            diagnostic.message,
+            format!("`extern \"C\"` {owner} {reason}"),
+            "{source}"
+        );
+        assert!(diagnostic
+            .help
+            .iter()
+            .any(|help| help.contains("at most 16777216 bytes and 1048576 scalar")));
+    }
+    check_ffi_source_for_test("extern \"C\" class P:\n    v: array[array[uint64, 1024], 1024]\n")
+        .expect("a layout at both bounds is accepted");
+}
+
+#[test]
+fn a_mutable_callable_called_through_a_mutable_view_respects_the_view_lock() {
+    let prelude = r#"
+class Count:
+    value: int64
+
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+class Counter:
+    cb: Callable[mut def() -> int64]
+
+def make_counter() -> Counter:
+    count = Count(value=0)
+    return Counter(cb=lambda [own count]: count.bump())
+"#;
+    for body in [
+        "def main():\n    mut c = make_counter()\n    view mut v = c\n    _ = v.cb()\n",
+        "def run(c: mut Counter) -> int64:\n    view mut v = c\n    return v.cb()\n\ndef main():\n    pass\n",
+    ] {
+        crate::check_source(&format!("{prelude}\n{body}"))
+            .unwrap_or_else(|error| panic!("{body}: {error:?}"));
+    }
+    for body in [
+        "def main():\n    mut c = make_counter()\n    view mut v = c\n    view w = v\n    _ = v.cb()\n    _ = w\n",
+        "def main():\n    mut c = make_counter()\n    view v = c\n    _ = v.cb()\n",
+    ] {
+        let error = crate::check_source(&format!("{prelude}\n{body}"))
+            .expect_err("calling the callable must not bypass a view");
+        assert!(
+            matches!(error.code.as_str(), "AU3002" | "AU3003"),
+            "{body}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn c_bit_field_cannot_be_lent_as_an_independent_scalar() {
+    let source = "extern \"C\" class Flags:\n    code: uint8 bits(3)\n\ndef set(value: mut uint8) -> None:\n    value = 127\n\ndef change() -> None:\n    mut f = Flags(code=1)\n    set(f.code)\n";
+    assert_eq!(
+        check_ffi_source_for_test(source).unwrap_err().code,
+        "AU3033"
+    );
+}
+
+#[test]
+fn fixed_array_diagnostics_identify_lengths_element_types_and_copy_requirements() {
+    for (source, code) in [
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_length_zero.au"),
+            "AU2081",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_element_type.au"),
+            "AU2082",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_noncopy_repeat.au"),
+            "AU3031",
+        ),
+    ] {
+        assert_eq!(crate::check_source(source).unwrap_err().code, code);
+    }
+}
+
+#[test]
+fn fixed_array_size_accounts_for_explicit_c_alignment() {
+    let source = r#"
+extern "C" align(128) class Header:
+    byte: uint8
+
+def unused(rows: fixed[fixed[Header, 1024], 32768]):
+    pass
+"#;
+    assert_eq!(
+        check_ffi_source_for_test(source).unwrap_err().code,
+        "AU2081"
     );
 }

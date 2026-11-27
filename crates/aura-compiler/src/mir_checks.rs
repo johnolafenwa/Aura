@@ -269,6 +269,9 @@ fn element_read(instruction: &Instruction) -> Option<(&str, &str)> {
     else {
         return None;
     };
+    if let Some((array, index, _)) = super::fixed_arrays::access_places(instruction) {
+        return Some((array, index));
+    }
     let parts = callee.member_parts()?;
     let (Operand::Place(list), "__index", None) = (parts.object, parts.field, parts.trait_name)
     else {
@@ -284,8 +287,25 @@ fn element_read(instruction: &Instruction) -> Option<(&str, &str)> {
     (target != list && target != index).then_some((list.as_str(), index.as_str()))
 }
 
-/// The index `index = index + 1` advances.
-fn advance(instruction: &Instruction) -> Option<&str> {
+/// The numeric kind of a plain local or parameter in `function`.
+fn local_numeric_kind(function: &MirFunction, name: &str) -> Option<NumericKind> {
+    function
+        .local_types
+        .iter()
+        .find(|local| local.name == name)
+        .map(|local| NumericKind::of(&local.ty))
+        .or_else(|| {
+            function
+                .params
+                .iter()
+                .find(|param| param.name == name)
+                .map(|param| NumericKind::of(&param.ty))
+        })
+}
+
+/// The 64-bit index `index = index + 1` advances. Narrower integers can still
+/// overflow on `+ 1` even when `0 <= index < len(list)`.
+fn advance<'a>(function: &MirFunction, instruction: &'a Instruction) -> Option<&'a str> {
     match instruction {
         Instruction::Assign {
             target,
@@ -296,7 +316,14 @@ fn advance(instruction: &Instruction) -> Option<&str> {
                     right: Operand::Int(1),
                     ..
                 },
-        } if target == left => Some(target),
+        } if target == left
+            && matches!(
+                local_numeric_kind(function, target),
+                Some(NumericKind::Int64 | NumericKind::Uint64)
+            ) =>
+        {
+            Some(target)
+        }
         _ => None,
     }
 }
@@ -317,7 +344,11 @@ fn element_loan(instruction: &Instruction) -> Option<(&str, &str)> {
 
 /// Calls `visit` with each instruction of `block` and what the facts in
 /// force before it cover, then applies the instruction to the facts.
-fn walk_facts<'a>(block: &'a BasicBlock, mut visit: impl FnMut(usize, &'a Instruction, Covered)) {
+fn walk_facts<'a>(
+    function: &MirFunction,
+    block: &'a BasicBlock,
+    mut visit: impl FnMut(usize, &'a Instruction, Covered),
+) {
     let mut facts: Vec<Fact<'a>> = Vec::new();
     let covers = |facts: &[Fact<'_>], list: Option<&str>, index: &str| {
         facts
@@ -329,7 +360,7 @@ fn walk_facts<'a>(block: &'a BasicBlock, mut visit: impl FnMut(usize, &'a Instru
             element_read(instruction).filter(|(list, index)| covers(&facts, Some(list), index));
         let covered = if read.is_some() {
             Covered::Read
-        } else if advance(instruction).is_some_and(|index| covers(&facts, None, index)) {
+        } else if advance(function, instruction).is_some_and(|index| covers(&facts, None, index)) {
             Covered::Advance
         } else if element_loan(instruction)
             .is_some_and(|(list, index)| covers(&facts, Some(list), index))
@@ -371,6 +402,7 @@ fn changes(facts: &mut Vec<Fact<'_>>, place: &str) {
 }
 
 enum Rewrite {
+    FixedAccess(&'static str),
     Trap(ArithmeticTrap),
     UncheckedRead(RuntimeOp),
     UncheckedLoan,
@@ -437,11 +469,20 @@ fn collect_rewrites(
     rewrites: &mut Rewrites,
 ) {
     for (block_index, block) in function.blocks.iter().enumerate() {
-        walk_facts(block, |position, instruction, covered| {
+        walk_facts(function, block, |position, instruction, covered| {
             let mut push =
                 |rewrite| rewrites.push((function_index, block_index, position, rewrite));
             match covered {
                 Covered::Read => {
+                    if let Some((_, _, name)) = super::fixed_arrays::access_places(instruction) {
+                        use super::fixed_arrays::{READ, READ_PROVED, WRITE, WRITE_PROVED};
+                        match name {
+                            READ => push(Rewrite::FixedAccess(READ_PROVED)),
+                            WRITE => push(Rewrite::FixedAccess(WRITE_PROVED)),
+                            _ => {}
+                        }
+                    }
+
                     if let Some(op) = unchecked_form(instruction) {
                         push(Rewrite::UncheckedRead(op));
                     }
@@ -510,6 +551,17 @@ fn apply_rewrite(instruction: &mut Instruction, rewrite: Rewrite) {
             },
             Rewrite::UncheckedRead(unchecked),
         ) => *op = unchecked,
+        (
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: super::CallTarget::Name(name),
+                        ..
+                    },
+                ..
+            },
+            Rewrite::FixedAccess(proved),
+        ) => *name = proved.to_owned(),
         (Instruction::BeginElementLoan { checked, .. }, Rewrite::UncheckedLoan) => *checked = false,
         _ => {}
     }
@@ -522,7 +574,7 @@ pub(crate) fn validate_checks(module: &MirModule) -> std::result::Result<(), Str
     for function in module.functions.iter().chain(module.top_level.iter()) {
         for block in &function.blocks {
             let mut result = Ok(());
-            walk_facts(block, |_, instruction, covered| {
+            walk_facts(function, block, |_, instruction, covered| {
                 if result.is_ok() {
                     result = validate_instruction(&context, function, instruction, covered);
                 }
@@ -545,6 +597,22 @@ fn validate_instruction(
             function.name
         )
     };
+    if let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee: super::CallTarget::Name(name),
+                ..
+            },
+        ..
+    } = instruction
+    {
+        if super::fixed_arrays::checked_form(name) != name && covered != Covered::Read {
+            return Err(format!(
+                "invalid MIR function `{}` accesses a fixed array without a covering IndexInRange",
+                function.name
+            ));
+        }
+    }
     if let Some(op) = unchecked_read_op(instruction) {
         if covered != Covered::Read {
             return Err(match element_read(instruction) {

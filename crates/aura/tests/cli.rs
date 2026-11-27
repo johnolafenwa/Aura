@@ -1101,6 +1101,7 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
         enums: Vec::new(),
         functions: vec![main, update],
         classes: vec![MirClass {
+            c_layout: None,
             name: "Pair".to_string(),
             type_params: Vec::new(),
             fields: vec![
@@ -1191,6 +1192,7 @@ fn adr0038_closure_main(blocks: Vec<BasicBlock>, local_types: Vec<MirLocalType>)
 #[cfg(unix)]
 fn adr0038_pair_class() -> MirClass {
     MirClass {
+        c_layout: None,
         name: "Pair".to_string(),
         type_params: Vec::new(),
         fields: vec![
@@ -8041,7 +8043,7 @@ fn help_flags_exit_successfully() {
         );
         assert!(
             stdout.contains(
-                "aura test [-k <substring>] [--format json] [--timeout-ms <n>] [--verify] [path ...]"
+                "aura test [--cfg name[=value]] [-k <substring>] [--format json] [--timeout-ms <n>] [--verify] [path ...]"
             ),
             "help must advertise every maintained test-runner option, stdout was:\n{}",
             stdout
@@ -18535,4 +18537,158 @@ fn cli_enforces_https_upgrade_urls_offline_flag_and_no_rpath_builds() {
         !String::from_utf8_lossy(&bin_bytes).contains("native-rpath-probe"),
         "--no-rpath binary must not embed build-host library_paths in rpath"
     );
+}
+
+#[test]
+fn native_run_selects_constants_before_consulting_the_program_cache() {
+    let cache = TempDir::new("aura-cfg-cache");
+    let (_temp, path) = write_temp_source(
+        "aura-cfg-cache-source",
+        "import build\nconst answer = 6 * 7\nif \"trace\" in build.cfg:\n    def main():\n        print(answer)\nelse:\n    def main():\n        print(0)\n",
+    );
+    for (flags, expected) in [
+        (vec![], "0\n"),
+        (vec!["--cfg", "trace"], "42\n"),
+        (vec![], "0\n"),
+    ] {
+        let run = Command::new(aura_bin())
+            .env("AURA_CACHE_DIR", cache.path())
+            .args(["run", "--backend", "direct"])
+            .args(flags)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    }
+}
+
+#[test]
+fn verify_proves_only_obligations_in_selected_suites() {
+    if !smt_solver_available() {
+        return;
+    }
+    let temp = TempDir::new("aura-verify-conditional");
+    let path = temp.path().join("api.au");
+    fs::write(
+        &path,
+        include_str!("../../aura-compiler/tests/fixtures/check-pass/conditional_tooling.au"),
+    )
+    .unwrap();
+    let output = Command::new(aura_bin())
+        .args(["verify", "--no-cache", "--format", "json"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["proved"], 1);
+    assert_eq!(report["obligations"][0]["function"], "native_name");
+}
+
+#[cfg(windows)]
+#[test]
+fn native_windows_process_examples_use_the_platform_command_and_c_symbol() {
+    for (example, expected) in [
+        ("examples/packages/ffi_getpid/src/main.au", "true\n"),
+        (
+            "examples/io/process_run.au",
+            "aura process\n14\n0\nExitStatus.Exited(0)\n",
+        ),
+    ] {
+        let output = Command::new(aura_bin())
+            .args(["run", "--backend", "direct"])
+            .arg(repo_root().join(example))
+            .output()
+            .expect("run the maintained Windows example");
+        assert!(
+            output.status.success(),
+            "{example}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "{example}"
+        );
+    }
+}
+
+#[cfg(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"))]
+#[test]
+fn c_record_queries_match_microsoft_bit_field_allocation_units() {
+    let temp = TempDir::new("c-bit-field-layout");
+    let c = r#"#include <stddef.h>
+#include <stdio.h>
+#pragma pack(push, 1)
+struct __declspec(align(16)) Header {
+    unsigned char tag;
+    unsigned short low : 3;
+    unsigned int high : 4;
+    unsigned short tail;
+};
+#pragma pack(pop)
+int main(void) {
+    printf("%zu %zu %zu\n", sizeof(struct Header), (size_t)__alignof(struct Header), offsetof(struct Header, tail));
+    return 0;
+}
+"#;
+    fs::write(temp.path().join("layout.c"), c).unwrap();
+    let build = find_msvc_tools::find("x86_64-pc-windows-msvc", "cl.exe")
+        .expect("the Windows ABI job has the Visual C compiler")
+        .current_dir(temp.path())
+        .args(["/nologo", "/TC", "layout.c", "/Fereference.exe"])
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{build:?}");
+    let reference = Command::new(temp.path().join("reference.exe"))
+        .output()
+        .unwrap();
+    assert!(reference.status.success(), "{reference:?}");
+    let expected = String::from_utf8(reference.stdout).unwrap();
+
+    fs::write(
+        temp.path().join("Aura.toml"),
+        "[package]\nname = \"layout\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .unwrap();
+    fs::create_dir(temp.path().join("src")).unwrap();
+    fs::write(
+        temp.path().join("src/main.au"),
+        r#"import mem
+extern "C" packed align(16) class Header:
+    tag: uint8
+    low: uint16 bits(3)
+    high: uint32 bits(4)
+    tail: uint16
+
+def main() -> None:
+    print(mem.size_of(Header))
+    print(mem.align_of(Header))
+    print(mem.offset_of(Header, tail))
+"#,
+    )
+    .unwrap();
+    for backend in ["mir", "direct"] {
+        let run = Command::new(aura_bin())
+            .current_dir(temp.path())
+            .args(["run", "--backend", backend, "src/main.au"])
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{run:?}");
+        let actual = String::from_utf8(run.stdout).unwrap();
+        assert_eq!(
+            actual.split_whitespace().collect::<Vec<_>>(),
+            expected.split_whitespace().collect::<Vec<_>>(),
+            "{backend}"
+        );
+    }
 }

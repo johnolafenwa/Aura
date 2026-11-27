@@ -62,7 +62,7 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
         trigger = workflow.split("\nenv:\n", 1)[0]
 
-        self.assertIn("  push:\n    branches: [main]\n", trigger)
+        self.assertIn("  push:\n    branches: [main, codex/integration-0.18]\n", trigger)
         self.assertEqual(trigger.count("    paths-ignore:\n"), 2)
         for path in (
             "'**/*.md'",
@@ -79,6 +79,14 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(trigger.count(f"      - {path}\n"), 2)
 
+    def test_verify_keeps_both_workspace_build_profiles_within_runner_storage(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        verify = workflow[workflow.index("  verify:\n"):workflow.index("  platform-tests:\n")]
+        self.assertIn("CARGO_PROFILE_DEV_DEBUG: 0", verify)
+        self.assertIn("CARGO_PROFILE_TEST_DEBUG: 0", verify)
+        self.assertIn("CARGO_INCREMENTAL: 0", verify)
+        self.assertIn("run: npm run ci", verify)
+
     def test_every_workflow_declares_a_read_only_default_token(self) -> None:
         for workflow_path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
             workflow = workflow_path.read_text(encoding="utf-8")
@@ -89,7 +97,18 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         manifest = json.loads(
             (REPO_ROOT / "tools" / "vscode-aura" / "package.json").read_text(encoding="utf-8")
         )
-        self.assertIn("npx --yes @vscode/vsce@4.0.0 package", manifest["scripts"]["package:vsix"])
+        self.assertNotIn("npx", manifest["scripts"]["package:vsix"])
+        self.assertIn("packaging/vscode/node_modules/@vscode/vsce/vsce", manifest["scripts"]["package:vsix"])
+        tools_manifest = json.loads(
+            (REPO_ROOT / "packaging" / "vscode" / "package.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(tools_manifest["devDependencies"]["@vscode/vsce"], "4.0.0")
+        self.assertEqual(tools_manifest["devDependencies"]["ovsx"], "1.2.0")
+        tools_lock = json.loads(
+            (REPO_ROOT / "packaging" / "vscode" / "package-lock.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(tools_lock["packages"]["node_modules/@vscode/vsce"]["version"], "4.0.0")
+        self.assertEqual(tools_lock["packages"]["node_modules/ovsx"]["version"], "1.2.0")
 
     def test_cargo_color_is_disabled_at_workflow_scope(self) -> None:
         for workflow_path in (CI_WORKFLOW, RELEASE_WORKFLOW):
@@ -142,7 +161,7 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         examples = docs[docs.index("\n  examples:\n"):docs.index("\n  deploy:\n")]
         self.assertLess(
             examples.index("run: bash scripts/install-llvm.sh"),
-            examples.index("run: cargo build -p aura"),
+            examples.index("run: cargo build --locked -p aura"),
         )
         safety = (REPO_ROOT / ".github" / "workflows" / "safety.yml").read_text(
             encoding="utf-8"
@@ -216,6 +235,40 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             'echo "LLVM_SYS_SYSTEM_LIBRARY_DIRS=${static_dir}" >> "$GITHUB_ENV"', darwin
         )
 
+    def test_raylib_installer_pins_source_archive_and_avoids_root_install(self) -> None:
+        installer = (REPO_ROOT / "scripts" / "install-raylib.sh").read_text(encoding="utf-8")
+        self.assertNotIn("git clone", installer)
+        self.assertNotIn("sudo cmake --install", installer)
+        self.assertNotIn("sudo ldconfig", installer)
+        self.assertRegex(installer, r"(?m)^commit=[0-9a-f]{40}$")
+        self.assertRegex(installer, r"(?m)^sha256=[0-9a-f]{64}$")
+        self.assertIn("--proto '=https' --tlsv1.2", installer)
+        self.assertLess(
+            installer.index('if [ "$actual" != "$sha256" ]'),
+            installer.index("tar -xzf"),
+            "the checksum is checked before anything is extracted",
+        )
+        self.assertIn('-DCMAKE_INSTALL_PREFIX="$prefix"', installer)
+        self.assertIn('echo "LIBRARY_PATH=', installer)
+        self.assertIn('echo "LD_LIBRARY_PATH=', installer)
+        for formula in ("raylib", "sdl2", "glfw"):
+            with self.subTest(formula=formula):
+                self.assertIn(
+                    f"HOMEBREW_NO_AUTO_UPDATE=1 brew install {formula} </dev/null",
+                    installer,
+                )
+
+    def test_z3_installer_pins_wheel_hashes_and_requires_binary_wheels(self) -> None:
+        installer = (REPO_ROOT / "scripts" / "install-z3.sh").read_text(encoding="utf-8")
+        requirements_path = REPO_ROOT / "scripts" / "z3-requirements.txt"
+        self.assertTrue(requirements_path.is_file(), "scripts/z3-requirements.txt must exist")
+        requirements = requirements_path.read_text(encoding="utf-8")
+        self.assertIn("z3-solver==5.3.3.0", requirements)
+        hashes = re.findall(r"--hash=sha256:([0-9a-f]{64})", requirements)
+        self.assertGreaterEqual(len(hashes), 6, "all supported platform wheels must be hash-pinned")
+        self.assertEqual(installer.count("--only-binary=:all: --require-hashes -r"), 2)
+        self.assertNotIn('"z3-solver==$version"', installer)
+
     def test_linux_coverage_tests_export_process_ffi_symbols(self) -> None:
         self.assertTrue(AURA_COMPILER_BUILD.is_file())
         build_script = AURA_COMPILER_BUILD.read_text(encoding="utf-8")
@@ -236,7 +289,7 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         deploy = workflow.split("\n  deploy:\n", 1)[1]
         needs = re.search(r"^    needs: (.+)$", deploy, re.MULTILINE)
         self.assertIsNotNone(needs)
-        self.assertEqual(needs.group(1), "[build, examples]")
+        self.assertEqual(needs.group(1), "[build, apt, examples]")
 
 
 class LandingAndInstallerTests(unittest.TestCase):
@@ -403,6 +456,168 @@ class LandingAndInstallerTests(unittest.TestCase):
                 self.assertIn("https://", result.stderr)
                 self.assertFalse(prefix.exists())
 
+    def test_installer_rejects_unsafe_tar_members_and_protects_prefix_symlinks(self) -> None:
+        system = platform.system()
+        machine = platform.machine().lower()
+        if system == "Darwin" and machine in {"arm64", "aarch64"}:
+            target = "aarch64-apple-darwin"
+        elif system == "Darwin" and machine == "x86_64":
+            target = "x86_64-apple-darwin"
+        elif system == "Linux" and machine in {"x86_64", "amd64"}:
+            target = "x86_64-unknown-linux-gnu"
+        elif system == "Linux" and machine in {"aarch64", "arm64"}:
+            target = "aarch64-unknown-linux-gnu"
+        else:
+            self.skipTest(f"installer has no release archive for {system} {machine}")
+
+        archive_name = f"aura-v0.17.0-preview-{target}"
+
+        def build_base_tree(root: Path) -> Path:
+            tree = root / archive_name
+            (tree / "bin").mkdir(parents=True)
+            (tree / "lib" / "aura").mkdir(parents=True)
+            binary = tree / "bin" / "aura"
+            binary.write_text("#!/bin/sh\necho aura-test\n", encoding="utf-8")
+            binary.chmod(0o755)
+            (tree / "lib" / "aura" / "libaura_runtime.a").write_bytes(b"runtime")
+            (tree / "lib" / "aura" / "native-link-args.json").write_text("[]\n", encoding="utf-8")
+            (tree / "README.md").write_text("Aura\n", encoding="utf-8")
+            return tree
+
+        def run_with_tar(root: Path, tar_path: Path, prefix: Path) -> subprocess.CompletedProcess:
+            digest = hashlib.sha256(tar_path.read_bytes()).hexdigest()
+            (tar_path.parent / "SHA256SUMS").write_text(
+                f"{digest}  {tar_path.name}\n", encoding="utf-8"
+            )
+            return subprocess.run(
+                ["sh", str(INSTALL_SCRIPT)],
+                cwd=root,
+                env={
+                    **os.environ,
+                    "AURA_INSTALL_BASE_URL": tar_path.parent.as_uri(),
+                    "AURA_INSTALL_PREFIX": str(prefix),
+                },
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+
+        # Case 1: top-level SHA256SUMS outside archive_root must be rejected.
+        with tempfile.TemporaryDirectory(prefix="aura-install-sha-entry-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            tree = build_base_tree(root)
+            extra = root / "SHA256SUMS"
+            extra.write_text("override\n", encoding="utf-8")
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(tree, arcname=archive_name)
+                handle.add(extra, arcname="SHA256SUMS")
+            prefix = root / "prefix"
+            result = run_with_tar(root, archive, prefix)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(prefix.exists())
+
+        # Case 2: symlink member inside archive_root must be rejected.
+        with tempfile.TemporaryDirectory(prefix="aura-install-symlink-entry-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            tree = build_base_tree(root)
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(tree, arcname=archive_name)
+                sym = tarfile.TarInfo(f"{archive_name}/lib/aura/link")
+                sym.type = tarfile.SYMTYPE
+                sym.linkname = "/etc/passwd"
+                handle.addfile(sym)
+            prefix = root / "prefix"
+            result = run_with_tar(root, archive, prefix)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(prefix.exists())
+
+        # Case 3: parent-traversal member must be rejected.
+        with tempfile.TemporaryDirectory(prefix="aura-install-dotdot-entry-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            tree = build_base_tree(root)
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(tree, arcname=archive_name)
+                bad = tarfile.TarInfo(f"{archive_name}/../outside.txt")
+                payload = b"outside"
+                bad.size = len(payload)
+                import io
+                handle.addfile(bad, io.BytesIO(payload))
+            prefix = root / "prefix"
+            result = run_with_tar(root, archive, prefix)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(prefix.exists())
+
+        # Case 4: pre-existing destination symlinks under prefix must be unlinked, not followed.
+        with tempfile.TemporaryDirectory(prefix="aura-install-dest-sym-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            tree = build_base_tree(root)
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(tree, arcname=archive_name)
+            canary_runtime = root / "canary-runtime"
+            canary_readme = root / "canary-readme"
+            canary_runtime.write_bytes(b"untouched-runtime")
+            canary_readme.write_bytes(b"untouched-readme")
+            prefix = root / "prefix"
+            (prefix / "lib" / "aura").mkdir(parents=True)
+            (prefix / "share" / "aura").mkdir(parents=True)
+            (prefix / "lib" / "aura" / "libaura_runtime.a").symlink_to(canary_runtime)
+            (prefix / "share" / "aura" / "README.md").symlink_to(canary_readme)
+            result = run_with_tar(root, archive, prefix)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(canary_runtime.read_bytes(), b"untouched-runtime")
+            self.assertEqual(canary_readme.read_bytes(), b"untouched-readme")
+            self.assertFalse((prefix / "lib" / "aura" / "libaura_runtime.a").is_symlink())
+            self.assertFalse((prefix / "share" / "aura" / "README.md").is_symlink())
+
+        # Case 5: wildcard --target must not expand against working directory
+        # files. The installer accepts --target on Linux only.
+        if platform.system() != "Linux":
+            return
+        with tempfile.TemporaryDirectory(prefix="aura-install-glob-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            tree = build_base_tree(root)
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(tree, arcname=archive_name)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            (release / "SHA256SUMS").write_text(
+                f"{digest}  {archive.name}\n", encoding="utf-8"
+            )
+            (root / "sentinel-file-name").write_text("x", encoding="utf-8")
+            result = subprocess.run(
+                ["sh", str(INSTALL_SCRIPT), "--target", "*"],
+                cwd=root,
+                env={
+                    **os.environ,
+                    "AURA_INSTALL_BASE_URL": release.as_uri(),
+                    "AURA_INSTALL_PREFIX": str(root / "prefix"),
+                },
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("'*'", result.stderr)
+            self.assertNotIn("sentinel-file-name", result.stderr)
+
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -459,22 +674,29 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("HAS_VSCE_PAT: ${{ secrets.VSCE_PAT != '' }}", job_env)
         self.assertIn("HAS_OVSX_TOKEN: ${{ secrets.OVSX_TOKEN != '' }}", job_env)
         self.assertEqual(publish_job.count("VSCE_PAT: ${{ secrets.VSCE_PAT }}"), 1)
-        self.assertEqual(publish_job.count("OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}"), 1)
+        self.assertEqual(publish_job.count("OVSX_PAT: ${{ secrets.OVSX_TOKEN }}"), 1)
         self.assertIn("if: env.HAS_VSCE_PAT == 'true'", self.workflow)
         self.assertIn("if: env.HAS_VSCE_PAT != 'true'", self.workflow)
         self.assertIn("if: env.HAS_OVSX_TOKEN == 'true'", self.workflow)
         self.assertIn("if: env.HAS_OVSX_TOKEN != 'true'", self.workflow)
-        # Publishing tools run with marketplace tokens, so they are pinned to
-        # exact versions instead of whatever npm serves as latest.
+        # Publishing tools are installed from a checked-in lockfile with scripts
+        # disabled before any marketplace token enters the environment.
+        self.assertNotIn("npx --yes", self.workflow)
+        self.assertIn("run: npm --prefix packaging/vscode ci --ignore-scripts", publish_job)
+        self.assertLess(
+            publish_job.index("npm --prefix packaging/vscode ci --ignore-scripts"),
+            publish_job.index("VSCE_PAT: ${{ secrets.VSCE_PAT }}"),
+        )
         self.assertIn(
-            "npx --yes @vscode/vsce@4.0.0 publish --packagePath \"$VSIX_PATH\" -p \"$VSCE_PAT\"",
+            './packaging/vscode/node_modules/.bin/vsce publish --packagePath "$VSIX_PATH"',
             self.workflow,
         )
         self.assertIn(
-            "npx --yes ovsx@1.2.0 publish \"$VSIX_PATH\" -p \"$OVSX_TOKEN\"",
+            './packaging/vscode/node_modules/.bin/ovsx publish "$VSIX_PATH"',
             self.workflow,
         )
-        self.assertNotRegex(self.workflow, r"npx (--yes )?(@vscode/vsce|ovsx)(?!@\d)")
+        self.assertNotIn('-p "$VSCE_PAT"', self.workflow)
+        self.assertNotIn('-p "$OVSX_TOKEN"', self.workflow)
         self.assertIn("::notice::VSCE_PAT is not configured", self.workflow)
         self.assertIn("::notice::OVSX_TOKEN is not configured", self.workflow)
         self.assertIn("inputs.publish_extension", self.workflow)
@@ -482,6 +704,35 @@ class ReleaseWorkflowTests(unittest.TestCase):
             'gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"',
             self.workflow,
         )
+
+    def test_every_publish_job_uses_an_environment_and_checks_extension_source_lineage(self) -> None:
+        jobs_section = self.workflow.split("\njobs:\n", 1)[1]
+        parts = re.split(r"^  ([a-z_-]+):\n", jobs_section, flags=re.MULTILINE)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        for job_name in (
+            "publish",
+            "publish-extension",
+            "publish-homebrew",
+            "publish-chocolatey",
+            "publish-apt",
+        ):
+            with self.subTest(job=job_name):
+                self.assertRegex(jobs[job_name], r"(?m)^    environment: [a-z0-9-]+$")
+        identity_job = jobs["release_identity"]
+        self.assertIn("git merge-base --is-ancestor HEAD refs/remotes/origin/main", identity_job)
+        self.assertIn("inputs.publish_extension && !inputs.publish", identity_job)
+
+    def test_existing_release_vsix_download_verifies_unique_sha256sums_entry(self) -> None:
+        publish_ext = self.workflow.split("\n  publish-extension:\n", 1)[1].split(
+            "\n  publish-homebrew:\n", 1
+        )[0]
+        download_step = publish_ext.split(
+            "      - name: Download VSIX from existing GitHub Release\n", 1
+        )[1].split("\n      - name: Setup Node\n", 1)[0]
+        self.assertIn("--pattern aura-language.vsix --pattern SHA256SUMS", download_step)
+        self.assertIn('awk -v name="aura-language.vsix"', download_step)
+        self.assertIn("if (count != 1) exit 1", download_step)
+        self.assertIn("sha256sum -c -", download_step)
 
     def test_extension_publish_job_validates_plain_marketplace_identity(self) -> None:
         self.assertIn("name: Validate VSIX Marketplace identity", self.workflow)
@@ -543,7 +794,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.workflow,
         )
         self.assertIn("id: source", self.workflow)
-        self.assertEqual(self.workflow.count(immutable_ref), 4)
+        self.assertEqual(self.workflow.count(immutable_ref), 5)
         self.assertIn("needs: [release_identity, cli, target_packs, tools]", self.workflow)
         self.assertIn(
             "if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}",
@@ -803,6 +1054,30 @@ class WindowsArchiveTests(unittest.TestCase):
         # line starts everything.
         self.assertEqual(installer.rstrip("\n").splitlines()[-1], "Install-Aura")
         self.assertEqual(installer.count("\nInstall-Aura\n"), 1)
+
+    def test_powershell_installer_enforces_tls_redirects_tag_checksums_and_safe_zip(self) -> None:
+        installer = WINDOWS_INSTALL_SCRIPT.read_text(encoding="utf-8")
+        # TLS 1.2+ pinning and HTTPS-only manual redirect handling via HttpClient.
+        self.assertIn("[Net.SecurityProtocolType]::Tls12", installer)
+        self.assertIn("[Net.ServicePointManager]::SecurityProtocol", installer)
+        self.assertIn("System.Net.Http.HttpClientHandler", installer)
+        self.assertIn("$handler.AllowAutoRedirect = $false", installer)
+        self.assertIn("$nextUri.Scheme -ne 'https'", installer)
+        self.assertNotIn("Invoke-WebRequest", installer)
+        # Strict release tag validation.
+        self.assertIn(r"^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$", installer)
+        self.assertIn(".Contains('..')", installer)
+        # Strict 64-hex unique SHA256SUMS entry matching.
+        self.assertIn("^[0-9A-Fa-f]{64}$", installer)
+        self.assertIn("duplicate SHA256SUMS entries", installer)
+        # Safe ZIP extraction via ZipFile::OpenRead without Expand-Archive.
+        self.assertIn("[System.IO.Compression.ZipFile]::OpenRead", installer)
+        self.assertNotIn("Expand-Archive", installer)
+        self.assertIn("[System.IO.Path]::GetFullPath", installer)
+        self.assertIn("0xA000", installer)
+        # Literal runtime file enumeration without wildcard Copy-Item -Path.
+        self.assertIn("Get-ChildItem -LiteralPath $runtime -File", installer)
+        self.assertNotIn("Copy-Item -Path (Join-Path $runtime '*')", installer)
 
 
 class TargetPackTests(unittest.TestCase):
@@ -1198,6 +1473,75 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
             else:
                 os.kill(stubborn_pid, signal.SIGKILL)
                 self.fail(f"archive smoke left descendant process {stubborn_pid} running")
+
+    def test_cross_target_env_uses_private_directory_and_quotes_exports(self) -> None:
+        if platform.system() != "Linux" or os.uname().machine not in {"x86_64", "aarch64"}:
+            self.skipTest("cross-target-env.sh sets up Linux cross targets only")
+        script = REPO_ROOT / "scripts/cross-target-env.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = dict(os.environ)
+            env["HOME"] = str(tmp_path / "home")
+            env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+            env["TMPDIR"] = str(tmp_path / "tmp")
+            env.pop("AURA_KERNEL_HEADERS_DIR", None)
+
+            result = subprocess.run(
+                ["bash", str(script)],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertNotIn(str(tmp_path / "tmp" / "aura-kernel-headers"), result.stdout)
+            headers_dir = tmp_path / "cache" / "aura" / f"kernel-headers-{os.uname().machine}"
+            self.assertTrue(headers_dir.is_dir())
+            self.assertEqual(headers_dir.stat().st_mode & 0o777, 0o700)
+
+            # A path with a single quote must never break out of shell quoting under eval.
+            quoted_dir = tmp_path / "dir'with'quote"
+            env_quoted = dict(env)
+            env_quoted["AURA_KERNEL_HEADERS_DIR"] = str(quoted_dir)
+            quoted_run = subprocess.run(
+                ["bash", str(script)],
+                env=env_quoted,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            eval_check = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f'eval "$1"; printf "%s" "$CFLAGS_{os.uname().machine}_unknown_linux_musl"',
+                    "_",
+                    quoted_run.stdout,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertEqual(eval_check.stdout, f"-idirafter {quoted_dir}")
+
+            # A pre-existing symlink at AURA_KERNEL_HEADERS_DIR must be rejected.
+            symlink_target = tmp_path / "target"
+            symlink_target.mkdir()
+            symlink_path = tmp_path / "symlink-headers"
+            symlink_path.symlink_to(symlink_target)
+            env_symlink = dict(env)
+            env_symlink["AURA_KERNEL_HEADERS_DIR"] = str(symlink_path)
+            symlink_run = subprocess.run(
+                ["bash", str(script)],
+                env=env_symlink,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(symlink_run.returncode, 0)
+
+    def test_install_llvm_enforces_https_tls12(self) -> None:
+        script = (REPO_ROOT / "scripts/install-llvm.sh").read_text(encoding="utf-8")
+        self.assertIn("--proto '=https' --tlsv1.2", script)
 
 
 if __name__ == "__main__":

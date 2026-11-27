@@ -29,6 +29,7 @@ verified as one more function, which reports show as `<module>`:
 | overflow | `a << n`, `a >> n`, `a ** n`, `math.floor(x)`, `math.isqrt(n)` | `AU4002` a shift count outside the width, a left shift that loses bits, or a result outside the type; `AU4001` a negative exponent or an argument outside a `math` function's domain |
 | division by zero | `a // b`, `a % b`, `x / y` of floats | `AU4004` zero divisor |
 | index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
+| inline array index | `row[i]` for `fixed[T, N]` | `AU4031` when the index lies outside `0 <= i < N` |
 | key present | `d[k]`, `s.remove(x)` | `AU4003` missing key, `AU4008` missing element |
 | assert | `assert total >= 0` | `AU4001` assertion failed |
 | requires | each call of a function with `requires` | `AU4009` at the call |
@@ -166,6 +167,8 @@ def main():
 
 Inside a function, its own `requires` clauses are assumed, since every call
 proves them.
+
+The verifier knows the length of a fixed array and treats target C layout queries as constants. Rotations and bit-count methods use the receiver's exact integer width. A memory or atomic load can observe a fresh value. In a program that takes raw addresses, a function that exposes a place, performs a raw store or can reach one through a call or destructor receives an unsupported proof result. Check removal retains that function's checks. Device behavior and interleavings between cores remain the caller's responsibility.
 
 ## Loops
 
@@ -394,6 +397,12 @@ edit solves only what the edit touched. The summary line says how many
 functions the cache answered. A check the solver gave up on is never
 cached.
 
+On Linux and macOS the cache directory must belong to the current user, and
+no other user may be able to write to it. Otherwise `aura verify` solves every check and
+writes nothing. Each entry is signed with a secret kept in the cache
+directory, so an entry that `aura verify` did not write there is solved
+again.
+
 ### Time Limits
 
 `--timeout` limits each check. With Z3, a check first gets one second in
@@ -445,7 +454,9 @@ again. Set `aura.verifyOnSave` to `false` to turn this off.
 The verifier reasons about values exactly, as mathematical integers and
 booleans, with each integer type's range as a check:
 
-- integers of every width, `bool`, and `None`
+- integers up to 64 bits wide, `bool`, and `None`. The overflow,
+  zero-divisor, and conversion checks of `int128`, `uint128`, `intsize`,
+  and `uintsize` are reported as not modeled (`AU5104`)
 - lists, with their lengths, and their elements when those are integers,
   `bool`, `str`, or tuples and classes of modeled values; the length of any
   other list
@@ -575,7 +586,11 @@ booleans, with each integer type's range as a check:
   over a `range`, a modeled list, a `set`, the `keys()` of a `dict`, or
   `enumerate` or `zip` of modeled lists,
   with tuple targets and `if` filters, nested, in any contract, `assert`, or
-  loop `invariant`
+  loop `invariant`. Each position `enumerate(xs, start)` counts must fit an
+  `int64`
+- the error path of `try`: the function returns there, so its `ensures`,
+  the invariants of its `mut` parameters, and the invariant of `self` are
+  proved on that path too
 
 Anything else is a value the verifier knows nothing about: a `dict` or
 `set` of other keys, the result of float `//`, `%`, and `**`, the result of most library calls, such as
@@ -742,6 +757,18 @@ trusts: a wrong proof would turn a trap into an out-of-bounds read, a
 wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.
+
+An assembly template can change registers and memory outside the verifier's
+model. When an entry file or an imported module contains `asm` or
+`module_asm`, verification reports `AU4035` at the assembly. The
+`pure` option is a promise to the optimizer and supplies no proof of the
+template's result. A freestanding build with `--remove-proved-checks`
+keeps the runtime checks when its program contains assembly. Put the logic
+you want to prove in a module you can verify on its own.
+
+Use `aura verify --freestanding --target <name> file.au` to check a
+freestanding function with a placement or inlining attribute. Its section,
+alignment and inlining policy provide no assumptions about its values.
 
 A contract on an `extern "C"` function is the other boundary a proof relies on
 without reading its body. The verifier cannot read C, so it proves each

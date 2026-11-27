@@ -282,6 +282,9 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapGetStrPayload,
             RuntimeFn::MapGetInt64Payload,
             RuntimeFn::MapGetLent,
+            RuntimeFn::MapGetWord,
+            RuntimeFn::MapGetStrWord,
+            RuntimeFn::MapGetInt64Word,
             RuntimeFn::MapGetScalarLent,
             RuntimeFn::MapGetStrLent,
             RuntimeFn::MapValueSlot,
@@ -309,6 +312,12 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapKeyInt64At,
             RuntimeFn::MapValueInt64At,
             RuntimeFn::MapContainsView,
+            RuntimeFn::MapIndexInt64,
+            RuntimeFn::MapIndexI64,
+            RuntimeFn::MapIndexU64,
+            RuntimeFn::MapIndexF64,
+            RuntimeFn::MapIndexBool,
+            RuntimeFn::MapIndexInt64Pair,
             RuntimeFn::MapSetIndexInt64,
             RuntimeFn::MapSetIndexInt64Key,
             RuntimeFn::MapSetIndexInt64Pair,
@@ -370,12 +379,12 @@ fn private_receiver(op: crate::runtime_ops::RuntimeOp) -> &'static str {
 }
 
 #[test]
-fn only_the_frame_stack_accessor_is_task_invariant() {
-    let invariant = RuntimeFn::ALL
+fn only_the_frame_stack_accessor_is_read_only() {
+    let read_only = RuntimeFn::ALL
         .iter()
-        .filter(|function| function.is_task_invariant())
+        .filter(|function| function.is_read_only())
         .collect::<Vec<_>>();
-    assert_eq!(invariant, [&RuntimeFn::FrameStack]);
+    assert_eq!(read_only, [&RuntimeFn::FrameStack]);
     assert_eq!(RuntimeFn::FrameStack.params(), &[] as &[AbiType]);
     assert_eq!(RuntimeFn::FrameStack.result(), Some(AbiType::I64));
 }

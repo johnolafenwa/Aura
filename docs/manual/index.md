@@ -36,6 +36,7 @@ maintained surface by area and states how it may change.
 - [Complete Grammar](/manual/grammar): the normative Extended Backus-Naur Form
   (EBNF) grammar, precedence, associativity, contextual syntax, layout, and
   unsupported forms.
+- [Compile-Time Evaluation And Conditional Compilation](/manual/compile-time) covers constant bindings, target properties and conditional suites.
 - [Names And Scopes](/manual/names-and-scopes): modules, imports, visibility,
   bindings, block scope, the no-shadowing rule, and member lookup.
 - [Types](/manual/types): primitive types, tuples, `None`, `Duration`, generic

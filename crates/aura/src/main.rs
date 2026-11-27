@@ -1,3 +1,6 @@
+mod build_options;
+mod freestanding_args;
+
 use std::fs;
 use std::io::Write;
 use std::io::{self, BufRead, Read};
@@ -16,6 +19,8 @@ use aura_compiler::{
     CheckedMirModule, Diagnostic, MirModule, StructuredDiagnostic, Value,
 };
 use serde_json::Value as JsonValue;
+
+mod check_all_targets;
 
 struct Input {
     path: String,
@@ -53,6 +58,19 @@ fn main() {
     {
         print_command_usage_and_exit(&command);
     }
+    let mut config = aura_compiler::current_build_config();
+    let mut args = if matches!(command.as_str(), "build" | "run" | "check" | "test") {
+        build_options::take_cfg(rest.clone(), &mut config)
+            .unwrap_or_else(|error| {
+                let (format, _) = parse_diagnostic_format(rest);
+                emit_diagnostic(format, "<command line>", "", &error);
+                process::exit(2);
+            })
+            .into_iter()
+    } else {
+        args
+    };
+    let _config = config.enter();
     match command.as_str() {
         "help" | "--help" | "-h" => print_usage_and_exit(0),
         "version" | "--version" | "-V" => print_version_and_exit(),
@@ -70,13 +88,31 @@ fn main() {
         "check" => {
             let (diagnostic_format, input_args) = parse_diagnostic_format(args.collect::<Vec<_>>());
             let freestanding = input_args.iter().any(|arg| arg == "--freestanding");
+            let all_targets = input_args.iter().any(|arg| arg == "--all-targets");
             let input_args = input_args
                 .into_iter()
-                .filter(|arg| arg != "--freestanding")
+                .filter(|arg| arg != "--all-targets")
                 .collect::<Vec<_>>();
+            let (_target_scope, input_args) = if freestanding {
+                let (target, rest) = freestanding_args::take_target(input_args);
+                (Some(build_options::bare_target_scope(target)), rest)
+            } else {
+                (None, input_args)
+            };
             let input = read_input(&mut input_args.into_iter());
+            if all_targets {
+                check_all_targets::check(&input, diagnostic_format);
+                return;
+            }
             if freestanding {
-                report_freestanding_problems(&input, diagnostic_format);
+                checked_freestanding_program(&input, diagnostic_format);
+                match diagnostic_format {
+                    DiagnosticFormat::Human => write_stdout("ok\n"),
+                    DiagnosticFormat::Json => {
+                        write_stdout("{\"schema_version\":1,\"diagnostics\":[]}\n")
+                    }
+                }
+                return;
             }
             let result = if input.from_stdin {
                 check_path_with_source(Path::new(&input.path), &input.source)
@@ -107,6 +143,8 @@ fn main() {
             let input_args = apply_target_cpu(input_args);
             let (run_backend, input_args) = parse_run_backend(input_args);
             let input = read_input(&mut input_args.into_iter());
+            let _package = (run_backend != RunBackend::Mir)
+                .then(|| build_options::package_scope(Path::new(&input.path), diagnostic_format));
             let mut json_native_fallback = None;
             if run_backend != RunBackend::Mir {
                 let mut native_progress = Vec::new();
@@ -219,7 +257,25 @@ fn main() {
             }
         }
         "build" => {
-            let remaining = args.collect::<Vec<_>>();
+            let mut remaining = args.collect::<Vec<_>>();
+            // `--` ends the options: the one argument after it is the source
+            // path, even when it begins with `-`.
+            let literal_path = remaining
+                .iter()
+                .position(|arg| arg == "--")
+                .map(|delimiter| {
+                    let tail = remaining.split_off(delimiter);
+                    match <[String; 2]>::try_from(tail) {
+                        Ok([_, path]) => path,
+                        Err(_) => print_usage_and_exit(2),
+                    }
+                });
+            if let Some(path) = &literal_path {
+                if remaining.iter().any(|arg| arg == "--freestanding") {
+                    // `build_freestanding` reads its own path argument.
+                    remaining.push(path.clone());
+                }
+            }
             if remaining.iter().any(|arg| arg == "--freestanding") {
                 build_freestanding(remaining);
                 return;
@@ -233,7 +289,15 @@ fn main() {
             let remaining = apply_build_target(remaining);
             let remaining = apply_target_cpu(remaining);
             let (output_path, debug, embed_rpath, input_args) = parse_build_args(remaining);
-            let input = read_input(&mut input_args.into_iter());
+            let input = match literal_path {
+                Some(path) if input_args.is_empty() => read_input_path(path),
+                Some(_) => print_usage_and_exit(2),
+                None => read_input(&mut input_args.into_iter()),
+            };
+            let _target = build_options::target_scope(
+                aura_compiler::hosted_target().map(|target| target.name()),
+                debug,
+            );
             // A debug build keeps every check.
             let result = if remove_proved_checks && !debug {
                 let options = aura_compiler::verify::Options {
@@ -1037,7 +1101,8 @@ fn handle_test_command(args: Vec<String>) {
                 continue;
             }
         };
-        let syntax = parse_source(&source)
+        let _package = build_options::package_scope(&path, DiagnosticFormat::Human);
+        let syntax = aura_compiler::parse_path_with_source(&path, &source)
             .expect("a source module that lowered successfully must still parse successfully");
         let checked = std::sync::Arc::new(checked);
 
@@ -1798,6 +1863,17 @@ impl TestRecord {
 }
 
 fn handle_lsp_service() {
+    // A language-server restart selects a new target for every open buffer.
+    let _target = std::env::var("AURA_LSP_FREESTANDING_TARGET")
+        .ok()
+        .filter(|name| !name.is_empty())
+        .map(|name| {
+            let target = aura_compiler::FreestandingTarget::parse(&name).unwrap_or_else(|| {
+                eprintln!("aura lsp: unknown freestanding target `{name}`");
+                process::exit(2);
+            });
+            aura_compiler::enter_freestanding_target(target)
+        });
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut writer = stdout.lock();
@@ -1879,8 +1955,21 @@ fn lsp_result_for_request(request: &JsonValue) -> Result<JsonValue, String> {
         .ok_or_else(|| "LSP compiler request requires string field `source`".to_string())?;
     let overlays = lsp_source_overlays(request)?;
 
-    aura_compiler::with_source_overlays(overlays, || {
-        lsp_method_result(method, path, source, request)
+    let selected = aura_compiler::freestanding_check_target();
+    let freestanding = selected.is_some()
+        || request
+            .get("freestanding")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+    let _target = if freestanding && selected.is_none() {
+        aura_compiler::FreestandingTarget::host().map(aura_compiler::enter_freestanding_target)
+    } else {
+        None
+    };
+    aura_compiler::analysis::with_freestanding_analysis(freestanding, || {
+        aura_compiler::with_source_overlays(overlays, || {
+            lsp_method_result(method, path, source, request)
+        })
     })
 }
 
@@ -3410,6 +3499,7 @@ fn native_cache_key_for_semantic_schema(
     let semantic_schema = semantic_schema_version.to_le_bytes();
     let keep_symbols = [u8::from(native_keep_symbols())];
     let target_cpu = aura_compiler::native_target_cpu_identity();
+    let config = aura_compiler::current_build_config().cache_key_material();
     let mut material = Vec::with_capacity(lowered.len() + 256);
     for part in [
         NATIVE_CACHE_FORMAT.as_bytes(),
@@ -3421,6 +3511,7 @@ fn native_cache_key_for_semantic_schema(
         b"llvm",
         keep_symbols.as_slice(),
         target_cpu.as_bytes(),
+        config.as_slice(),
         runtime.as_slice(),
     ] {
         material.extend_from_slice(part);
@@ -4479,10 +4570,7 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, bool, bool, Vec<String>) {
     }
 
     let output = output.unwrap_or_else(|| print_usage_and_exit(2));
-    if input_args.is_empty() {
-        print_usage_and_exit(2);
-    }
-
+    // `read_input` rejects a missing path.
     (output, debug, embed_rpath, input_args)
 }
 
@@ -4514,7 +4602,11 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
         print_usage_and_exit(2);
     }
 
-    let path = first;
+    read_input_path(first)
+}
+
+/// Reads the source file at `path`, a literal path rather than an option.
+fn read_input_path(path: String) -> Input {
     let source = match fs::read_to_string(&path) {
         Ok(source) => source,
         Err(error) => {
@@ -4537,6 +4629,13 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
 /// has an outcome `--deny` names.
 fn handle_verify_command(args: Vec<String>) {
     let (diagnostic_format, args) = parse_diagnostic_format(args);
+    let freestanding = args.iter().any(|arg| arg == "--freestanding");
+    let (_target_scope, args) = if freestanding {
+        let (target, args) = freestanding_args::take_target(args);
+        (Some(build_options::bare_target_scope(target)), args)
+    } else {
+        (None, args)
+    };
     let mut options = aura_compiler::verify::Options {
         cache_dir: verify_cache_root(),
         ..aura_compiler::verify::Options::default()
@@ -4608,7 +4707,10 @@ fn handle_verify_command(args: Vec<String>) {
         return;
     }
     let input = read_input(&mut rest.into_iter());
-    let result = if input.from_stdin {
+    let result = if freestanding {
+        let program = checked_freestanding_program(&input, diagnostic_format);
+        aura_compiler::verify_program(&program, &options)
+    } else if input.from_stdin {
         aura_compiler::verify_path_with_source(Path::new(&input.path), &input.source, &options)
     } else {
         aura_compiler::verify_path(Path::new(&input.path), &options)
@@ -4931,21 +5033,26 @@ fn emit_diagnostic(format: DiagnosticFormat, path: &str, source: &str, error: &D
 /// Reports what a freestanding build of `input` cannot compile, and exits
 /// when it finds anything (ADR-0094). A program an ordinary check rejects
 /// reports that error.
-fn report_freestanding_problems(input: &Input, format: DiagnosticFormat) {
-    let path = Path::new(&input.path);
-    let lowered = if input.from_stdin {
-        lower_path_with_source_to_mir_with_source_locations(path, &input.source)
-    } else {
-        lower_path_to_mir_with_source_locations(path)
-    };
-    let problems = match lowered {
-        Ok(mir) => aura_compiler::check_freestanding(&mir),
-        Err(error) => vec![error],
-    };
+fn checked_freestanding_program(
+    input: &Input,
+    format: DiagnosticFormat,
+) -> aura_compiler::sema::Program {
+    let result = aura_compiler::check_freestanding_path(
+        Path::new(&input.path),
+        input.from_stdin.then_some(input.source.as_str()),
+    );
+    let program = result.unwrap_or_else(|error| {
+        emit_diagnostics(format, &input.path, &input.source, vec![error]);
+        process::exit(1);
+    });
+    let problems = aura_compiler::check_freestanding(
+        &aura_compiler::mir::lower_with_source_locations(&program),
+    );
     if !problems.is_empty() {
         emit_diagnostics(format, &input.path, &input.source, problems);
         process::exit(1);
     }
+    program
 }
 
 /// Reports `errors` together: each as text, or all in one JSON report. An
@@ -4986,76 +5093,41 @@ fn emit_diagnostics(format: DiagnosticFormat, path: &str, source: &str, errors: 
 /// machine with no operating system, and links nothing (ADR-0094).
 fn build_freestanding(args: Vec<String>) {
     let (diagnostic_format, args) = parse_diagnostic_format(args);
-    let mut target = None;
-    let mut remove_proved_checks = false;
-    let mut rest = Vec::new();
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--freestanding" => {}
-            "--remove-proved-checks" => remove_proved_checks = true,
-            "--target" => target = Some(args.next().unwrap_or_else(|| print_usage_and_exit(2))),
-            _ => rest.push(arg),
-        }
-    }
-    let known = || {
-        aura_compiler::FreestandingTarget::ALL
-            .iter()
-            .map(|target| format!("`{}`", target.name()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let target = match target {
-        Some(name) => aura_compiler::FreestandingTarget::parse(&name).unwrap_or_else(|| {
-            eprintln!(
-                "aura: unknown freestanding target `{name}`; the targets are {}",
-                known()
-            );
-            process::exit(2);
-        }),
-        None => aura_compiler::FreestandingTarget::host().unwrap_or_else(|| {
-            eprintln!(
-                "aura: no freestanding target matches this machine; pass `--target` with one of {}",
-                known()
-            );
-            process::exit(2);
-        }),
-    };
+    let (target, args) = freestanding_args::take_target(args);
+    let _target_scope = build_options::bare_target_scope(target);
+    let remove_proved_checks = args.iter().any(|arg| arg == "--remove-proved-checks");
+    let rest = args
+        .into_iter()
+        .filter(|arg| arg != "--remove-proved-checks")
+        .collect();
     let (output_path, debug, _, input_args) = parse_build_args(rest);
     if debug {
         eprintln!("aura: `--debug` does not apply to a freestanding build");
         process::exit(2);
     }
     let input = read_input(&mut input_args.into_iter());
-    report_freestanding_problems(&input, diagnostic_format);
-    let path = Path::new(&input.path);
+    let program = checked_freestanding_program(&input, diagnostic_format);
     let lowered = if remove_proved_checks {
         let options = aura_compiler::verify::Options {
             cache_dir: verify_cache_root(),
             ..aura_compiler::verify::Options::default()
         };
-        aura_compiler::lower_path_to_mir_with_proved_checks(
-            path,
-            input.from_stdin.then_some(input.source.as_str()),
-            false,
-            &options,
-        )
-        .map(|(mir, removed)| {
-            if diagnostic_format == DiagnosticFormat::Human {
-                eprintln!(
+        aura_compiler::lower_program_to_mir_with_proved_checks(&program, false, &options).map(
+            |(mir, removed)| {
+                if diagnostic_format == DiagnosticFormat::Human {
+                    eprintln!(
                     "aura: {} checks proved and removed ({} bounds, {} arithmetic, {} assertion)",
                     removed.total(),
                     removed.bounds,
                     removed.arithmetic,
                     removed.assertions
                 );
-            }
-            mir
-        })
-    } else if input.from_stdin {
-        lower_path_with_source_to_mir(path, &input.source)
+                }
+                mir
+            },
+        )
     } else {
-        lower_path_to_mir(path)
+        Ok(aura_compiler::lower_to_mir(&program))
     };
     let object = lowered.map_err(|error| vec![error]).and_then(|mir| {
         aura_compiler::emit_freestanding_object(&mir, &input.path, &input.source, target)
@@ -5577,6 +5649,15 @@ fn foreign_link_args(
         args.push("-L".into());
         args.push(path.clone().into_os_string());
         if embed_rpath {
+            // A run path splits at `:` and expands `$ORIGIN`-style tokens,
+            // so a directory that holds either cannot be recorded as one.
+            let text = path.to_string_lossy();
+            if text.contains(':') || text.contains('$') {
+                return Err(format!(
+                    "cannot record library path `{}` as a run path because it contains `:` or `$`; build with `--no-rpath` and set the library search path when the program runs",
+                    text.escape_default()
+                ));
+            }
             // `-Xlinker` passes the path as its own argument, so a comma in it
             // cannot split a `-Wl,` option.
             for part in ["-Xlinker", "-rpath", "-Xlinker"] {
@@ -6327,14 +6408,14 @@ fn write_stdout(text: &str) {
 }
 
 fn usage_text() -> &'static str {
-    "usage: aura <check|run> [--offline] [--format human|json] <file.au>\n\
+    "usage: aura <check|run> [--offline] [--cfg name[=value]] [--format human|json] <file.au>\n\
        or: aura <ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
-       or: aura run [--backend mir|direct|auto] [--target-cpu <name>] [--offline] <file.au> [-- <program-args>...]\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] <file.au>\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] --stdin <virtual-path>\n\
-       or: aura build -o <output> --freestanding [--target <name>] [--remove-proved-checks] [--format human|json] <file.au>\n\
-       or: aura check --freestanding [--format human|json] <file.au>\n\
+       or: aura run [--cfg name[=value]] [--backend mir|direct|auto] [--target-cpu <name>] [--offline] <file.au> [-- <program-args>...]\n\
+       or: aura build -o <output> [--cfg name[=value]] [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] <file.au>\n\
+       or: aura build -o <output> [--cfg name[=value]] [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] --stdin <virtual-path>\n\
+       or: aura build -o <output> [--cfg name[=value]] --freestanding [--target <name>] [--kernel] [--remove-proved-checks] [--format human|json] <file.au>\n\
+       or: aura check [--all-targets | --freestanding [--target <name>] [--kernel]] [--format human|json] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
        or: aura <signature-help|references|prepare-rename|rename> --line <n> --character <n> [--new-name <name>] [--include-declaration] [--stdin] <path>\n\
@@ -6342,8 +6423,8 @@ fn usage_text() -> &'static str {
        or: aura new <project-path>\n\
        or: aura fmt [--check] [path ...]\n\
        or: aura doc [--out <dir>] [--json] [path ...]\n\
-       or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [--verify] [path ...]\n\
-       or: aura verify [--solver <path>] [--timeout <ms>] [--function <name>] [--deny not-modeled|undecided|all] [--must-verify <function>] [--cross-check] [--cross-solver <path>] [--no-cache] [--format human|json] [path ...]\n\
+       or: aura test [--cfg name[=value]] [-k <substring>] [--format json] [--timeout-ms <n>] [--verify] [path ...]\n\
+       or: aura verify [--freestanding [--target <name>] [--kernel]] [--solver <path>] [--timeout <ms>] [--function <name>] [--deny not-modeled|undecided|all] [--must-verify <function>] [--cross-check] [--cross-solver <path>] [--no-cache] [--format human|json] [path ...]\n\
        or: aura deps update [--offline] [package]\n\
        or: aura upgrade\n\
        or: aura help\n\
@@ -7702,12 +7783,28 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
     }
 
     #[test]
+    fn foreign_link_args_refuse_run_paths_that_split_or_expand() {
+        for path in ["/pkg/lib:/tmp", "/pkg/$ORIGIN/lib"] {
+            let plan = aura_compiler::ForeignLinkPlan {
+                libraries: vec!["probe".to_string()],
+                library_paths: vec![PathBuf::from(path)],
+                ..Default::default()
+            };
+            let error = super::foreign_link_args(&plan, "linux", true)
+                .expect_err("a run path with `:` or `$` is refused");
+            assert!(error.contains("--no-rpath"), "{error}");
+            // Without a run path the directory is only searched at link time.
+            assert!(super::foreign_link_args(&plan, "linux", false).is_ok());
+        }
+    }
+
+    #[test]
     fn foreign_link_args_name_paths_libraries_and_macos_frameworks() {
         let plan = aura_compiler::ForeignLinkPlan {
             libraries: vec!["sqlite3".to_string(), "stdc++".to_string()],
             library_paths: vec![PathBuf::from("/pkg/native,lib")],
             frameworks: vec!["Accelerate".to_string()],
-            exports: Vec::new(),
+            ..Default::default()
         };
         let text = |args: Vec<std::ffi::OsString>| {
             args.into_iter()
@@ -7802,7 +7899,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             library_paths: vec![PathBuf::from("C:/deps/lib")],
             libraries: vec!["sqlite3".to_string()],
             frameworks: vec!["Metal".to_string()],
-            exports: Vec::new(),
+            ..Default::default()
         };
         let text = |args: Vec<std::ffi::OsString>| {
             args.into_iter()
@@ -7894,7 +7991,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
                 libraries,
                 library_paths: Vec::new(),
                 frameworks,
-                exports: Vec::new(),
+                ..Default::default()
             };
             for os in ["linux", "macos"] {
                 assert_eq!(

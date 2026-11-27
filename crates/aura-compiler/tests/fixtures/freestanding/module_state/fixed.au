@@ -1,0 +1,18 @@
+copy class Ring:
+    values: fixed[uint16, 4]
+
+mut ring: Ring = Ring(values=[0] * 4)
+mut selectors: fixed[int32, 2] = [1, 3]
+mut calls: int32 = 0
+
+def select_slot() -> int32:
+    calls += 1
+    return selectors[1]
+
+def sample() -> uint16:
+    ring.values[0] += 7
+    return 11
+
+export "C" def write_ring() -> int32:
+    ring.values[select_slot()] += sample()
+    return calls + (ring.values[0] as int32) + (ring.values[3] as int32)

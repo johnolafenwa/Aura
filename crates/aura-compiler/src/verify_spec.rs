@@ -11,6 +11,8 @@
 
 use std::collections::BTreeMap;
 
+use aura_core::integer_bits::BitMethod;
+
 use super::exec::{
     array_parts, array_shape, bind_span_views, conjoin, key_sort, lit, not, scalar_val, smt_string,
     span_range_names, structural_eq, Exec, FloatTy, Goal, IntTy, State, Val,
@@ -99,30 +101,45 @@ impl Exec<'_> {
         // An object of a class with invariants passed to a function holds
         // them: the function's proof assumes they do.
         for (param, value) in pre.iter().filter(|(param, _)| param != "self") {
-            let Some((inv_module, clauses)) = self.record_invariant(value) else {
-                continue;
-            };
-            let erasing = self.erasing;
-            self.erasing = true;
-            let env: Env = [("self".to_string(), value.clone())].into();
-            for clause in clauses {
-                let message = format!(
-                    "class invariant holds for `{param}` passed to `{display}`: `{}`",
-                    clause.text
-                );
-                self.prove_clause_in(
-                    state,
-                    ObligationKind::ClassInvariant,
-                    span,
-                    message,
-                    &clause,
-                    &env,
-                    Some(&inv_module),
-                );
-            }
-            self.erasing = erasing;
+            self.prove_value_invariant(
+                state,
+                value,
+                span,
+                &format!("`{param}` passed to `{display}`"),
+            );
         }
         self.prove_inner_arguments(state, callee, pre, span);
+    }
+
+    /// Proves the class invariant of each object of a class with invariants
+    /// passed as an argument to an unfollowed call.
+    pub(super) fn prove_arg_invariants(&mut self, state: &State, values: &[Val], target: &str) {
+        let span = self.span;
+        for value in values {
+            self.prove_value_invariant(state, value, span, &format!("a value passed to {target}"));
+        }
+    }
+
+    fn prove_value_invariant(&mut self, state: &State, value: &Val, span: Span, label: &str) {
+        let Some((inv_module, clauses)) = self.record_invariant(value) else {
+            return;
+        };
+        let erasing = self.erasing;
+        self.erasing = true;
+        let env: Env = [("self".to_string(), value.clone())].into();
+        for clause in clauses {
+            let message = format!("class invariant holds for {label}: `{}`", clause.text);
+            self.prove_clause_in(
+                state,
+                ObligationKind::ClassInvariant,
+                span,
+                message,
+                &clause,
+                &env,
+                Some(&inv_module),
+            );
+        }
+        self.erasing = erasing;
     }
 
     /// The invariant clauses of the class of `value`, when it is an object
@@ -200,6 +217,76 @@ impl Exec<'_> {
         self.prove_inner_returns(state, result);
     }
 
+    /// Where `try` returns the error of its operand, the function returns
+    /// from inside an expression: no `ensures` check and no invariant check
+    /// on `self` runs there. Callers assume them on every return, so each
+    /// is proved on that path, with `result` the returned `Err`.
+    pub(super) fn prove_try_return(&mut self, state: &State, result: &Val) {
+        self.prove_return_invariants(state, result);
+        let erasing = self.erasing;
+        self.erasing = true;
+        let name = self.function.name.clone();
+        if let Some((inv_module, clauses)) = self.guarded_invariant(&name) {
+            if let Some(receiver) = state.env.get("self").cloned() {
+                let env: Env = [("self".to_string(), receiver)].into();
+                for clause in clauses {
+                    let message = format!(
+                        "class invariant holds for `self` where `try` returns: `{}`",
+                        clause.text
+                    );
+                    self.prove_clause_in(
+                        state,
+                        ObligationKind::ClassInvariant,
+                        self.span,
+                        message,
+                        &clause,
+                        &env,
+                        Some(&inv_module),
+                    );
+                }
+            }
+        }
+        if let Some(decl) = self.cx.decl(&name) {
+            let module_name = self.cx.decl_module(decl);
+            let mut env: Env = state.env.clone();
+            bind_span_views(&mut env);
+            env.insert("result".to_string(), result.clone());
+            for clause in decl
+                .contracts
+                .iter()
+                .filter(|clause| clause.kind == ContractKind::Ensures)
+            {
+                let message = format!(
+                    "`ensures` clause holds where `try` returns: `{}`",
+                    clause.text
+                );
+                if clause.olds.is_empty() {
+                    self.prove_clause_in(
+                        state,
+                        ObligationKind::Ensures,
+                        self.span,
+                        message,
+                        clause,
+                        &env,
+                        module_name,
+                    );
+                } else {
+                    let pc = state.pc.clone();
+                    self.oblige(
+                        ObligationKind::Ensures,
+                        self.span,
+                        message,
+                        &pc,
+                        Goal::Unsupported(
+                            "`old` values where `try` returns are not modeled yet".into(),
+                        ),
+                    );
+                }
+            }
+        }
+        self.erasing = erasing;
+    }
+
     /// Whether `callee` is a method that only reads `self`.
     fn reads_only(&self, callee: &str) -> bool {
         self.cx
@@ -217,8 +304,26 @@ impl Exec<'_> {
         post: &[(String, Val)],
         result: &Val,
     ) {
+        let pc = state.pc.clone();
+        for fact in self.call_ensures_terms(callee, pre, post, result) {
+            self.assume(&pc, fact);
+        }
+        self.assume_inner_results(state, callee, pre, post, result);
+    }
+
+    /// Collects the SMT terms for each `ensures` and returned class invariant
+    /// of `callee` without asserting them into `self.facts`, so callers whose
+    /// target may trap or remain incomplete can guard them on normal return.
+    pub(super) fn call_ensures_terms(
+        &mut self,
+        callee: &str,
+        pre: &[(String, Val)],
+        post: &[(String, Val)],
+        result: &Val,
+    ) -> Vec<String> {
+        let mut facts = Vec::new();
         let Some(decl) = self.contract_override.or_else(|| self.cx.decl(callee)) else {
-            return;
+            return facts;
         };
         let decl_module = self.cx.decl_module(decl);
         let mut pre_env: Env = pre.iter().cloned().collect();
@@ -249,11 +354,15 @@ impl Exec<'_> {
                     self.spec_module = prev_module;
                     self.proving = prev_proving;
                     if olds_ok {
-                        self.assume_clause_in(state, clause, &env, decl_module);
+                        if let Some(fact) = self.clause_assumption_in(clause, &env, decl_module) {
+                            facts.push(fact);
+                        }
                     }
                 }
                 ContractKind::Invariant if checks_invariant => {
-                    self.assume_clause_in(state, clause, &pre_env, decl_module);
+                    if let Some(fact) = self.clause_assumption_in(clause, &pre_env, decl_module) {
+                        facts.push(fact);
+                    }
                 }
                 _ => {}
             }
@@ -262,7 +371,10 @@ impl Exec<'_> {
             if let Some((_, receiver)) = post.first() {
                 let env: Env = [("self".to_string(), receiver.clone())].into();
                 for clause in clauses {
-                    self.assume_clause_in(state, &clause, &env, Some(&inv_module));
+                    if let Some(fact) = self.clause_assumption_in(&clause, &env, Some(&inv_module))
+                    {
+                        facts.push(fact);
+                    }
                 }
             }
         }
@@ -275,8 +387,18 @@ impl Exec<'_> {
                     .map(|(_, value)| value.clone()),
             )
             .collect();
-        self.assume_record_invariants(state, &returned);
-        self.assume_inner_results(state, callee, pre, post, result);
+        for value in &returned {
+            if let Some((inv_module, clauses)) = self.record_invariant(value) {
+                let env: Env = [("self".to_string(), value.clone())].into();
+                for clause in clauses {
+                    if let Some(fact) = self.clause_assumption_in(&clause, &env, Some(&inv_module))
+                    {
+                        facts.push(fact);
+                    }
+                }
+            }
+        }
+        facts
     }
 
     /// A named function passed as a callable alias with a contract meets
@@ -386,6 +508,8 @@ impl Exec<'_> {
             Ok((accepts, keeps)) => (Goal::Holds(accepts), Goal::Holds(keeps)),
             Err(reason) => (Goal::Unsupported(reason.clone()), Goal::Unsupported(reason)),
         };
+        let erasing = self.erasing;
+        self.erasing = true;
         self.oblige(
             ObligationKind::Requires,
             span,
@@ -400,6 +524,7 @@ impl Exec<'_> {
             &pc,
             keeps,
         );
+        self.erasing = erasing;
     }
 
     /// When an implementation of a trait method states its own `requires`,
@@ -425,27 +550,62 @@ impl Exec<'_> {
             .collect();
         let same = own.len() == inherited.len()
             && own.iter().zip(&inherited).all(|(a, b)| a.text == b.text);
-        if same {
+        if same || own.is_empty() {
             return;
         }
-        let env: Env = state.env.clone();
-        for clause in inherited {
-            self.assume_clause_in(state, clause, &env, trait_module);
+        let mut env: Env = state.env.clone();
+        bind_span_views(&mut env);
+        let prev_proving = self.proving;
+        let prev_module = self.spec_module.clone();
+        self.proving = false;
+        if let Some(m) = trait_module {
+            self.spec_module = m.to_string();
         }
+        let mut assumptions = Vec::new();
+        for clause in inherited {
+            let mut wd = Vec::new();
+            if let Ok(Val::Bool(term)) = self.spec(&clause.condition, &env, &mut wd, 0) {
+                wd.push(term);
+                assumptions.push(conjoin(&wd));
+            }
+        }
+        self.spec_module = prev_module;
+        self.proving = prev_proving;
+        let assumed = conjoin(&assumptions);
         let display = public_name(&name);
         for clause in own {
             let message = format!(
                 "`requires` of `{display}` follows from the trait method's: `{}`",
                 clause.text
             );
-            self.prove_clause_in(
-                state,
+            let prev_proving = self.proving;
+            let prev_module = self.spec_module.clone();
+            self.proving = true;
+            if let Some(m) = decl_module {
+                self.spec_module = m.to_string();
+            }
+            let mut wd = Vec::new();
+            let goal = match self.spec(&clause.condition, &env, &mut wd, 0) {
+                Ok(Val::Bool(term)) => {
+                    wd.push(term);
+                    let consequent = conjoin(&wd);
+                    Goal::Holds(if assumed == "true" {
+                        consequent
+                    } else {
+                        format!("(=> {assumed} {consequent})")
+                    })
+                }
+                Ok(_) => Goal::Unsupported("the clause is not a modeled `bool`".into()),
+                Err(reason) => Goal::Unsupported(reason),
+            };
+            self.spec_module = prev_module;
+            self.proving = prev_proving;
+            self.oblige(
                 ObligationKind::Requires,
                 clause.span,
                 message,
-                clause,
-                &env,
-                decl_module,
+                &state.pc,
+                goal,
             );
         }
     }
@@ -504,7 +664,7 @@ impl Exec<'_> {
     /// proves them, and a call on a trait object relies on the object
     /// holding them (see `verify_guard`). A call whose implementation is
     /// picked at run time names no class.
-    fn guarded_invariant(&self, callee: &str) -> Option<(String, Vec<ContractClause>)> {
+    pub(super) fn guarded_invariant(&self, callee: &str) -> Option<(String, Vec<ContractClause>)> {
         if self.dynamic_call {
             return None;
         }
@@ -592,13 +752,12 @@ impl Exec<'_> {
         self.oblige(kind, span, message, &state.pc, goal);
     }
 
-    fn assume_clause_in(
+    fn clause_assumption_in(
         &mut self,
-        state: &State,
         clause: &ContractClause,
         env: &Env,
         module_name: Option<&str>,
-    ) {
+    ) -> Option<String> {
         let prev_proving = self.proving;
         let prev_module = self.spec_module.clone();
         self.proving = false;
@@ -606,14 +765,29 @@ impl Exec<'_> {
             self.spec_module = m.to_string();
         }
         let mut wd = Vec::new();
-        if let Ok(Val::Bool(term)) = self.spec(&clause.condition, env, &mut wd, 0) {
-            wd.push(term);
-            let fact = conjoin(&wd);
+        let fact = match self.spec(&clause.condition, env, &mut wd, 0) {
+            Ok(Val::Bool(term)) => {
+                wd.push(term);
+                Some(conjoin(&wd))
+            }
+            _ => None,
+        };
+        self.spec_module = prev_module;
+        self.proving = prev_proving;
+        fact
+    }
+
+    fn assume_clause_in(
+        &mut self,
+        state: &State,
+        clause: &ContractClause,
+        env: &Env,
+        module_name: Option<&str>,
+    ) {
+        if let Some(fact) = self.clause_assumption_in(clause, env, module_name) {
             let pc = state.pc.clone();
             self.assume(&pc, fact);
         }
-        self.spec_module = prev_module;
-        self.proving = prev_proving;
     }
 
     /// The value of a specification expression. Each condition the
@@ -647,7 +821,7 @@ impl Exec<'_> {
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
                         if let Some(n) = parse_smt_int(&term) {
                             if let Some(neg) = n.checked_neg() {
-                                if neg < ty.lo || neg > ty.hi {
+                                if !ty.contains_literal(neg) {
                                     wd.push("false".to_string());
                                 }
                                 return Ok(Val::Int(lit(neg), ty));
@@ -657,7 +831,7 @@ impl Exec<'_> {
                         wd.push(ty.contains(&result));
                         Ok(Val::Int(result, ty))
                     }
-                    (UnaryOp::BitNot, Val::Int(term, ty)) => {
+                    (UnaryOp::BitNot, Val::Int(term, ty)) if ty.modeled() => {
                         Ok(Val::Int(super::integers::bitnot(&term, ty), ty))
                     }
                     _ => Err("this unary operator is not modeled in contracts yet".into()),
@@ -734,7 +908,8 @@ impl Exec<'_> {
                     wd.push(format!("(=> {} {})", not(&condition), conjoin(&else_wd)));
                 }
                 match (then_value, else_value) {
-                    (Val::Int(a, ty), Val::Int(b, _)) => {
+                    (Val::Int(a, aty), Val::Int(b, bty)) => {
+                        let ty = select_int_ty(then_expr, aty, bty);
                         Ok(Val::Int(format!("(ite {condition} {a} {b})"), ty))
                     }
                     (Val::Bool(a), Val::Bool(b)) => {
@@ -862,6 +1037,20 @@ impl Exec<'_> {
                     }
                     // A `spec def` method of the receiver's class.
                     let receiver = self.spec(object, env, wd, depth)?;
+                    if let (Val::Int(value, ty), Some(method)) = (&receiver, BitMethod::of(field)) {
+                        let count = if let [arg] = args.as_slice() {
+                            let Val::Int(count, _) = self.spec(&arg.value, env, wd, depth)? else {
+                                return Err("the rotation count is not a modeled integer".into());
+                            };
+                            wd.push(format!("(>= {count} 0)"));
+                            Some(count)
+                        } else {
+                            None
+                        };
+                        return Ok(self
+                            .bit_terms
+                            .evaluate(method, value, *ty, count.as_deref()));
+                    }
                     let parts = array_parts(&receiver).or_else(|| tensor_parts(&receiver));
                     if let Some((len, rank, dims)) = parts {
                         return match field.as_str() {
@@ -935,7 +1124,7 @@ impl Exec<'_> {
                     ("abs", [Val::Int(term, ty)]) => {
                         if let Some(n) = parse_smt_int(term) {
                             if let Some(abs_n) = n.checked_abs() {
-                                if abs_n < ty.lo || abs_n > ty.hi {
+                                if !ty.contains_literal(abs_n) {
                                     wd.push("false".to_string());
                                 }
                                 return Ok(Val::Int(lit(abs_n), *ty));
@@ -945,17 +1134,21 @@ impl Exec<'_> {
                         wd.push(ty.contains(&result));
                         Ok(Val::Int(result, *ty))
                     }
-                    ("min" | "max", [Val::Int(a, ty), Val::Int(b, _)]) => {
+                    ("min" | "max", [Val::Int(a, aty), Val::Int(b, bty)]) => {
+                        let ty = match args.first() {
+                            Some(first) => select_int_ty(&first.value, *aty, *bty),
+                            None => *aty,
+                        };
                         if let (Some(lhs_n), Some(rhs_n)) = (parse_smt_int(a), parse_smt_int(b)) {
                             let picked = if name == "min" {
                                 lhs_n.min(rhs_n)
                             } else {
                                 lhs_n.max(rhs_n)
                             };
-                            return Ok(Val::Int(lit(picked), *ty));
+                            return Ok(Val::Int(lit(picked), ty));
                         }
                         let op = if name == "min" { "<=" } else { ">=" };
-                        Ok(Val::Int(format!("(ite ({op} {a} {b}) {a} {b})"), *ty))
+                        Ok(Val::Int(format!("(ite ({op} {a} {b}) {a} {b})"), ty))
                     }
                     _ => {
                         let Some(spec) = self.cx.spec_def_in(&self.spec_module, name) else {
@@ -1038,6 +1231,11 @@ impl Exec<'_> {
             }
             return match self.cx.spec_return_type(spec) {
                 Some(Type::Unit) => Ok(Val::Unit),
+                Some(ty) if !self.bound_vars.is_empty() => {
+                    self.fresh_under_binders(ty, &spec.name).ok_or_else(|| {
+                        format!("`spec def {}` unfolds more than {limit} levels", spec.name)
+                    })
+                }
                 Some(ty) => {
                     let what = super::shapes::spec_cutoff_name(&spec.name, limit);
                     let fresh = self.unmodeled(what, |exec| exec.fresh(ty, &spec.name));
@@ -1087,7 +1285,13 @@ impl Exec<'_> {
                     _ => None,
                 })
                 .expect("a checked `spec def` body is one `return`");
-            self.spec(body, &env, wd, depth + 1)
+            let result = self.spec(body, &env, wd, depth + 1)?;
+            if let (Val::Int(term, _), Some(ret_int)) =
+                (&result, self.cx.spec_return_type(spec).and_then(IntTy::of))
+            {
+                return Ok(Val::Int(term.clone(), ret_int));
+            }
+            Ok(result)
         })();
         self.active_specs.pop();
         self.spec_module = prev_module;
@@ -1178,11 +1382,7 @@ impl Exec<'_> {
                 let (Val::Int(a, aty), Val::Int(b, bty)) = (&lhs, &rhs) else {
                     return Err("arithmetic on these operands is not modeled yet".into());
                 };
-                let ty = if matches!(left.kind, ExprKind::Int(_)) {
-                    *bty
-                } else {
-                    *aty
-                };
+                let ty = select_int_ty(left, *aty, *bty);
                 if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) {
                     if let (Some(lhs_n), Some(rhs_n)) = (parse_smt_int(a), parse_smt_int(b)) {
                         let folded = match op {
@@ -1191,11 +1391,16 @@ impl Exec<'_> {
                             BinaryOp::Mul => lhs_n.checked_mul(rhs_n),
                             _ => None,
                         };
-                        if let Some(res) = folded {
-                            if res < ty.lo || res > ty.hi {
+                        match folded {
+                            Some(res) => {
+                                if !ty.contains_literal(res) {
+                                    wd.push("false".to_string());
+                                }
+                                return Ok(Val::Int(lit(res), ty));
+                            }
+                            None => {
                                 wd.push("false".to_string());
                             }
-                            return Ok(Val::Int(lit(res), ty));
                         }
                     }
                 }
@@ -1250,43 +1455,49 @@ impl Exec<'_> {
         };
         // Each `for` clause binds one more variable, over positions that may
         // depend on the variables before it.
-        let mut ks: Vec<String> = Vec::new();
-        let mut hypotheses: Vec<String> = Vec::new();
-        let mut inner = env.clone();
-        for clause in clauses {
-            let k = self.bound_name();
-            let mut iterable_wd = Vec::new();
-            let (range, value, sort) =
-                self.quantified_values(&clause.iterable, &k, &inner, &mut iterable_wd, depth)?;
-            push_quantified_wd(wd, &ks, &hypotheses, &iterable_wd);
-            ks.push(format!("({k} {sort})"));
-            // An element of a list of integers lies in its type's range.
-            hypotheses.push(range);
-            int_ranges(&value, &mut hypotheses);
-            bind_target(&clause.target, value, &mut inner)?;
-            // Each filter, then the condition, is evaluated only where the
-            // filters before it hold, so each is well-defined there.
-            for filter in &clause.filters {
-                let mut filter_wd = Vec::new();
-                let Val::Bool(term) = self.spec(filter, &inner, &mut filter_wd, depth)? else {
-                    return Err("a comprehension filter is not a modeled `bool`".into());
-                };
-                push_quantified_wd(wd, &ks, &hypotheses, &filter_wd);
-                hypotheses.push(term);
+        let saved_bound = self.bound_vars.len();
+        let result = (|| {
+            let mut ks: Vec<String> = Vec::new();
+            let mut hypotheses: Vec<String> = Vec::new();
+            let mut inner = env.clone();
+            for clause in clauses {
+                let k = self.bound_name();
+                let mut iterable_wd = Vec::new();
+                let (range, value, sort) =
+                    self.quantified_values(&clause.iterable, &k, &inner, &mut iterable_wd, depth)?;
+                push_quantified_wd(wd, &ks, &hypotheses, &iterable_wd);
+                ks.push(format!("({k} {sort})"));
+                self.bound_vars.push((k, sort));
+                // An element of a list of integers lies in its type's range.
+                hypotheses.push(range);
+                int_ranges(&value, &mut hypotheses);
+                bind_target(&clause.target, value, &mut inner)?;
+                // Each filter, then the condition, is evaluated only where the
+                // filters before it hold, so each is well-defined there.
+                for filter in &clause.filters {
+                    let mut filter_wd = Vec::new();
+                    let Val::Bool(term) = self.spec(filter, &inner, &mut filter_wd, depth)? else {
+                        return Err("a comprehension filter is not a modeled `bool`".into());
+                    };
+                    push_quantified_wd(wd, &ks, &hypotheses, &filter_wd);
+                    hypotheses.push(term);
+                }
             }
-        }
-        let mut body_wd = Vec::new();
-        let Val::Bool(condition) = self.spec(body, &inner, &mut body_wd, depth)? else {
-            return Err("a quantified condition is not a modeled `bool`".into());
-        };
-        push_quantified_wd(wd, &ks, &hypotheses, &body_wd);
-        let binders = binders(&ks);
-        let hypotheses = conjoin(&hypotheses);
-        Ok(Val::Bool(if universal {
-            format!("(forall ({binders}) (=> {hypotheses} {condition}))")
-        } else {
-            format!("(exists ({binders}) (and {hypotheses} {condition}))")
-        }))
+            let mut body_wd = Vec::new();
+            let Val::Bool(condition) = self.spec(body, &inner, &mut body_wd, depth)? else {
+                return Err("a quantified condition is not a modeled `bool`".into());
+            };
+            push_quantified_wd(wd, &ks, &hypotheses, &body_wd);
+            let binders = binders(&ks);
+            let hypotheses = conjoin(&hypotheses);
+            Ok(Val::Bool(if universal {
+                format!("(forall ({binders}) (=> {hypotheses} {condition}))")
+            } else {
+                format!("(exists ({binders}) (and {hypotheses} {condition}))")
+            }))
+        })();
+        self.bound_vars.truncate(saved_bound);
+        result
     }
 
     /// The positions a quantifier's `for` clause ranges over, as a condition
@@ -1365,7 +1576,13 @@ impl Exec<'_> {
                 let position = if start == "0" {
                     k.to_string()
                 } else {
-                    format!("(+ {start} {k})")
+                    // Each position the run counts must be an `int64`.
+                    let position = format!("(+ {start} {k})");
+                    wd.push(format!(
+                        "(forall (({k} Int)) (=> {range} {}))",
+                        IntTy::INT64.contains(&position)
+                    ));
+                    position
                 };
                 return Ok((
                     range,
@@ -1543,6 +1760,26 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
     })
 }
 
+fn is_int_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Int(_) => true,
+        ExprKind::Group(inner) => is_int_literal(inner),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+        } => is_int_literal(inner),
+        _ => false,
+    }
+}
+
+fn select_int_ty(left_expr: &Expr, left_ty: IntTy, right_ty: IntTy) -> IntTy {
+    if is_int_literal(left_expr) {
+        right_ty
+    } else {
+        left_ty
+    }
+}
+
 /// The type two float operands meet at: a `float64` literal beside a
 /// `float32` rounds to it.
 fn wider_of(a: FloatTy, b: FloatTy) -> FloatTy {
@@ -1555,7 +1792,23 @@ fn wider_of(a: FloatTy, b: FloatTy) -> FloatTy {
 
 /// A MIR function name without the type arguments of a specialized copy.
 pub(super) fn base_name(name: &str) -> &str {
-    name.split('[').next().unwrap_or(name)
+    let Some(without_close) = name.strip_suffix(']') else {
+        return name;
+    };
+    let mut depth = 1usize;
+    for (idx, ch) in without_close.char_indices().rev() {
+        match ch {
+            ']' => depth += 1,
+            '[' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &name[..idx];
+                }
+            }
+            _ => {}
+        }
+    }
+    name
 }
 
 fn public_name(name: &str) -> String {

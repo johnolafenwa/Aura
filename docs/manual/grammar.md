@@ -101,6 +101,7 @@ Several words are contextual:
 | `is` | After a comparison operand, forms the `is [not] None` test. Elsewhere it is an ordinary identifier. |
 | `dyn` | In a type, `dyn` followed by a trait name forms a trait object type. Elsewhere it is an ordinary identifier. It cannot name a class, enum, trait, or type alias. |
 | `export` | At module level, `export` followed by a string starts an exported function declaration. Elsewhere it is an ordinary identifier. |
+| `by` | After an implementation target, introduces the field supplying the trait. |
 | `lambda` | Lexed as an identifier, but introduces a lambda at the start of an expression. Member and named-argument positions may still use the spelling. |
 
 `copy`, `self`, `None`, `set`, `Self`, and `_` are lexed as identifiers. They
@@ -234,8 +235,7 @@ comma.
 -> @
 ```
 
-`@` begins a decorator line above a module-level function, or the
-`@property` marker of a class method.
+`@` begins a decorator line above a module function or class method. Class methods also use `@property` and `@name.setter` as accessor markers.
 There is no semicolon, assignment expression, unary plus, or lambda arrow.
 
 ## Modules And Imports
@@ -245,10 +245,18 @@ module = [ docstring ], { module-element }, EOF ;
 
 docstring = TRIPLE_STRING, NEWLINE ;
 
-module-element = import-declaration | module-constant | item | statement ;
+module-element = import-declaration | module-constant | module-asm | item
+               | conditional-module-suite | statement ;
+
+conditional-module-suite
+    = "if", expression, ":", module-suite,
+      { "elif", expression, ":", module-suite },
+      [ "else", ":", module-suite ] ;
+
+module-suite = NEWLINE, INDENT, module-element, { module-element }, DEDENT ;
 
 module-constant
-    = [ "public" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
+    = [ "public" ], [ "const" | "mut" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
 
 import-declaration
     = "import", identifier-path, [ "as", import-alias ], NEWLINE
@@ -263,6 +271,8 @@ import-alias = IDENT ;
 identifier-path = identifier, { ".", identifier } ;
 identifier      = IDENT | "from" ;
 ```
+
+In a declaration module or a file with an explicit entry function, a leading `mut` binding declares writable module storage. Freestanding builds accept these cells. In an entry script without an explicit entry function, a plain `mut` starts the executable statements and declares a script local.
 
 Imports, module constants, items, and executable top-level statements may be
 interleaved syntactically. They still run in a fixed category order:
@@ -285,6 +295,21 @@ identity, or package resolution path.
 A parenthesized import list may span physical lines and may end with a
 trailing comma. Wildcard imports and relative-dot imports are not part of the
 grammar.
+
+### Freestanding assembly and attributes
+
+```ebnf
+module-asm = "module_asm", "(", string-literal, ")", statement-end ;
+asm-statement = "asm", "(", string-literal, { ",", asm-clause }, ")", statement-end ;
+asm-clause = ("input" | "output"), "(", string-literal, ",", expression, ")"
+           | ("clobber" | "options"), "(", string-literal, { ",", string-literal }, ")" ;
+machine-attribute = "@", "machine", ".", identifier, [ "(", literal, ")" ], NEWLINE ;
+```
+
+An output expression must name a mutable scalar. A machine attribute
+precedes a module function or, for section and alignment, a module cell
+or typed scalar constant. The allowed attribute names, argument values and target
+constraints appear in [Freestanding Builds](/manual/freestanding).
 
 ## Items
 
@@ -316,11 +341,13 @@ extern-opaque-declaration
       [ "drop", identifier ], NEWLINE ;
 
 extern-aggregate-declaration
-    = "extern", STRING, ( "class" | "union" ), identifier, ":", NEWLINE,
+    = "extern", STRING, ( { c-layout-modifier }, "class" | "union" ), identifier, ":", NEWLINE,
       INDENT, [ docstring ], extern-member, { extern-member }, DEDENT ;
 
+c-layout-modifier = "packed" | "align", "(", INTEGER, ")" ;
+
 extern-member
-    = [ "public" ], identifier, ":", extern-field-type, NEWLINE, [ docstring ]
+    = [ "public" ], identifier, ":", extern-field-type, [ "bits", "(", INTEGER, ")" ], NEWLINE, [ docstring ]
     | "pass", NEWLINE ;
 
 extern-field-type
@@ -368,7 +395,8 @@ type-atom
       [ "?" ] ;
 
 type-primary
-    = identifier-path, [ "[", type-list, "]" ]
+    = "fixed", "[", type, ",", INTEGER, "]"
+    | identifier-path, [ "[", type-list, "]" ]
     | trait-object-type
     | grouped-type
     | tuple-type
@@ -510,11 +538,21 @@ class-declaration
       | class-member, { class-member } ),
       DEDENT ;
 
+conditional-class-suite
+    = "if", expression, ":", member-suite,
+      { "elif", expression, ":", member-suite },
+      [ "else", ":", member-suite ] ;
+
+member-suite = NEWLINE, INDENT, class-member, { class-member }, DEDENT ;
+
 class-member
-    = "pass", NEWLINE
+    = conditional-class-suite
+    | "pass", NEWLINE
     | [ "public" ], field-declaration
     | [ "public" ], method-declaration
-    | "@", "property", NEWLINE, [ "public" ], method-declaration ;
+    | "@", "property", NEWLINE, [ "public" ], method-declaration
+    | "@", identifier, ".", "setter", NEWLINE, [ "public" ], method-declaration
+    | decorator, { decorator }, [ "public" ], method-declaration ;
 
 field-declaration
     = identifier, ":", type,
@@ -527,7 +565,7 @@ start on the line directly after the field. A class body whose only entry is a
 docstring is an empty class, the same as `pass`.
 
 `copy` is contextual and is recognized only immediately before `class`.
-`property` after `@` is the only accepted marker name in a class body.
+The property markers take no arguments and each occupies a line of its own.
 A method named `__init__` is the class's initializer. It uses the ordinary
 method grammar. Fields and methods may be interleaved. `pass` permits an otherwise empty class
 body. A comment-only body is not a suite.
@@ -617,10 +655,7 @@ interpreted as an ordinary parameter. Use one of the receiver forms above.
 Call sites pass the value directly. They never prefix an argument with a
 capability.
 
-A `decorator` line starts at column 0 and holds one expression. Comment lines
-and blank lines may sit between decorator lines and the definition. Any other
-line ends the group and reports `AU2047`. Only a module-level function takes
-decorators. [Decorators](/manual/functions#decorators) gives the meaning.
+A `decorator` line is indented to match the function or method definition it precedes. It holds one expression. Comment lines and blank lines may sit between decorator lines and the definition. [Decorators](/manual/functions#decorators) gives the meaning.
 
 Bare means shared access for every type, including declaration-known copy
 types. An ordinary return type annotation is an owned return. A view
@@ -658,7 +693,7 @@ docstring-suite = INDENT, docstring, DEDENT ;
 impl-declaration
     = "impl", [ bounded-type-parameters ],
       identifier-path, [ "[", type-list, "]" ],
-      "for", type,
+      "for", type, [ "by", identifier ],
       ( NEWLINE
       | ":", NEWLINE, INDENT, impl-member, { impl-member }, DEDENT ) ;
 
@@ -667,8 +702,7 @@ impl-member
     | method-declaration ;
 ```
 
-An implementation without `:` and a suite asks the compiler to derive its
-methods. Only `json.Codec` can be derived.
+An implementation with `by` forwards missing methods to the named field. An implementation with neither `by` nor a suite asks the compiler to derive its methods. The derivable traits are `json.Codec` and `tensor.Module`.
 
 Trait-declaration type parameters use the plain form. Bounds on them are
 expressed through supertraits or method constraints, not inline in the trait
@@ -693,7 +727,8 @@ suite
     | INDENT, docstring, { statement }, DEDENT ;
 
 statement
-    = local-function-statement
+    = asm-statement
+    | local-function-statement
     | assignment-statement
     | view-statement
     | return-statement
@@ -1278,15 +1313,21 @@ instead of risking host stack exhaustion:
 These are observable implementation limits of Aura 0.17. Inputs that exceed
 them must be rejected cleanly.
 
-## Syntax Not In Aura 0.17
+## Syntax Not In Aura
+
+Conditional declarations use the same indented suites as ordinary control flow. [Compile-Time Evaluation](/manual/compile-time) defines which conditions select declarations.
 
 The grammar intentionally excludes:
 
+- macros, preprocessor directives such as `#ifdef`, and function-local `const` bindings
+- task-local declaration syntax, pointer dereference operators and lexical `unsafe` blocks
+- variable-length inline arrays, zero-width C bit-fields and anonymous C bit-fields
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline f-strings
-- local item declarations, attributes, and decorators on classes, enums,
-  methods, or local functions
+- class inheritance
+- local item declarations, attributes, and decorators on classes, enums, or local functions
+- machine attributes outside the freestanding declarations described above
 - wildcard and relative-dot import syntax
 - `dict`, `set`, and range patterns
 - call-site capability annotations

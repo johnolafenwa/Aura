@@ -129,16 +129,17 @@ fn program_defines_enum(enum_name: &str) -> bool {
 }
 
 /// Whether a payload of type `ty` lies in its variant's block rather than
-/// in a box of its own: a scalar.
+/// in a box of its own: a scalar, or `None`, which takes no room there.
 fn payload_lies_inline(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Named(name, args) if args.is_empty() && matches!(
-            name.as_str(),
-            "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64"
-                | "float32" | "float64" | "bool"
+    matches!(ty, Type::Unit)
+        || matches!(
+            ty,
+            Type::Named(name, args) if args.is_empty() && matches!(
+                name.as_str(),
+                "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64"
+                    | "float32" | "float64" | "bool"
+            )
         )
-    )
 }
 
 impl PlainRecords {
@@ -474,7 +475,7 @@ impl FunctionCompiler<'_> {
 
     /// Reads payload `index` of variant `variant_name` from the variant box
     /// `scrutinee` into a value of direct type `target`: a scalar where it
-    /// lies, or a new reference to the payload's box, when the variant keeps
+    /// lies, or a fresh copy of the payload's box, when the variant keeps
     /// its payloads in place, and with `slow` otherwise. `None` when the
     /// enum is not kept in place or generated code cannot read the payload
     /// as `target`. A read for a lent payload (see `lend_element`) holds the
@@ -612,7 +613,10 @@ impl FunctionCompiler<'_> {
                 if lend {
                     vec![boxed, self.builder.iconst(types::I64, 1)]
                 } else {
-                    vec![self.retain_opaque_handle(boxed)]
+                    let copy = self
+                        .builder
+                        .call(self.runtime[RuntimeFn::InstanceCopyField], &[boxed]);
+                    vec![copy.results[0]]
                 }
             }
         };

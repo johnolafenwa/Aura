@@ -38,6 +38,16 @@ const IDLE_TIMEOUT: StdDuration = StdDuration::from_secs(90);
 const MAX_REDIRECT_DRAIN_BYTES: usize = 256 * 1024;
 /// The most redirects a request may ask to follow.
 const MAX_REDIRECT_LIMIT: i64 = 100;
+/// The most interim (1xx) responses read before the final one.
+const MAX_INTERIM_RESPONSES: usize = 32;
+/// The most bytes of trailer fields a chunked body may end with.
+const MAX_TRAILER_BYTES: usize = 64 * 1024;
+/// The most compressed bytes decoded in one step. Deflate turns a byte
+/// into at most about a thousand, so one step adds at most about 4 MiB and
+/// the size limits are checked between steps.
+const DECODE_STEP_BYTES: usize = 4 * 1024;
+/// The most bytes of `data` one server-sent event may hold.
+const MAX_EVENT_DATA_BYTES: usize = MAX_LINE_BYTES;
 
 /// What identifies a server a connection can be reused for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,8 +106,12 @@ impl Transport {
 
     /// Whether an idle connection has anything to read: the server closed
     /// it or sent bytes no request asked for. Either way it cannot carry
-    /// another request.
-    fn is_stale(&self) -> bool {
+    /// another request. A TLS connection may also hold such bytes already
+    /// read off the socket and decrypted, which the socket does not show.
+    fn is_stale(&mut self) -> bool {
+        if self.holds_tls_plaintext() {
+            return true;
+        }
         let handle = match self {
             Transport::Plain(stream) => stream.as_raw_fd(),
             Transport::Tls(Some(stream)) => stream.sock.as_raw_fd(),
@@ -106,6 +120,19 @@ impl Transport {
         // A zero timeout returns at once. A poll the host refuses also
         // marks the connection stale, since it cannot be trusted.
         host_io::poll_one(handle, host_io::POLLIN, 0).unwrap_or(true)
+    }
+
+    /// Whether the TLS session holds bytes it has received and not yet
+    /// handed out, or cannot tell.
+    fn holds_tls_plaintext(&mut self) -> bool {
+        match self {
+            Transport::Plain(_) => false,
+            Transport::Tls(Some(stream)) => stream
+                .conn
+                .process_new_packets()
+                .map_or(true, |state| state.plaintext_bytes_to_read() > 0),
+            Transport::Tls(None) => true,
+        }
     }
 }
 
@@ -174,7 +201,7 @@ fn pool_take(key: &PoolKey) -> Option<Connection> {
             if pool[index].since.elapsed() > IDLE_TIMEOUT {
                 dropped.push(pool.remove(index));
             } else if found.is_none() && pool[index].connection.key == *key {
-                let idle = pool.remove(index);
+                let mut idle = pool.remove(index);
                 if idle.connection.transport.is_stale() {
                     dropped.push(idle);
                 } else {
@@ -192,8 +219,10 @@ fn pool_take(key: &PoolKey) -> Option<Connection> {
     })
 }
 
-fn pool_put(connection: Connection) {
-    if !connection.unread().is_empty() {
+fn pool_put(mut connection: Connection) {
+    // Bytes past the end of the response, in the buffer or in the TLS
+    // session, would be read as the next response.
+    if !connection.unread().is_empty() || connection.transport.holds_tls_plaintext() {
         return;
     }
     let mut dropped = Vec::new();
@@ -423,6 +452,8 @@ pub struct HttpBody {
     closed: bool,
     last_event_id: String,
     at_stream_start: bool,
+    /// The trailer bytes read so far.
+    trailer_bytes: usize,
 }
 
 impl HttpBody {
@@ -467,18 +498,22 @@ impl HttpBody {
     fn finish(&mut self, complete: bool) -> io::Result<()> {
         self.framing = Framing::Done;
         let connection = self.connection.take();
+        // The body is checked whole before its connection is kept.
+        let decoded = if complete && self.decoder_fed {
+            match self.decoder.take() {
+                Some(mut decoder) => decoder.finish(&mut self.decoded),
+                None => Ok(()),
+            }
+        } else {
+            Ok(())
+        };
+        self.decoder = None;
         if let Some(connection) = connection {
-            if complete && self.reusable {
+            if complete && self.reusable && decoded.is_ok() {
                 pool_put(connection);
             }
         }
-        if complete && self.decoder_fed {
-            if let Some(mut decoder) = self.decoder.take() {
-                decoder.finish(&mut self.decoded)?;
-            }
-        }
-        self.decoder = None;
-        Ok(())
+        decoded
     }
 
     fn fail<T>(&mut self, error: io::Error) -> io::Result<T> {
@@ -486,6 +521,16 @@ impl HttpBody {
         self.connection = None;
         self.decoder = None;
         Err(error)
+    }
+
+    /// The most of `unread` bytes one step takes: all of them, or a few
+    /// when they are compressed, so that a step decodes a bounded amount.
+    fn step_bytes(&self, unread: usize) -> usize {
+        if self.decoder.is_some() {
+            unread.min(DECODE_STEP_BYTES)
+        } else {
+            unread
+        }
     }
 
     fn feed(&mut self, count: usize) -> io::Result<()> {
@@ -557,6 +602,7 @@ impl HttpBody {
                         }
                         continue;
                     }
+                    let unread = self.step_bytes(unread);
                     let count = usize::try_from(remaining).map_or(unread, |r| r.min(unread));
                     self.feed(count)?;
                     let left = remaining - count as u64;
@@ -585,20 +631,28 @@ impl HttpBody {
                         }
                         continue;
                     }
-                    self.feed(unread)?;
+                    self.feed(self.step_bytes(unread))?;
                     return Ok(true);
                 }
                 Framing::ChunkSize => {
                     let Some(line) = self.chunk_line(deadline, cancellation)? else {
                         continue;
                     };
-                    let digits = line.split(';').next().unwrap_or("").trim();
+                    // Bare hex digits: no sign and no space, which readers
+                    // differ on.
+                    let (digits, extension) = line.split_once(';').unwrap_or((&line, ""));
                     let size = u64::from_str_radix(digits, 16)
                         .ok()
                         .filter(|_| {
                             !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_hexdigit())
                         })
                         .ok_or_else(|| invalid_chunk("a chunk size is not a hex number"))?;
+                    if extension
+                        .bytes()
+                        .any(|byte| byte != b'\t' && !(0x20..0x7f).contains(&byte))
+                    {
+                        return Err(invalid_chunk("a chunk extension holds a control byte"));
+                    }
                     self.framing = if size == 0 {
                         Framing::Trailers
                     } else {
@@ -627,6 +681,13 @@ impl HttpBody {
                         self.finish(true)?;
                         return Ok(false);
                     }
+                    self.trailer_bytes = self.trailer_bytes.saturating_add(line.len() + 2);
+                    if self.trailer_bytes > MAX_TRAILER_BYTES {
+                        return Err(invalid_chunk("the trailer section is too long"));
+                    }
+                    if !line.contains(':') {
+                        return Err(invalid_chunk("a trailer line is not a field"));
+                    }
                 }
             }
         }
@@ -650,6 +711,17 @@ impl HttpBody {
             }
             return Ok(None);
         };
+        if end > MAX_CHUNK_LINE_BYTES {
+            return Err(invalid_chunk("a framing line is too long"));
+        }
+        // A bare CR or LF inside a framing line is not a line end to every
+        // reader, so it is refused.
+        if unread[..end]
+            .iter()
+            .any(|byte| matches!(byte, b'\r' | b'\n'))
+        {
+            return Err(invalid_chunk("a framing line holds a bare CR or LF"));
+        }
         let line = std::str::from_utf8(&unread[..end])
             .map_err(|_| invalid_chunk("a framing line is not text"))?
             .to_string();
@@ -848,6 +920,14 @@ impl HttpBody {
                 "event" => event = value.to_string(),
                 "data" => {
                     has_data = true;
+                    if data.len().saturating_add(value.len()) >= MAX_EVENT_DATA_BYTES {
+                        return self.fail(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "a server-sent event holds more than {MAX_EVENT_DATA_BYTES} bytes of data"
+                            ),
+                        ));
+                    }
                     data.push_str(value);
                     data.push('\n');
                 }
@@ -1081,6 +1161,7 @@ fn exchange(
         .transport
         .write_all(request, deadline, cancellation)
         .map_err(|error| (error, false))?;
+    let mut interim = 0usize;
     loop {
         let head = loop {
             let parsed =
@@ -1123,10 +1204,36 @@ fn exchange(
                 ))
             }
             // An interim response; the real one follows.
-            100..=199 => continue,
+            100..=199 => {
+                interim += 1;
+                if interim > MAX_INTERIM_RESPONSES {
+                    return Err((
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "the server sent more than {MAX_INTERIM_RESPONSES} interim responses"
+                            ),
+                        ),
+                        true,
+                    ));
+                }
+                continue;
+            }
             _ => return Ok(head),
         }
     }
+}
+
+/// Refuses a redirect from a secure request to a clear-text one: the
+/// request, its body and its headers would travel in clear text.
+fn check_redirect_scheme(from: &PoolKey, to: &PoolKey, location: &str) -> io::Result<()> {
+    if from.tls && !to.tls {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("refused a redirect from https to `{location}`"),
+        ));
+    }
+    Ok(())
 }
 
 fn is_redirect(status: i32) -> bool {
@@ -1192,6 +1299,7 @@ fn begin_body(
         closed: false,
         last_event_id: String::new(),
         at_stream_start: true,
+        trailer_bytes: 0,
     };
     if response.framing == Framing::Length(0) {
         response.finish(true)?;
@@ -1314,6 +1422,7 @@ pub fn http_send(
                 format!("redirect to an unsupported URL `{next}`"),
             )
         })?;
+        check_redirect_scheme(&key, &next_key, next.as_str())?;
         let same_origin =
             next_key.tls == key.tls && next_key.host == key.host && next_key.port == key.port;
         if !same_origin {

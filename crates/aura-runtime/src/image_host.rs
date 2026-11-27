@@ -230,6 +230,9 @@ pub fn evaluate_image_builtin(name: &str, data: &Value, numbers: &[i64]) -> Resu
             let pixels = bytes_of(data, name)?;
             let (width, height, channels) = layout(numbers, 1, pixels.len(), name)?;
             let option = numbers[4];
+            crate::builtin_limit::check(
+                (pixels.len() as u64).saturating_mul(2).saturating_add(1024),
+            )?;
             let result = match Format::from_code(numbers[0]) {
                 Some(Format::Png) => {
                     if !(0..=9).contains(&option) {
@@ -277,6 +280,7 @@ pub fn evaluate_image_builtin(name: &str, data: &Value, numbers: &[i64]) -> Resu
                     format!("requires 1 to 4 channels, found `{target}`"),
                 ));
             }
+            crate::builtin_limit::check((pixels.len() / channels) as u64 * target as u64)?;
             Ok(bytes_value(image_codec::convert_channels(
                 &pixels,
                 channels,
@@ -289,9 +293,31 @@ pub fn evaluate_image_builtin(name: &str, data: &Value, numbers: &[i64]) -> Resu
             let (width, height, channels) = layout(numbers, 0, pixels.len(), name)?;
             let new_width = size(numbers, 3, 1, name, "a width")?;
             let new_height = size(numbers, 4, 1, name, "a height")?;
+            if crate::builtin_limit::allowance().is_some() {
+                // Two filter axes own starting indices and up to four taps per
+                // source/target position. A separable pass owns f32 samples.
+                let target = (new_width as u64).saturating_mul(new_height as u64);
+                let intermediate = (width as u64)
+                    .saturating_mul(new_height as u64)
+                    .max((new_width as u64).saturating_mul(height as u64));
+                let weights = (width.max(new_width) as u64)
+                    .saturating_add(height.max(new_height) as u64)
+                    .saturating_mul(32);
+                crate::builtin_limit::check(
+                    weights
+                        .saturating_add(
+                            intermediate
+                                .saturating_add(target)
+                                .saturating_mul(channels as u64)
+                                .saturating_mul(4),
+                        )
+                        .saturating_add(target.saturating_mul(channels as u64)),
+                )?;
+            }
             let fits = new_width
                 .checked_mul(new_height)
-                .is_some_and(|pixels| pixels as i64 <= image_codec::MAX_PIXEL_LIMIT);
+                .and_then(|pixels| i64::try_from(pixels).ok())
+                .is_some_and(|pixels| pixels <= image_codec::MAX_PIXEL_LIMIT);
             if !fits {
                 return Err(image_error(
                     name,
@@ -304,9 +330,18 @@ pub fn evaluate_image_builtin(name: &str, data: &Value, numbers: &[i64]) -> Resu
             let filter = Filter::from_code(numbers[5]).ok_or_else(|| {
                 image_error(name, format!("knows no filter numbered `{}`", numbers[5]))
             })?;
-            Ok(bytes_value(image_codec::resize(
+            let resized = match image_codec::resize(
                 &pixels, width, height, channels, new_width, new_height, filter,
-            )))
+            ) {
+                Ok(resized) => resized,
+                Err(error) => {
+                    return Err(Diagnostic::coded(
+                        "AU4005",
+                        format!("`image.resize` failed: {error}"),
+                    ))
+                }
+            };
+            Ok(bytes_value(resized))
         }
         "image::__aura_crop" => {
             expect_numbers(name, numbers, 7)?;
@@ -330,6 +365,7 @@ pub fn evaluate_image_builtin(name: &str, data: &Value, numbers: &[i64]) -> Resu
                     ),
                 ));
             }
+            crate::builtin_limit::check((crop_width * crop_height * channels) as u64)?;
             Ok(bytes_value(image_codec::crop(
                 &pixels,
                 width,
@@ -354,6 +390,7 @@ pub fn evaluate_image_builtin(name: &str, data: &Value, numbers: &[i64]) -> Resu
             expect_numbers(name, numbers, 4)?;
             let pixels = bytes_of(data, name)?;
             let (width, height, channels) = layout(numbers, 0, pixels.len(), name)?;
+            crate::builtin_limit::check((pixels.len() as u64).saturating_mul(4))?;
             let planes = numbers[3] != 0;
             let values = image_codec::to_floats(&pixels, channels, planes);
             let shape: Box<[usize]> = if planes {

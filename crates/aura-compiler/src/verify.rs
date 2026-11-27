@@ -12,6 +12,10 @@
 //! unknown (the solver gave up), or unsupported (the step is outside the
 //! subset the encoding models). Only proved obligations count as proof.
 
+#[path = "verify_bits.rs"]
+mod bits;
+#[path = "verify_cache.rs"]
+mod cache;
 #[path = "verify_closures.rs"]
 mod closures;
 #[path = "verify_collections.rs"]
@@ -29,6 +33,8 @@ mod guard;
 mod integers;
 #[path = "verify_recovery.rs"]
 mod recovery;
+#[path = "verify_raw_memory.rs"]
+mod raw_memory;
 #[path = "verify_shapes.rs"]
 mod shapes;
 #[path = "verify_smt.rs"]
@@ -337,7 +343,7 @@ pub(crate) struct VerifyContext<'a> {
     classes: BTreeMap<&'a str, &'a MirClass>,
     enums: BTreeMap<&'a str, &'a MirEnum>,
     decls: BTreeMap<String, &'a FunctionDecl>,
-    extern_decls: BTreeMap<String, &'a FunctionDecl>,
+    extern_decls: BTreeMap<(String, String), &'a FunctionDecl>,
     spec_defs: BTreeMap<String, &'a FunctionDecl>,
     decl_modules_by_ptr: BTreeMap<usize, &'a str>,
     spec_return_by_ptr: BTreeMap<usize, &'a Type>,
@@ -349,6 +355,11 @@ pub(crate) struct VerifyContext<'a> {
     /// The trait method each implementation method implements, by MIR
     /// function name.
     implemented: BTreeMap<String, &'a FunctionDecl>,
+    /// The module that wrote each `impl Trait for Type` method, by MIR base
+    /// function name. Inherited default methods lower in the trait's module
+    /// so their body resolves names there, while ownership belongs to the
+    /// implementation's module.
+    impl_owners: BTreeMap<String, &'a str>,
     /// The contract of each callable alias that states one, by name.
     callable_contracts: BTreeMap<String, &'a crate::sema::FunctionInfo>,
     /// The callable alias with a contract that each class field declared
@@ -373,6 +384,8 @@ impl<'a> VerifyContext<'a> {
         let mut field_contracts = BTreeMap::new();
         let mut trait_methods = BTreeMap::new();
         let mut impl_methods = BTreeMap::new();
+        let mut impl_methods_by_name = BTreeMap::new();
+        let mut impl_owners = BTreeMap::new();
         let mut module_paths = BTreeSet::new();
         let mut module_aliases = BTreeMap::new();
 
@@ -396,7 +409,7 @@ impl<'a> VerifyContext<'a> {
                         .or_insert(decl);
                 }
                 extern_decls
-                    .entry(function.decl.link_name().to_string())
+                    .entry((function.module_name.clone(), function.decl.name.clone()))
                     .or_insert(decl);
             }
         }
@@ -544,23 +557,61 @@ impl<'a> VerifyContext<'a> {
                 trait_methods.insert(format!("{trait_name}.{method}"), &method_info.decl);
             }
         }
+        fn resolve_trait_info<'a>(
+            program: &'a Program,
+            ns: Option<&'a crate::sema::ModuleNamespace>,
+            trait_name: &str,
+        ) -> Option<&'a crate::sema::TraitInfo> {
+            let short_trait = trait_name.rsplit('.').next().unwrap_or(trait_name);
+            if let Some(ns) = ns {
+                if let Some(info) = [
+                    ns.all_traits.get(trait_name),
+                    ns.traits.get(trait_name),
+                    ns.all_traits.get(short_trait),
+                    ns.traits.get(short_trait),
+                ]
+                .into_iter()
+                .flatten()
+                .next()
+                {
+                    return Some(info);
+                }
+            }
+            if let Some(info) = program.traits.get(trait_name) {
+                return Some(info);
+            }
+            if let Some((module_path, item)) = trait_name.rsplit_once('.') {
+                if let Some(target_ns) = program.module_registry.get(module_path) {
+                    return target_ns
+                        .all_traits
+                        .get(item)
+                        .or_else(|| target_ns.traits.get(item));
+                }
+            }
+            None
+        }
+
         for trait_impl in &program.trait_impls {
+            let trait_info = resolve_trait_info(program, None, &trait_impl.trait_name);
             for (method_name, method) in &trait_impl.methods {
-                decl_modules_by_ptr.insert(
-                    std::ptr::from_ref(&method.decl) as usize,
-                    trait_impl.module_name.as_str(),
-                );
-                let trait_method = program
-                    .traits
-                    .get(&trait_impl.trait_name)
+                let inherited = !trait_impl
+                    .decl
+                    .methods
+                    .iter()
+                    .any(|written| written.name == method.decl.name);
+                let trait_method = trait_info
                     .and_then(|info| info.methods.get(method_name))
                     .map(|info| &info.decl);
+                let decl_module = match trait_info {
+                    Some(info) if inherited => info.module_name.as_str(),
+                    _ => trait_impl.module_name.as_str(),
+                };
+                decl_modules_by_ptr.insert(std::ptr::from_ref(&method.decl) as usize, decl_module);
+                let qualified_name = crate::mir::trait_impl_method_name(trait_impl, method_name);
+                impl_owners.insert(qualified_name.clone(), trait_impl.module_name.as_str());
+                impl_methods_by_name.insert(qualified_name, (&method.decl, trait_method));
                 impl_methods.insert(
-                    (
-                        trait_impl.module_name.as_str(),
-                        method.decl.span.line,
-                        method.decl.span.column,
-                    ),
+                    (decl_module, method.decl.span.line, method.decl.span.column),
                     (&method.decl, trait_method),
                 );
             }
@@ -574,7 +625,7 @@ impl<'a> VerifyContext<'a> {
             module_paths: &mut BTreeSet<String>,
             module_aliases: &mut BTreeMap<(String, String), String>,
             decls: &mut BTreeMap<String, &'a FunctionDecl>,
-            extern_decls: &mut BTreeMap<String, &'a FunctionDecl>,
+            extern_decls: &mut BTreeMap<(String, String), &'a FunctionDecl>,
             spec_defs: &mut BTreeMap<String, &'a FunctionDecl>,
             decl_modules_by_ptr: &mut BTreeMap<usize, &'a str>,
             spec_return_by_ptr: &mut BTreeMap<usize, &'a Type>,
@@ -586,6 +637,11 @@ impl<'a> VerifyContext<'a> {
                 (&'a str, usize, usize),
                 (&'a FunctionDecl, Option<&'a FunctionDecl>),
             >,
+            impl_methods_by_name: &mut BTreeMap<
+                String,
+                (&'a FunctionDecl, Option<&'a FunctionDecl>),
+            >,
+            impl_owners: &mut BTreeMap<String, &'a str>,
         ) {
             if !visited.insert((ns.path.clone(), std::ptr::from_ref(ns) as usize)) {
                 return;
@@ -623,7 +679,7 @@ impl<'a> VerifyContext<'a> {
                         ))
                         .or_insert(decl);
                     extern_decls
-                        .entry(extern_fn.decl.link_name().to_string())
+                        .entry((extern_fn.module_name.clone(), extern_fn.decl.name.clone()))
                         .or_insert(decl);
                 }
             }
@@ -676,34 +732,32 @@ impl<'a> VerifyContext<'a> {
                 }
             }
             for trait_impl in &ns.trait_impls {
+                let trait_info = resolve_trait_info(program, Some(ns), &trait_impl.trait_name);
                 for (method_name, method) in &trait_impl.methods {
-                    decl_modules_by_ptr.insert(
-                        std::ptr::from_ref(&method.decl) as usize,
-                        trait_impl.module_name.as_str(),
-                    );
-                    let short_trait = trait_impl
-                        .trait_name
-                        .rsplit('.')
-                        .next()
-                        .unwrap_or(&trait_impl.trait_name);
-                    let trait_method = [
-                        ns.all_traits.get(&trait_impl.trait_name),
-                        ns.traits.get(&trait_impl.trait_name),
-                        ns.all_traits.get(short_trait),
-                        ns.traits.get(short_trait),
-                        program.traits.get(&trait_impl.trait_name),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .next()
-                    .and_then(|info| info.methods.get(method_name))
-                    .map(|info| &info.decl);
+                    let inherited = !trait_impl
+                        .decl
+                        .methods
+                        .iter()
+                        .any(|written| written.name == method.decl.name);
+                    let trait_method = trait_info
+                        .and_then(|info| info.methods.get(method_name))
+                        .map(|info| &info.decl);
+                    let decl_module = match trait_info {
+                        Some(info) if inherited => info.module_name.as_str(),
+                        _ => trait_impl.module_name.as_str(),
+                    };
+                    decl_modules_by_ptr
+                        .insert(std::ptr::from_ref(&method.decl) as usize, decl_module);
+                    let qualified_name =
+                        crate::mir::trait_impl_method_name(trait_impl, method_name);
+                    impl_owners
+                        .entry(qualified_name.clone())
+                        .or_insert(trait_impl.module_name.as_str());
+                    impl_methods_by_name
+                        .entry(qualified_name)
+                        .or_insert((&method.decl, trait_method));
                     impl_methods
-                        .entry((
-                            trait_impl.module_name.as_str(),
-                            method.decl.span.line,
-                            method.decl.span.column,
-                        ))
+                        .entry((decl_module, method.decl.span.line, method.decl.span.column))
                         .or_insert((&method.decl, trait_method));
                 }
             }
@@ -724,6 +778,8 @@ impl<'a> VerifyContext<'a> {
                     field_contracts,
                     trait_methods,
                     impl_methods,
+                    impl_methods_by_name,
+                    impl_owners,
                 );
             }
         }
@@ -750,6 +806,8 @@ impl<'a> VerifyContext<'a> {
                 &mut field_contracts,
                 &mut trait_methods,
                 &mut impl_methods,
+                &mut impl_methods_by_name,
+                &mut impl_owners,
             );
         }
 
@@ -757,14 +815,19 @@ impl<'a> VerifyContext<'a> {
         for function in &module.functions {
             let name = spec::base_name(&function.name);
             if name.contains(" for ") {
-                if let Some((decl, trait_method)) = impl_methods.get(&(
-                    function.module_name.as_str(),
-                    function.span.line,
-                    function.span.column,
-                )) {
+                let matched = impl_methods_by_name.get(name).copied().or_else(|| {
+                    impl_methods
+                        .get(&(
+                            function.module_name.as_str(),
+                            function.span.line,
+                            function.span.column,
+                        ))
+                        .copied()
+                });
+                if let Some((decl, trait_method)) = matched {
                     decls.entry(name.to_string()).or_insert(decl);
                     if let Some(trait_method) = trait_method {
-                        implemented.insert(name.to_string(), *trait_method);
+                        implemented.insert(name.to_string(), trait_method);
                     }
                 }
             }
@@ -795,6 +858,7 @@ impl<'a> VerifyContext<'a> {
             module_aliases,
             trait_methods,
             implemented,
+            impl_owners,
             callable_contracts,
             field_contracts,
             frames: std::cell::OnceCell::new(),
@@ -839,7 +903,20 @@ impl<'a> VerifyContext<'a> {
             &candidates,
             &program.module_name,
             top_level.map(|function| function.name.as_str()),
+            |function| self.owner_module(function),
         )
+    }
+
+    pub(crate) fn impl_owner(&self, name: &str) -> Option<&'a str> {
+        self.impl_owners.get(spec::base_name(name)).copied()
+    }
+
+    pub(crate) fn owner_module<'b>(&self, function: &'b MirFunction) -> &'b str
+    where
+        'a: 'b,
+    {
+        self.impl_owner(&function.name)
+            .unwrap_or(function.module_name.as_str())
     }
 
     /// The class whose invariant the trait implementation method `name`
@@ -957,9 +1034,12 @@ impl<'a> VerifyContext<'a> {
         }
     }
 
-    /// The contract declaration of an `extern` function by its C link symbol.
-    pub(crate) fn extern_decl(&self, symbol: &str) -> Option<&'a FunctionDecl> {
-        self.extern_decls.get(symbol).copied()
+    /// The contract declaration of an `extern` function by its qualified Aura
+    /// declaration identity `(module_name, name)`.
+    pub(crate) fn extern_decl(&self, module_name: &str, name: &str) -> Option<&'a FunctionDecl> {
+        self.extern_decls
+            .get(&(module_name.to_string(), name.to_string()))
+            .copied()
     }
 
     /// The module where `decl` was written, when recorded.
@@ -1022,6 +1102,10 @@ impl<'a> VerifyContext<'a> {
     /// The contract of the callable alias `name`.
     pub(crate) fn alias_contract(&self, name: &str) -> Option<&'a crate::sema::FunctionInfo> {
         self.callable_contracts.get(name).copied()
+    }
+
+    pub(crate) fn has_erased_contracts(&self) -> bool {
+        !self.callable_contracts.is_empty() || !self.class_invariants.is_empty()
     }
 
     pub(crate) fn spec_def(&self, name: &str) -> Option<&'a FunctionDecl> {
@@ -1185,7 +1269,7 @@ fn generator_frame_function(function: &MirFunction) -> bool {
 /// Whether `function` is one the report covers: a function of the entry
 /// module that is not a `spec def`.
 fn verified_function(program: &Program, cx: &VerifyContext<'_>, function: &MirFunction) -> bool {
-    if function.module_name != program.module_name {
+    if cx.owner_module(function) != program.module_name {
         return false;
     }
     if function.name.contains("::__default_") || generator_frame_function(function) {
@@ -1209,14 +1293,76 @@ fn auxiliary_verified_function(
     cx: &VerifyContext<'_>,
     function: &MirFunction,
 ) -> bool {
-    if function.module_name == program.module_name {
-        if let Some((owner, _)) = function.name.split_once("::__default_") {
-            return !cx.decl(owner).is_some_and(|decl| decl.spec);
-        }
+    if let Some((owner, _)) = function.name.split_once("::__default_") {
+        let owner_module = cx
+            .impl_owner(owner)
+            .unwrap_or(function.module_name.as_str());
+        return owner_module == program.module_name
+            && !cx.decl(owner).is_some_and(|decl| decl.spec);
+    }
+    if cx.owner_module(function) == program.module_name {
         return false;
     }
-    !function.name.contains("::__default_")
-        && cx.decl(&function.name).is_some_and(|decl| decl.lemma)
+    cx.decl(&function.name).is_some_and(|decl| decl.lemma)
+}
+
+pub(crate) fn assembly_boundary(span: Span) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU4035",
+        span,
+        "the verifier cannot reason through assembly",
+    )
+}
+
+/// A builtin module can supply target-specific assembly routines alongside
+/// portable functions. Importing the portable part must still allow proofs.
+fn reached_assembly(program: &Program, module: &MirModule) -> Option<Diagnostic> {
+    let assembly: BTreeMap<_, _> = module
+        .functions
+        .iter()
+        .chain(&module.top_level)
+        .filter_map(|function| {
+            let span = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .find_map(|instruction| match instruction {
+                    crate::mir::Instruction::InlineAsm { span, .. } => Some(*span),
+                    _ => None,
+                })?;
+            Some((function.name.as_str(), span))
+        })
+        .collect();
+    if assembly.is_empty() {
+        return None;
+    }
+    let (functions, callees) = crate::mir::recursion::call_graph(module);
+    let mut pending: Vec<_> = functions
+        .iter()
+        .enumerate()
+        .filter(|(_, function)| function.module_name == program.module_name)
+        .collect();
+    let mut visited = vec![false; callees.len()];
+    while let Some((index, root)) = pending.pop() {
+        if std::mem::replace(&mut visited[index], true) {
+            continue;
+        }
+        if let Some((function, span)) = functions.get(index).and_then(|function| {
+            assembly
+                .get(function.name.as_str())
+                .map(|span| (*function, span))
+        }) {
+            if function.module_name == program.module_name {
+                return Some(assembly_boundary(*span));
+            }
+            return Some(assembly_boundary(root.span).with_note(format!(
+                "`{}` reaches assembly in `{}`",
+                root.name, function.name
+            )));
+        }
+        pending.extend(callees[index].iter().map(|&callee| (callee, root)));
+    }
+    None
 }
 
 /// Verifies every function of `program` whose MIR is `module`.
@@ -1225,6 +1371,17 @@ pub fn verify_module(
     module: &MirModule,
     options: &Options,
 ) -> std::result::Result<Report, Diagnostic> {
+    // Assembly can change memory that an Aura contract describes. An imported
+    // routine can affect a caller even when a function filter hides its body.
+    if let Some(span) = program.module.asm_span {
+        return Err(assembly_boundary(span));
+    }
+    if !module.foreign_link.module_asm.is_empty() {
+        return Err(assembly_boundary(Span::new(1, 1)));
+    }
+    if let Some(diagnostic) = reached_assembly(program, module) {
+        return Err(diagnostic);
+    }
     let command = smt::SolverCommand::find(options.solver.as_deref())
         .map_err(|message| Diagnostic::coded("AU5103", message))?;
     let cx = VerifyContext::new(program, module);
@@ -1245,22 +1402,42 @@ pub fn verify_module(
         BTreeMap::new();
     let mut proved_sites = BTreeSet::new();
     let mut disputed_keys = BTreeSet::new();
-    let mut erased_open = false;
+    let proof_cache = options
+        .cache_dir
+        .as_deref()
+        .and_then(cache::ProofCache::open);
+    let mut erased_open = options.prove_sites && options.function_filter.is_some();
     // The solver starts at the first function the cache cannot answer.
     let mut solver: Option<smt::Solver> = None;
     let mut rough_solver: Option<smt::Solver> = None;
     let mut sample_solver: Option<smt::Solver> = None;
     let mut second_solver: Option<smt::Solver> = None;
     let trace = options.trace;
+    let raw_effects = raw_memory::affected_functions(module);
     // The module body is verified like a function. A build that removes
-    // proved checks leaves it alone.
+    // proved checks runs it only for erased contract obligations.
     let at_calls = closures::checked_at_calls(program, &cx, module);
-    let top_level = module.top_level.iter().filter(|_| !options.prove_sites);
+    let top_level_name = module.top_level.as_ref().map(|f| f.name.as_str());
     let mut function_spans: BTreeMap<String, Span> = BTreeMap::new();
-    for function in module.functions.iter().chain(top_level) {
-        let is_primary = verified_function(program, &cx, function);
-        let is_auxiliary = !is_primary && auxiliary_verified_function(program, &cx, function);
-        if !is_primary && !is_auxiliary {
+    for function in module.functions.iter().chain(module.top_level.iter()) {
+        let is_top_level = top_level_name == Some(function.name.as_str());
+        let is_primary =
+            (!is_top_level || !options.prove_sites) && verified_function(program, &cx, function);
+        let is_auxiliary =
+            !is_primary && !is_top_level && auxiliary_verified_function(program, &cx, function);
+        // When removing proved checks, also check erased obligations of the
+        // module body and imported functions so an unverified caller cannot
+        // violate an erased callable contract or class invariant.
+        let is_erased_only = !is_primary
+            && !is_auxiliary
+            && options.prove_sites
+            && (is_top_level
+                || (cx.owner_module(function) != program.module_name
+                    && !generator_frame_function(function)
+                    && !spec::base_name(&function.name)
+                        .ends_with(&format!(".{}", crate::ast::CLASS_INVARIANT_METHOD))
+                    && !cx.decl(&function.name).is_some_and(|decl| decl.spec)));
+        if !is_primary && !is_auxiliary && !is_erased_only {
             continue;
         }
         // A closure checked where it is called is run on its own only for
@@ -1294,40 +1471,52 @@ pub fn verify_module(
             function.module_name.clone()
         };
         let mut exec = exec::Exec::new(&cx, function);
-        exec.prove_sites = options.prove_sites;
-        let entry = exec.entry_state();
-        exec.prove_weakened_requires(&entry);
-        let before = exec.facts.len();
-        exec.assume_entry_requires(&entry);
-        exec.assume_entry_invariant(&entry);
-        exec.assume_entry_parameters(&entry);
-        if exec.facts.len() > before {
-            exec.oblige(
-                ObligationKind::Satisfiable,
-                function.span,
-                format!("the contract `{public}` assumes on entry"),
-                "true",
-                exec::Goal::CanHold,
-            );
+        exec.prove_sites = options.prove_sites && !is_erased_only;
+        if raw_effects.contains(function.name.as_str()) {
+            exec.unsupported = Some("raw memory effects may change an aliased Aura value".into());
+        } else {
+            let entry = exec.entry_state();
+            exec.prove_weakened_requires(&entry);
+            let before = exec.facts.len();
+            exec.assume_entry_requires(&entry);
+            exec.assume_entry_invariant(&entry);
+            exec.assume_entry_parameters(&entry);
+            if exec.facts.len() > before {
+                exec.oblige(
+                    ObligationKind::Satisfiable,
+                    function.span,
+                    format!("the contract `{public}` assumes on entry"),
+                    "true",
+                    exec::Goal::CanHold,
+                );
+            }
+            if let Some(target) = cx.charged(&function.name) {
+                let erasing = exec.erasing;
+                exec.erasing = true;
+                exec.oblige(
+                    ObligationKind::ClassInvariant,
+                    function.span,
+                    format!(
+                        "class invariant holds wherever `{public}` may call `{}`, which assumes it",
+                        crate::mir::public_function_name(target)
+                    ),
+                    &entry.pc,
+                    exec::Goal::Unsupported(
+                        "a call on a union, through a function value, or on a value of a type parameter does not prove the receiver's class invariant".into(),
+                    ),
+                );
+                exec.erasing = erasing;
+            }
+            exec.run(entry);
         }
-        if let Some(target) = cx.charged(&function.name) {
-            exec.oblige(
-                ObligationKind::ClassInvariant,
-                function.span,
-                format!(
-                    "class invariant holds wherever `{public}` may call `{}`, which assumes it",
-                    crate::mir::public_function_name(target)
-                ),
-                &entry.pc,
-                exec::Goal::Unsupported(
-                    "a call on a union, through a function value, or on a value of a type parameter does not prove the receiver's class invariant".into(),
-                ),
-            );
-        }
-        exec.run(entry);
         if let Some(reason) = exec.unsupported.clone() {
-            if !is_primary {
-                erased_open |= cx.decl(&function.name).is_some_and(|decl| decl.lemma);
+            if cx.has_erased_contracts()
+                || (!is_primary && cx.decl(&function.name).is_some_and(|decl| decl.lemma))
+            {
+                erased_open = true;
+            }
+            if is_erased_only {
+                continue;
             }
             let key = (
                 module_order,
@@ -1347,11 +1536,16 @@ pub fn verify_module(
             );
             continue;
         }
-        let cache = options
-            .cache_dir
-            .as_deref()
-            .map(|dir| dir.join(format!("{}.json", cache_key(&version, options, &exec))));
-        let mut statuses = match cache.as_deref().and_then(|path| read_cache(path, &exec)) {
+        if is_erased_only && !exec.obligations.iter().any(|ob| ob.erased) {
+            continue;
+        }
+        let cache = proof_cache
+            .as_ref()
+            .map(|proof_cache| (proof_cache, cache_key(&version, options, &exec)));
+        let mut statuses = match cache
+            .as_ref()
+            .and_then(|(proof_cache, key)| proof_cache.read(key, exec.obligations.len()))
+        {
             Some(statuses) => {
                 if is_primary && !is_copy {
                     report.cached += 1;
@@ -1385,8 +1579,12 @@ pub fn verify_module(
                     });
                 let statuses = solve(main_lane, rough, sample, retry.as_ref(), &exec, trace)
                     .map_err(|message| Diagnostic::coded("AU5103", message))?;
-                if let Some(path) = &cache {
-                    write_cache(path, &statuses);
+                // An answer the solver gave up on depends on the machine's
+                // speed, so it is solved again next time.
+                if let Some((proof_cache, key)) = &cache {
+                    if !statuses.contains(&Status::Unknown) {
+                        proof_cache.write(key, &statuses);
+                    }
                 }
                 statuses
             }
@@ -1407,6 +1605,9 @@ pub fn verify_module(
         for ((obligation, status), disputed) in exec.obligations.iter().zip(statuses).zip(disputed)
         {
             erased_open |= obligation.erased && status != Status::Proved;
+            if is_erased_only {
+                continue;
+            }
             if let Some(site) = obligation.site {
                 *sites.entry(site).or_insert(true) &= status == Status::Proved;
                 continue;
@@ -1455,12 +1656,14 @@ pub fn verify_module(
                 }
             }
         }
-        proved_sites.extend(
-            sites
-                .into_iter()
-                .filter(|(_, proved)| *proved)
-                .map(|((block, position), _)| (function.name.clone(), block, position)),
-        );
+        if !is_erased_only {
+            proved_sites.extend(
+                sites
+                    .into_iter()
+                    .filter(|(_, proved)| *proved)
+                    .map(|((block, position), _)| (function.name.clone(), block, position)),
+            );
+        }
     }
     // A check another path fails stays failed.
     for (index, (key, obligation)) in merged.iter().enumerate() {
@@ -1476,8 +1679,8 @@ pub fn verify_module(
     report.obligations = merged.into_values().collect();
     report.must_verify = workflow::must_verify(&options.must_verify, &function_spans, &report);
     report.unchecked_modules = workflow::unchecked_modules(program, module);
-    // A lemma that is not proved may have let the verifier assume what no
-    // run checks, so no access counts as proved.
+    // A lemma or erased contract obligation that is not proved may have let the
+    // verifier assume what no run checks, so no access counts as proved.
     if !erased_open {
         report.proved_sites = proved_sites;
     }
@@ -1493,7 +1696,7 @@ fn cache_key(version: &str, options: &Options, exec: &exec::Exec<'_>) -> String 
         hasher.update(text.len().to_le_bytes());
         hasher.update(text.as_bytes());
     };
-    part("aura-verify-cache-2");
+    part("aura-verify-cache-3");
     part(version);
     part(&options.timeout_ms.to_string());
     for decl in &exec.decls {
@@ -1532,30 +1735,6 @@ fn cache_key(version: &str, options: &Options, exec: &exec::Exec<'_>) -> String 
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-
-/// The cached statuses at `path`, when there is one for every obligation.
-fn read_cache(path: &std::path::Path, exec: &exec::Exec<'_>) -> Option<Vec<Status>> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let statuses: Vec<Status> = serde_json::from_str(&text).ok()?;
-    (statuses.len() == exec.obligations.len()).then_some(statuses)
-}
-
-/// Records decided statuses. An answer the solver gave up on depends on the
-/// machine's speed, so it is solved again next time. Failing to write only
-/// loses the cache entry.
-fn write_cache(path: &std::path::Path, statuses: &[Status]) {
-    if statuses.contains(&Status::Unknown) {
-        return;
-    }
-    let text = serde_json::to_string(statuses).expect("statuses serialize");
-    let temp = path.with_extension(format!("tmp{}", std::process::id()));
-    let written = std::fs::create_dir_all(path.parent().expect("a cache file has a directory"))
-        .and_then(|()| std::fs::write(&temp, text))
-        .and_then(|()| std::fs::rename(&temp, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
 }
 
 /// The time limit of the first, weaker query of a check that reads a float
@@ -2190,6 +2369,10 @@ mod tests_shapes;
 #[cfg(test)]
 #[path = "verify_recovery_tests.rs"]
 mod tests_recovery;
+
+#[cfg(test)]
+#[path = "verify_soundness_tests.rs"]
+mod tests_soundness;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.

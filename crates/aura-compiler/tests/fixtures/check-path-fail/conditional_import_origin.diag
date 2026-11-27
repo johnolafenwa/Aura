@@ -1,0 +1,5 @@
+error[AU2002]: initializer for module constant `selected` has type `str`, expected `bool`
+ --> crates/aura-compiler/tests/fixtures/check-path-fail/conditional_support/features.au:1:31
+  |
+1 | public const selected: bool = "bad"
+  |                               ^

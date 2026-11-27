@@ -29,8 +29,8 @@ aura check app.au
 | `aura build --no-rpath -o path file.au` | Build a native binary without embedding `library_paths` as run-time search paths. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
-| `aura build --freestanding [--target name] -o path.o file.au` | Write one relocatable object with no dependency on the Aura runtime or an operating system. See [Freestanding Builds](/manual/freestanding). |
-| `aura check --freestanding file.au` | Type-check, then report what a freestanding build cannot compile. |
+| `aura build --freestanding [--target name] [--kernel] -o path.o file.au` | Write one relocatable object with no dependency on the Aura runtime or an operating system. See [Freestanding Builds](/manual/freestanding). |
+| `aura check --freestanding [--target name] [--kernel] file.au` | Type-check, then report what a freestanding build cannot compile. |
 | `aura build --target name -o path file.au` | Build a native binary for another Linux machine. See [Building for Another Machine](#building-for-another-machine). |
 | `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
 | `aura --offline <command> ...` | Run a package-aware command without network git access. `AURA_OFFLINE=1` sets the same mode. |
@@ -45,7 +45,7 @@ aura check app.au
 | `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [--verify] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. `--verify` proves the package's checks first. |
-| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--deny CLASS] [--must-verify NAME] [--cross-check] [--cross-solver PATH] [--no-cache] [--format json] [paths...]` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. One file is verified alone. A directory, several files, or no path verifies every module of the package. See [Verification](/manual/verification). |
+| `aura verify [--freestanding [--target name] [--kernel]] [--solver PATH] [--timeout MS] [--function NAME] [--deny CLASS] [--must-verify NAME] [--cross-check] [--cross-solver PATH] [--no-cache] [--format json] [paths...]` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. One file is verified alone. A directory, several files, or no path verifies every module of the package. See [Verification](/manual/verification). |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. When Homebrew, apt or Chocolatey installed Aura, print that package manager's upgrade command. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
@@ -66,6 +66,8 @@ cargo run -p aura -- check examples/collections/list_basics.au
 
 Use `check` before `run` when you edit a package or diagnose type errors.
 
+Use `aura check --all-targets main.au` to check target-dependent declarations across supported hosted and freestanding configurations. This command needs no cross linker. Pass `--cfg name` or `--cfg name=value` to `build`, `run`, `check` and `test`. Each configuration has its own native cache identity. [Compile-Time Evaluation And Conditional Compilation](/manual/compile-time)
+
 ## Running
 
 `run` executes a source file through the MIR runtime:
@@ -80,8 +82,8 @@ Runtime diagnostics include source context where possible.
 
 By default, task execution uses the available parallelism that the host
 reports. The provisional `AURA_WORKERS` environment override accepts a
-positive integer, including a count larger than the host's available-core
-count.
+positive integer up to 4096, including a count larger than the host's
+available-core count.
 
 - `AURA_WORKERS=4 aura run app.au` selects four pinned task workers.
 - `AURA_WORKERS=1` keeps single-worker cooperative execution through the same
@@ -138,6 +140,19 @@ under `lib/aura`. It needs only a host C compiler for the final link, or on
 Windows the Microsoft linker from the Visual Studio C++ build tools. A binary
 built from a source checkout falls back to Cargo-built runtime artifacts, for
 contributor convenience.
+
+### Freestanding target selection
+
+Use the same target for source checks and object generation, for example
+`aura check --freestanding --target x86_64-unknown-none --kernel kernel.au`
+and `aura build --freestanding --target x86_64-unknown-none --kernel -o kernel.o kernel.au`.
+The optional x86-64 kernel profile uses the kernel code model and passes
+floating-point values in integer registers. No freestanding x86-64 build
+uses the red zone.
+Set `aura.freestandingTarget` in VS Code to check a board for its target.
+The formatter preserves the contents of assembly strings. Verification
+reports AU4035 when it encounters assembly.
+[Freestanding Builds](/manual/freestanding)
 
 ### Debug Builds
 

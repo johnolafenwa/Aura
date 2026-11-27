@@ -38,6 +38,9 @@
 
 use super::*;
 
+#[path = "native_codegen_c_bits.rs"]
+mod c_bits;
+
 use crate::c_layout::{CAbi, CArgument, CPassing, CPiece, CStruct};
 use crate::ffi::CCallback;
 use crate::mir::MirExternParam;
@@ -91,17 +94,26 @@ pub(super) fn module_callbacks(module: &MirModule) -> Vec<CallbackKey> {
         .flat_map(|function| &function.blocks)
         .flat_map(|block| &block.instructions);
     for instruction in instructions {
-        let Instruction::Assign {
-            value:
-                Rvalue::Call {
-                    callee: CallTarget::Extern(call),
-                    args,
-                    ..
-                },
-            ..
-        } = instruction
-        else {
-            continue;
+        let (call, args) = match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        args,
+                        ..
+                    },
+                ..
+            }
+            | Instruction::WriteLoan {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        args,
+                        ..
+                    },
+                ..
+            } => (call, args),
+            _ => continue,
         };
         for (param, argument) in call.params.iter().zip(args) {
             if let (Some(signature), Operand::Function { name, .. }) =
@@ -595,18 +607,75 @@ enum ForeignWriteback {
     Structs(&'static CStruct, Val, ValueRef),
 }
 
-/// The convention foreign calls follow on the machine being built for.
-fn foreign_abi(freestanding: Option<FreestandingTarget>) -> std::result::Result<CAbi, String> {
-    let arch =
-        freestanding.map_or_else(crate::native_backend::target_arch, FreestandingTarget::arch);
-    CAbi::of_arch(arch).ok_or(format!(
-        "direct backend cannot pass a C struct by value on `{arch}`"
-    ))
+/// The convention foreign calls follow for `arch` on `os`.
+fn foreign_abi_for(arch: &str, os: &str) -> std::result::Result<CAbi, String> {
+    CAbi::of_target(arch, os).ok_or_else(|| {
+        if os == "none" {
+            format!("direct backend cannot pass a C struct by value on `{arch}`")
+        } else {
+            format!("direct backend cannot pass a C struct by value on `{arch}` ({os})")
+        }
+    })
 }
 
-/// The size of the stack slot that holds one `layout` struct.
-fn struct_slot_size(layout: &CStruct) -> u32 {
-    layout.size().next_multiple_of(8) as u32
+/// The convention foreign calls follow on the machine being built for.
+fn foreign_abi(freestanding: Option<FreestandingTarget>) -> std::result::Result<CAbi, String> {
+    match freestanding {
+        Some(target) => foreign_abi_for(target.arch(), "none"),
+        None => foreign_abi_for(
+            crate::native_backend::target_arch(),
+            crate::native_backend::target_os(),
+        ),
+    }
+}
+
+/// The size of the stack slot that holds one `layout` struct, checked against
+/// Aura's C layout bounds and 32-bit signed stack offsets.
+fn struct_slot_size(layout: &CStruct) -> std::result::Result<u32, String> {
+    layout
+        .validate_bounds()
+        .map_err(|reason| format!("direct backend cannot allocate C struct slot: {reason}"))?;
+    // `validate_bounds` keeps the size and its 8-byte slot within the
+    // 32-bit signed offsets a stack slot takes.
+    let size = layout
+        .checked_size()
+        .and_then(|size| size.checked_next_multiple_of(8))
+        .and_then(|size| u32::try_from(size).ok())
+        .filter(|rounded| i32::try_from(*rounded).is_ok());
+    let Some(size) = size else {
+        return Err(format!(
+            "direct backend C struct `{}` slot size exceeds 32-bit signed offset range",
+            layout.name
+        ));
+    };
+    Ok(size)
+}
+
+/// The LLVM aggregate shape for an AArch64 stack-spilled by-value struct.
+/// On Darwin (`macos`), non-HFA structs spilled past registers keep their
+/// natural size and alignment instead of being padded to 8-byte slots.
+fn aapcs64_stack_aggregate(layout: &CStruct, pieces: &[CPiece], os: &str) -> Indirect {
+    if os == "macos"
+        && pieces
+            .first()
+            .is_some_and(|piece| matches!(piece, CPiece::Int { .. }))
+    {
+        let size = layout.size();
+        let (element, width) = match layout.align() {
+            1 => (types::I8, 1usize),
+            2 => (types::I16, 2usize),
+            4 => (types::I32, 4usize),
+            _ => (types::I64, 8usize),
+        };
+        return Indirect::Aggregate {
+            element,
+            count: (size / width) as u32,
+        };
+    }
+    Indirect::Aggregate {
+        element: piece_type(pieces[0]).1,
+        count: pieces.len() as u32,
+    }
 }
 
 /// The type a register's piece of a struct travels as.
@@ -652,6 +721,7 @@ impl ForeignArguments {
         for (index, ty) in self.signature.params.iter().enumerate() {
             let indirect = self.signature.indirects.iter().find(|(at, _)| *at == index);
             match (indirect, ty) {
+                (Some((_, Indirect::ByValueAligned { .. })), _) => {}
                 (Some((_, Indirect::ByValue { .. })), _) => {}
                 // A struct AArch64 put on the stack ends the use of the
                 // registers of its kind.
@@ -661,7 +731,7 @@ impl ForeignArguments {
                 },
                 // AArch64 has a register of its own for a result's address.
                 (Some((_, Indirect::Result { .. })), _) => {
-                    general += usize::from(abi == CAbi::SysV64);
+                    general += usize::from(matches!(abi, CAbi::SysV64 | CAbi::Win64));
                 }
                 (None, ScalarType::F32 | ScalarType::F64) => float += 1,
                 (None, _) => general += 1,
@@ -784,13 +854,13 @@ impl FunctionCompiler<'_> {
         let struct_result = match &call.c_struct_result {
             Some(layout) => {
                 let layout = layout.interned();
-                let slot = self.foreign_struct_slot(layout);
+                let slot = self.foreign_struct_slot(layout)?;
                 let passing = layout.passing(foreign_abi(self.freestanding)?);
                 match &passing {
                     CPassing::Memory => {
                         arguments.push_word(slot);
                         arguments.mark_last(Indirect::Result {
-                            size: struct_slot_size(layout),
+                            size: struct_slot_size(layout)?,
                         });
                     }
                     CPassing::Registers(pieces) => {
@@ -880,7 +950,7 @@ impl FunctionCompiler<'_> {
                     ForeignWriteback::Same(value)
                 }
                 FfiType::Struct(layout) => {
-                    let slot = self.foreign_struct_slot(layout);
+                    let slot = self.foreign_struct_slot(layout)?;
                     self.store_foreign_struct(layout, &value, slot)?;
                     self.push_foreign_struct(layout, slot, &mut arguments)?;
                     continue;
@@ -935,7 +1005,7 @@ impl FunctionCompiler<'_> {
                     ForeignWriteback::Structs(layout, array, value)
                 }
                 FfiType::StructPointer(layout) => {
-                    let slot = self.foreign_struct_slot(layout);
+                    let slot = self.foreign_struct_slot(layout)?;
                     self.store_foreign_struct(layout, &value, slot)?;
                     arguments.push_word(slot);
                     ForeignWriteback::Struct(layout, slot, value)
@@ -994,15 +1064,61 @@ impl FunctionCompiler<'_> {
         for copy in list_copies {
             self.release_foreign_allocation(copy, RuntimeFn::ReleaseValue);
         }
+        // Commit opaque handle ownership updates and register any returned
+        // handle before running potentially-trapping flag, scalar, or struct
+        // checks so unwinding neither double-frees replaced handles nor leaks
+        // newly returned ones.
+        let mut handle_writebacks = Vec::new();
+        let mut other_writebacks = Vec::new();
+        for entry in writebacks {
+            if matches!(entry.2, ForeignWriteback::Handle(..)) {
+                handle_writebacks.push(entry);
+            } else {
+                other_writebacks.push(entry);
+            }
+        }
+        for (place, expected, writeback) in handle_writebacks {
+            let ForeignWriteback::Handle(name, union_type, slot, before) = writeback else {
+                unreachable!("partitioned handle writebacks only");
+            };
+            let address = self.builder.load(types::I64, MemFlags::trusted(), slot, 0);
+            let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
+            let drop = self.foreign_handle_drop(call, &name)?;
+            let handle = self.builder.call(
+                self.runtime[RuntimeFn::FfiStoredHandle],
+                &[before, address, name_ptr, name_len, drop],
+            );
+            let value = self.foreign_nullable(handle.results[0], &union_type)?;
+            let writeback = self.coerce_value(value, &expected)?;
+            self.store_place(&place, writeback)?;
+        }
+        let prewrapped_result_handle = match result_handle {
+            Some(name) => Some(self.foreign_handle(invocation.results[0], name, call)?),
+            None => None,
+        };
+
         // A C function can leave any byte in a `bool` it writes through.
-        for list in flag_lists {
+        // When multiple `mut ptr[bool]` parameters cross the call, sanitize
+        // every list before trapping so recovery cannot observe raw bytes.
+        if flag_lists.len() == 1 {
             let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
             self.builder.call(
                 self.runtime[RuntimeFn::FfiCheckFlags],
-                &[list, symbol_ptr, symbol_len],
+                &[flag_lists[0], symbol_ptr, symbol_len],
             );
+        } else if flag_lists.len() > 1 {
+            let mut first_bad = self.builder.iconst(types::I64, 0);
+            for list in flag_lists {
+                let bad = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::FfiSanitizeFlags], &[list])
+                    .results[0];
+                let none_yet = self.builder.icmp_imm(IntCC::Equal, first_bad, 0);
+                first_bad = self.builder.select(none_yet, bad, first_bad);
+            }
+            self.trap_on_bad_bool(first_bad, &call.symbol)?;
         }
-        for (place, expected, writeback) in writebacks {
+        for (place, expected, writeback) in other_writebacks {
             let flags = MemFlags::trusted();
             let value = match writeback {
                 ForeignWriteback::Same(value) => value,
@@ -1010,16 +1126,7 @@ impl FunctionCompiler<'_> {
                     let raw = self.builder.load(scalar.ty, flags, slot, 0);
                     self.foreign_scalar_result(&scalar, raw, &call.symbol)?
                 }
-                ForeignWriteback::Handle(name, union_type, slot, before) => {
-                    let address = self.builder.load(types::I64, flags, slot, 0);
-                    let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
-                    let drop = self.foreign_handle_drop(call, &name)?;
-                    let handle = self.builder.call(
-                        self.runtime[RuntimeFn::FfiStoredHandle],
-                        &[before, address, name_ptr, name_len, drop],
-                    );
-                    self.foreign_nullable(handle.results[0], &union_type)?
-                }
+                ForeignWriteback::Handle(..) => unreachable!("committed above"),
                 ForeignWriteback::Struct(layout, slot, _) if layout.is_plain() => {
                     self.load_foreign_struct(layout, slot, expected.clone(), &call.symbol)?
                 }
@@ -1113,13 +1220,13 @@ impl FunctionCompiler<'_> {
                 self.foreign_scalar_result(&scalar, invocation.results[0], &call.symbol)?
             }
             (None, None) if result_text => self.foreign_text_result(invocation.results[0], call)?,
-            (None, Some(name)) if result_ffi.ffi_type == FfiType::OpaqueHandle => {
-                let handle = self.foreign_handle(invocation.results[0], name, call)?;
+            (None, Some(_)) if result_ffi.ffi_type == FfiType::OpaqueHandle => {
+                let handle = prewrapped_result_handle.expect("wrapped above");
                 self.trap_on_null_handle(handle, &call.symbol)?;
                 self.owned_opaque_result(vec![handle], call.return_type.clone())
             }
-            (None, Some(name)) => {
-                let handle = self.foreign_handle(invocation.results[0], name, call)?;
+            (None, Some(_)) => {
+                let handle = prewrapped_result_handle.expect("wrapped above");
                 self.foreign_nullable(handle, &call.return_type)?
             }
             (None, None) => unit_value(&mut *self.builder),
@@ -1168,7 +1275,13 @@ impl FunctionCompiler<'_> {
             self.ensure_opaque(value)?
         };
         let label = crate::ffi::reinterpret_label(&call.name);
-        let slot = self.foreign_struct_slot(if from.size() >= to.size() { from } else { to });
+        let (Some(from_size), Some(to_size)) = (from.checked_size(), to.checked_size()) else {
+            return Err(format!(
+                "direct backend C struct `{}` or `{}` size overflows usize",
+                from.name, to.name
+            ));
+        };
+        let slot = self.foreign_struct_slot(if from_size >= to_size { from } else { to })?;
         self.store_foreign_struct(from, &value, slot)?;
         let return_direct = ensure_direct_type(
             &call.return_type,
@@ -1193,16 +1306,46 @@ impl FunctionCompiler<'_> {
     /// The address of a new zeroed stack slot that holds one `layout`
     /// struct. The slot is a whole number of 8-byte words, so a register's
     /// piece of the struct loads and stores as one word.
-    fn foreign_struct_slot(&mut self, layout: &CStruct) -> Val {
-        let size = struct_slot_size(layout);
-        let slot = self.builder.create_sized_stack_slot(size, 3);
+    fn foreign_struct_slot(&mut self, layout: &CStruct) -> std::result::Result<Val, String> {
+        let size = struct_slot_size(layout)?;
+        // An over-aligned struct gets a slot at its own alignment.
+        let align_shift = if layout.align() > 8 {
+            layout.align().trailing_zeros() as u8
+        } else {
+            3
+        };
+        let slot = self.builder.create_sized_stack_slot(size, align_shift);
         let address = self.builder.stack_addr(types::I64, slot, 0);
         let zero = self.builder.iconst(types::I64, 0);
-        for offset in (0..size).step_by(8) {
-            self.builder
-                .store(MemFlags::trusted(), zero, address, offset as i32);
+        if size <= 256 {
+            // An offset below 256 always fits an `i32`.
+            for offset in (0..size as i32).step_by(8) {
+                self.builder
+                    .store(MemFlags::trusted(), zero, address, offset);
+            }
+        } else {
+            let header = self.builder.create_block();
+            let body = self.builder.create_block();
+            let done = self.builder.create_block();
+            let cursor = self.builder.append_block_param(header, types::I64);
+            let start = self.builder.iconst(types::I64, 0);
+            self.builder.jump(header, &[start]);
+            self.builder.switch_to_block(header);
+            let more = self
+                .builder
+                .icmp_imm(IntCC::UnsignedLessThan, cursor, i64::from(size));
+            self.builder.brif(more, body, &[], done, &[]);
+            self.builder.switch_to_block(body);
+            self.builder.seal_block(body);
+            let ptr = self.builder.iadd(address, cursor);
+            self.builder.store(MemFlags::trusted(), zero, ptr, 0);
+            let next = self.builder.iadd_imm(cursor, 8);
+            self.builder.jump(header, &[next]);
+            self.builder.seal_block(header);
+            self.builder.switch_to_block(done);
+            self.builder.seal_block(done);
         }
-        address
+        Ok(address)
     }
 
     /// The JSON text of `layout` in the program's data, which the runtime
@@ -1243,6 +1386,10 @@ impl FunctionCompiler<'_> {
             }
             return Ok(());
         }
+        if layout.has_controlled_layout() {
+            self.store_controlled_struct(layout, value, slot);
+            return Ok(());
+        }
         for (leaf, word) in layout.leaves().iter().zip(&value.values) {
             let scalar = foreign_scalar(leaf.scalar.ffi_type()).expect("a leaf is a scalar");
             let narrow = self.foreign_scalar_argument(&scalar, *word);
@@ -1279,7 +1426,9 @@ impl FunctionCompiler<'_> {
             };
             (field.name.as_str(), *scalar, *count)
         };
-        let bytes = count * scalar.size();
+        let Some(bytes) = count.checked_mul(scalar.size()) else {
+            return Ok(None);
+        };
         // The constant-size loads below are for small by-value aggregates.
         if bytes > 128 || bytes == 0 {
             return Ok(None);
@@ -1359,6 +1508,9 @@ impl FunctionCompiler<'_> {
         ty: DirectType,
         symbol: &str,
     ) -> std::result::Result<ValueRef, String> {
+        if layout.has_controlled_layout() {
+            return self.load_controlled_struct(layout, slot, ty, symbol);
+        }
         let mut values = Vec::new();
         for leaf in layout.leaves() {
             let scalar = foreign_scalar(leaf.scalar.ffi_type()).expect("a leaf is a scalar");
@@ -1397,16 +1549,25 @@ impl FunctionCompiler<'_> {
                         layout.name
                     ));
                 };
+                let target_os = if self.freestanding.is_some() {
+                    "none"
+                } else {
+                    crate::native_backend::target_os()
+                };
                 arguments.push_word(slot);
-                arguments.mark_last(Indirect::Aggregate {
-                    element: piece_type(pieces[0]).1,
-                    count: pieces.len() as u32,
-                });
+                arguments.mark_last(aapcs64_stack_aggregate(layout, &pieces, target_os));
             }
             CArgument::Stack => {
                 arguments.push_word(slot);
+                if layout.align() > 8 {
+                    arguments.mark_last(Indirect::ByValueAligned {
+                        size: struct_slot_size(layout)?,
+                        alignment: layout.align() as u32,
+                    });
+                    return Ok(());
+                }
                 arguments.mark_last(Indirect::ByValue {
-                    size: struct_slot_size(layout),
+                    size: struct_slot_size(layout)?,
                 });
             }
             CArgument::Address => arguments.push_word(slot),
@@ -1906,5 +2067,200 @@ impl FunctionCompiler<'_> {
             &[type_ptr, type_len, tag, payload],
         );
         Ok(self.owned_opaque_result(injected.results, union_type.clone()))
+    }
+}
+
+#[path = "native_codegen_raw_cells.rs"]
+mod raw_cells;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::c_layout::{CField, CFieldKind};
+    use crate::ffi::FfiScalar;
+    use crate::native_backend::HostedTarget;
+
+    fn struct_of(scalars: &[FfiScalar]) -> CStruct {
+        CStruct {
+            name: "S".to_string(),
+            fields: scalars
+                .iter()
+                .enumerate()
+                .map(|(i, scalar)| CField {
+                    name: format!("f{i}"),
+                    kind: CFieldKind::Scalar(*scalar),
+                })
+                .collect(),
+            union: false,
+            layout_controls: Default::default(),
+        }
+    }
+
+    #[test]
+    fn foreign_abi_selects_win64_for_windows_x86_64() {
+        assert_eq!(foreign_abi_for("x86_64", "windows"), Ok(CAbi::Win64));
+        assert!(foreign_abi_for("aarch64", "windows").is_err());
+        assert_eq!(foreign_abi_for("x86_64", "linux"), Ok(CAbi::SysV64));
+        assert_eq!(foreign_abi_for("x86_64", "macos"), Ok(CAbi::SysV64));
+        assert_eq!(foreign_abi_for("x86_64", "none"), Ok(CAbi::SysV64));
+        assert_eq!(foreign_abi_for("aarch64", "linux"), Ok(CAbi::Aapcs64));
+        assert_eq!(foreign_abi_for("aarch64", "macos"), Ok(CAbi::Aapcs64));
+        assert_eq!(foreign_abi_for("aarch64", "none"), Ok(CAbi::Aapcs64));
+        assert!(foreign_abi_for("riscv64", "none").is_err());
+        assert_eq!(
+            foreign_abi(Some(FreestandingTarget::X86_64)),
+            Ok(CAbi::SysV64)
+        );
+        assert_eq!(
+            foreign_abi(Some(FreestandingTarget::Aarch64)),
+            Ok(CAbi::Aapcs64)
+        );
+        assert!(foreign_abi(Some(FreestandingTarget::Riscv64)).is_err());
+        for target in HostedTarget::ALL {
+            assert_eq!(target.os(), "linux");
+        }
+    }
+
+    #[test]
+    fn registers_used_accounts_for_sret_on_win64() {
+        let mut args = ForeignArguments {
+            signature: Signature::new(CallConv::C),
+            values: Vec::new(),
+        };
+        let dummy = Val(0);
+        args.push_word(dummy);
+        args.mark_last(Indirect::Result { size: 16 });
+        assert_eq!(args.registers_used(CAbi::Win64), (1, 0));
+        assert_eq!(args.registers_used(CAbi::SysV64), (1, 0));
+        assert_eq!(args.registers_used(CAbi::Aapcs64), (0, 0));
+    }
+
+    #[test]
+    fn win64_struct_piece_types_and_indirect_passing() {
+        let abi = foreign_abi_for("x86_64", "windows").expect("win64 abi");
+
+        // 4-byte and 8-byte float structs travel in integer registers on Win64.
+        for layout in [
+            struct_of(&[FfiScalar::F32]),
+            struct_of(&[FfiScalar::F32, FfiScalar::F32]),
+            struct_of(&[FfiScalar::F64]),
+        ] {
+            let CPassing::Registers(pieces) = layout.passing(abi) else {
+                panic!(
+                    "expected register passing for {}-byte struct",
+                    layout.size()
+                );
+            };
+            assert_eq!(pieces.len(), 1);
+            assert_eq!(piece_type(pieces[0]), (0, types::I64));
+        }
+
+        // 3-, 6-, 12-, and 16-byte structs travel by address / sret on Win64.
+        for layout in [
+            struct_of(&[FfiScalar::U8, FfiScalar::U8, FfiScalar::U8]),
+            struct_of(&[FfiScalar::U16, FfiScalar::U16, FfiScalar::U16]),
+            struct_of(&[FfiScalar::I32, FfiScalar::I32, FfiScalar::I32]),
+            struct_of(&[FfiScalar::I64, FfiScalar::I64]),
+        ] {
+            assert_eq!(layout.passing(abi), CPassing::Memory);
+            assert_eq!(layout.argument(abi, 0, 0), Ok(CArgument::Address));
+        }
+    }
+
+    #[test]
+    fn struct_slot_size_rejects_oversized_and_overflowing_layouts() {
+        let small = struct_of(&[FfiScalar::U8, FfiScalar::U8, FfiScalar::U8]);
+        assert_eq!(struct_slot_size(&small), Ok(8));
+
+        let four_gib = CStruct {
+            name: "FourGiB".to_string(),
+            fields: vec![CField {
+                name: "data".to_string(),
+                kind: CFieldKind::Array(
+                    Box::new(CFieldKind::Array(
+                        Box::new(CFieldKind::Scalar(FfiScalar::U8)),
+                        65536,
+                    )),
+                    65536,
+                ),
+            }],
+            union: false,
+            layout_controls: Default::default(),
+        };
+        assert!(struct_slot_size(&four_gib).is_err());
+
+        let two_gib = CStruct {
+            name: "TwoGiB".to_string(),
+            fields: vec![CField {
+                name: "data".to_string(),
+                kind: CFieldKind::Array(
+                    Box::new(CFieldKind::Array(
+                        Box::new(CFieldKind::Scalar(FfiScalar::U8)),
+                        65536,
+                    )),
+                    32768,
+                ),
+            }],
+            union: false,
+            layout_controls: Default::default(),
+        };
+        assert!(struct_slot_size(&two_gib).is_err());
+    }
+
+    #[test]
+    fn darwin_aarch64_stack_aggregate_uses_natural_alignment() {
+        let cases = [
+            (struct_of(&[FfiScalar::U8]), types::I8, 1u32),
+            (struct_of(&[FfiScalar::U16]), types::I16, 1u32),
+            (
+                struct_of(&[FfiScalar::U8, FfiScalar::U8, FfiScalar::U8]),
+                types::I8,
+                3u32,
+            ),
+            (struct_of(&[FfiScalar::I32]), types::I32, 1u32),
+            (
+                struct_of(&[FfiScalar::I32, FfiScalar::I32, FfiScalar::I32]),
+                types::I32,
+                3u32,
+            ),
+            (
+                struct_of(&[FfiScalar::I64, FfiScalar::I32]),
+                types::I64,
+                2u32,
+            ),
+            // HFA keeps its float element type on both Linux and macOS.
+            (
+                struct_of(&[FfiScalar::F32, FfiScalar::F32, FfiScalar::F32]),
+                types::F32,
+                3u32,
+            ),
+        ];
+        for (layout, expected_element, expected_count) in cases {
+            let CPassing::Registers(pieces) = layout.passing(CAbi::Aapcs64) else {
+                panic!("expected register passing pieces for {}", layout.size());
+            };
+            assert_eq!(
+                aapcs64_stack_aggregate(&layout, &pieces, "macos"),
+                Indirect::Aggregate {
+                    element: expected_element,
+                    count: expected_count,
+                },
+                "darwin stack aggregate for {}-byte, align-{} struct",
+                layout.size(),
+                layout.align()
+            );
+        }
+        // Linux AAPCS64 keeps 8-byte integer slots for non-HFA structs.
+        let s12 = struct_of(&[FfiScalar::I32, FfiScalar::I32, FfiScalar::I32]);
+        let CPassing::Registers(pieces) = s12.passing(CAbi::Aapcs64) else {
+            panic!("expected register pieces");
+        };
+        assert_eq!(
+            aapcs64_stack_aggregate(&s12, &pieces, "linux"),
+            Indirect::Aggregate {
+                element: types::I64,
+                count: 2,
+            }
+        );
     }
 }

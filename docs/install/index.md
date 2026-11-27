@@ -22,7 +22,7 @@ Every guide follows the same three steps.
    `%LOCALAPPDATA%\Programs\Aura` on Windows.
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 On Windows, in PowerShell:
@@ -62,7 +62,7 @@ To install under a different prefix, set `AURA_INSTALL_PREFIX`:
 
 ```bash
 AURA_INSTALL_PREFIX="$HOME/tools/aura" \
-  sh -c "$(curl -fsSL https://johnolafenwa.github.io/Aura/install.sh)"
+  sh -c "$(curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh)"
 ```
 
 Then add that prefix's `bin` directory to `PATH`.

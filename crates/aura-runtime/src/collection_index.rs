@@ -13,8 +13,12 @@
 //! comparing candidates in one bucket.
 
 use std::collections::TryReserveError;
+use std::fmt;
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
+use std::marker::PhantomData;
+use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use triomphe::Arc as EntriesArc;
 
@@ -468,9 +472,21 @@ fn key_equals(candidate: &Value, key: &Value) -> bool {
     }
 }
 
+/// Whether `candidate` equals `key`, a `str` value holding `bytes`. Only a
+/// union candidate takes the general equality.
+#[inline(always)]
+fn key_has_bytes(candidate: &Value, bytes: &[u8], key: &Value) -> bool {
+    match candidate {
+        Value::String(candidate) => short_bytes_eq(candidate.as_bytes(), bytes),
+        Value::Union(_) => key_equals(candidate, key),
+        _ => false,
+    }
+}
+
 /// `a == b`, comparing up to sixteen bytes in two overlapping words
 /// instead of calling `memcmp`. Keys, enum names, and variant names are
 /// mostly short.
+#[inline(always)]
 pub(crate) fn short_bytes_eq(a: &[u8], b: &[u8]) -> bool {
     fn word<const N: usize>(bytes: &[u8], at: usize) -> [u8; N] {
         bytes[at..at + N].try_into().expect("in range")
@@ -671,6 +687,32 @@ impl LookupCursor {
 }
 
 impl<T: Keyed> Large<T> {
+    /// The slot and entry of an integer key equal to `integer`, by the same
+    /// steps as [`Self::lookup`] written out for that key, so nothing is
+    /// called through a closure and the hash is computed in place.
+    #[inline(always)]
+    fn lookup_i64(&self, integer: i64) -> Option<(usize, &T)> {
+        let start = self.cursor.get().wrapping_add(1);
+        for slot in start..self.slots.len().min(start.saturating_add(3)) {
+            if let Some(entry) = &self.slots[slot] {
+                if key_is_i64(entry.key(), integer) {
+                    self.cursor.set(slot);
+                    return Some((slot, entry));
+                }
+                break;
+            }
+        }
+        let hash = hash_i64(integer);
+        let &(_, slot) = self.index.find(hash, |&(entry_hash, slot)| {
+            entry_hash == hash
+                && self.slots[slot]
+                    .as_ref()
+                    .is_some_and(|entry| key_is_i64(entry.key(), integer))
+        })?;
+        self.cursor.set(slot);
+        self.slots[slot].as_ref().map(|entry| (slot, entry))
+    }
+
     /// The slot of the entry whose key `matches`, where `hash` is the hash
     /// of every such key. It first tries the entry after the one the last
     /// lookup found, skipping a hole or two, and remembers the slot it
@@ -1274,6 +1316,21 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 
     /// The slot of the entry whose key equals `key`, for [`Self::at_slot`].
     pub fn position(&self, key: &Value) -> Option<usize> {
+        // A `str` key, the common case, takes its bytes once: each entry a
+        // small dict scans is then one tag and one length compare, and only
+        // a union key needs the general equality.
+        if let Value::String(text) = key {
+            let bytes = text.as_bytes();
+            if let Storage::Small(entries) = &self.storage {
+                return entries
+                    .iter()
+                    .position(|entry| key_has_bytes(entry.key(), bytes, key));
+            }
+            return self.lookup(
+                || hash_str(text.as_str()),
+                |candidate| key_has_bytes(candidate, bytes, key),
+            );
+        }
         self.lookup(|| hash_value(key), |candidate| key_equals(candidate, key))
     }
 
@@ -1285,6 +1342,9 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// [`Self::position`] of an integer key equal to `integer`, without
     /// building it.
     pub fn position_i64(&self, integer: i64) -> Option<usize> {
+        if let Storage::Large(large) = &self.storage {
+            return large.lookup_i64(integer).map(|(slot, _)| slot);
+        }
         self.lookup(
             || hash_i64(integer),
             |candidate| key_is_i64(candidate, integer),
@@ -1566,6 +1626,9 @@ impl DictEntries {
 
     /// [`Self::value_of`] an integer key equal to `integer`.
     pub fn value_of_i64(&self, integer: i64) -> Option<&Value> {
+        if let Storage::Large(large) = &self.storage {
+            return large.lookup_i64(integer).map(|(_, entry)| &entry.1);
+        }
         self.position_i64(integer).map(|slot| &self.at_slot(slot).1)
     }
 
@@ -1577,6 +1640,32 @@ impl DictEntries {
     /// [`Self::insert`] under an `int64` key, which is hashed once and
     /// becomes a value only when the key is new.
     pub fn insert_i64(&mut self, key: i64, value: Value) -> Option<Value> {
+        // A large dict, nearly every one an `int64` key reaches often,
+        // hashes the key in place and probes and writes its table once.
+        if let Storage::Large(large) = &mut self.storage {
+            let large = EntriesArc::make_mut(large);
+            let hash = hash_i64(key);
+            let found = large
+                .index
+                .find(hash, |&(entry_hash, slot)| {
+                    entry_hash == hash
+                        && large.slots[slot]
+                            .as_ref()
+                            .is_some_and(|entry| key_is_i64(entry.key(), key))
+                })
+                .map(|&(_, slot)| slot);
+            if let Some(entry) = found.and_then(|slot| large.slots[slot].as_mut()) {
+                return Some(std::mem::replace(&mut entry.1, value));
+            }
+            let slot = large.slots.len();
+            large
+                .slots
+                .push(Some((Value::Int(IntegerValue::from_i64(key)), value)));
+            large
+                .index
+                .insert_unique(hash, (hash, slot), |&(hash, _)| hash);
+            return None;
+        }
         match self.probe(|| hash_i64(key), |candidate| key_is_i64(candidate, key)) {
             (Some(slot), _) => Some(std::mem::replace(self.value_at_mut(slot), value)),
             (None, hash) => {
@@ -1741,26 +1830,99 @@ impl SetElements {
     }
 }
 
-/// A `Vec` behind an `Arc`, for `list` elements. A clone shares the
+/// A `Vec` that clones share, for `list` elements. A clone shares the
 /// storage. Mutable access through `DerefMut` copies shared storage first,
 /// so every existing `Vec` write keeps value semantics.
-#[derive(Debug)]
-pub struct SharedVec<T>(Arc<Vec<T>>);
+///
+/// The handle holds the `Vec` itself, so a list that is never copied makes
+/// one allocation, its elements, and a read reaches them without a second
+/// pointer. The first clone makes the count the handles then share. While
+/// the count is above one, every handle holds the same pointer, capacity
+/// and length and none changes them, so each reads the storage through its
+/// own copy of the three words. The handle that brings the count to zero
+/// drops the `Vec`.
+pub struct SharedVec<T> {
+    values: ManuallyDrop<Vec<T>>,
+    /// The number of handles that share `values`, or null while this is
+    /// the only one and no clone was ever made of it.
+    holders: AtomicPtr<AtomicUsize>,
+    /// The handles share the elements across threads as an `Arc` would.
+    shared: PhantomData<Arc<Vec<T>>>,
+}
 
 impl<T> SharedVec<T> {
-    pub fn new() -> Self {
-        Self(Arc::new(Vec::new()))
+    pub const fn new() -> Self {
+        Self::of(Vec::new())
+    }
+
+    const fn of(values: Vec<T>) -> Self {
+        Self {
+            values: ManuallyDrop::new(values),
+            holders: AtomicPtr::new(std::ptr::null_mut()),
+            shared: PhantomData,
+        }
     }
 
     /// Whether another handle shares this storage.
+    #[inline]
     pub fn is_shared(&self) -> bool {
-        Arc::strong_count(&self.0) > 1
+        // SAFETY: a count lives until its last handle drops.
+        unsafe { self.holders.load(Ordering::Acquire).as_ref() }
+            .is_some_and(|holders| holders.load(Ordering::Acquire) > 1)
     }
 
     /// The storage for writing when no other handle shares it, without a
     /// copy.
+    #[inline]
     pub fn unshared_mut(&mut self) -> Option<&mut Vec<T>> {
-        Arc::get_mut(&mut self.0)
+        // A count of one cannot grow: only a clone of this handle could
+        // raise it, and the caller holds the handle mutably.
+        if self.is_shared() {
+            None
+        } else {
+            Some(&mut self.values)
+        }
+    }
+
+    /// Gives up this handle's share of the storage, and returns the `Vec`
+    /// when the handle was the last one. The handle must not be used
+    /// again, except to be given a new `Vec`.
+    ///
+    /// # Safety
+    ///
+    /// The caller forgets the handle or overwrites its fields without
+    /// dropping them.
+    unsafe fn release(&mut self) -> Option<Vec<T>> {
+        let holders = *self.holders.get_mut();
+        // SAFETY: the count lives until its last handle drops.
+        let last = match unsafe { holders.as_ref() } {
+            None => true,
+            Some(count) => count.fetch_sub(1, Ordering::AcqRel) == 1,
+        };
+        if !last {
+            return None;
+        }
+        if !holders.is_null() {
+            // SAFETY: the last handle frees the count a clone boxed.
+            drop(unsafe { Box::from_raw(holders) });
+        }
+        // SAFETY: no other handle is left to read the storage, and the
+        // caller never reads this one's copy again.
+        Some(unsafe { ManuallyDrop::take(&mut self.values) })
+    }
+}
+
+impl<T> Drop for SharedVec<T> {
+    #[inline]
+    fn drop(&mut self) {
+        if self.holders.get_mut().is_null() {
+            // SAFETY: a handle with no count is the only one, and is not
+            // used after its drop.
+            unsafe { ManuallyDrop::drop(&mut self.values) };
+            return;
+        }
+        // SAFETY: the handle is not used after its drop.
+        drop(unsafe { self.release() });
     }
 }
 
@@ -1773,33 +1935,101 @@ impl<T> Default for SharedVec<T> {
 impl<T> Clone for SharedVec<T> {
     /// Shares the storage. A later write copies it first.
     fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+        let mut holders = self.holders.load(Ordering::Acquire);
+        if holders.is_null() {
+            // The first clone makes the count, for this handle and the
+            // clone. Another thread may clone the same handle at once
+            // under a shared lock, and then one of the two counts wins.
+            let made = Box::into_raw(Box::new(AtomicUsize::new(2)));
+            match self.holders.compare_exchange(
+                std::ptr::null_mut(),
+                made,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => holders = made,
+                Err(installed) => {
+                    // SAFETY: the count was never published.
+                    drop(unsafe { Box::from_raw(made) });
+                    holders = installed;
+                    // SAFETY: this handle keeps the count alive.
+                    unsafe { &*holders }.fetch_add(1, Ordering::AcqRel);
+                }
+            }
+        } else {
+            // SAFETY: this handle keeps the count alive.
+            unsafe { &*holders }.fetch_add(1, Ordering::AcqRel);
+        }
+        Self {
+            // SAFETY: the clone reads the same storage through its own
+            // copy of the pointer, capacity and length, which no handle
+            // changes while the count is above one, and only the last
+            // handle drops the `Vec`.
+            values: unsafe { std::ptr::read(&self.values) },
+            holders: AtomicPtr::new(holders),
+            shared: PhantomData,
+        }
     }
 }
 
 impl<T> Deref for SharedVec<T> {
     type Target = Vec<T>;
 
+    #[inline]
     fn deref(&self) -> &Vec<T> {
-        &self.0
+        &self.values
     }
 }
 
 impl<T: Clone> DerefMut for SharedVec<T> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Vec<T> {
-        Arc::make_mut(&mut self.0)
+        if self.is_shared() {
+            self.unshare();
+        }
+        &mut self.values
     }
 }
 
 impl<T: Clone> SharedVec<T> {
+    /// Gives this handle a copy of the storage that other handles share.
+    #[cold]
+    fn unshare(&mut self) {
+        let copy = Vec::clone(&self.values);
+        // SAFETY: the fields are overwritten below without a drop. The
+        // other handles may have dropped since the check, and then the
+        // old `Vec` is this handle's to drop.
+        drop(unsafe { self.release() });
+        self.values = ManuallyDrop::new(copy);
+        *self.holders.get_mut() = std::ptr::null_mut();
+    }
+
     pub fn into_vec(self) -> Vec<T> {
-        Arc::unwrap_or_clone(self.0)
+        let mut this = ManuallyDrop::new(self);
+        let copy = this.is_shared().then(|| Vec::clone(&this.values));
+        // SAFETY: the handle is forgotten.
+        match (unsafe { this.release() }, copy) {
+            (Some(values), _) => values,
+            (None, Some(copy)) => copy,
+            // The other handles copied nothing: they still hold the
+            // storage, which this handle read while it held its share.
+            (None, None) => unreachable!("an unshared handle is the last one"),
+        }
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for SharedVec<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("SharedVec")
+            .field(&*self.values)
+            .finish()
     }
 }
 
 impl<T> From<Vec<T>> for SharedVec<T> {
     fn from(elements: Vec<T>) -> Self {
-        Self(Arc::new(elements))
+        Self::of(elements)
     }
 }
 
@@ -1823,7 +2053,7 @@ impl<'a, T> IntoIterator for &'a SharedVec<T> {
     type IntoIter = std::slice::Iter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        self.values.iter()
     }
 }
 
@@ -1832,20 +2062,20 @@ impl<'a, T: Clone> IntoIterator for &'a mut SharedVec<T> {
     type IntoIter = std::slice::IterMut<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Arc::make_mut(&mut self.0).iter_mut()
+        self.deref_mut().iter_mut()
     }
 }
 
 impl<T: PartialEq> PartialEq for SharedVec<T> {
     fn eq(&self, other: &Self) -> bool {
         // No pointer shortcut: a list holding NaN is not equal to itself.
-        self.0 == other.0
+        *self.values == *other.values
     }
 }
 
 impl<T: PartialEq> PartialEq<Vec<T>> for SharedVec<T> {
     fn eq(&self, other: &Vec<T>) -> bool {
-        *self.0 == *other
+        *self.values == *other
     }
 }
 

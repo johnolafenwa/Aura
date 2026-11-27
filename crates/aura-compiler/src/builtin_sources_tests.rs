@@ -124,10 +124,20 @@ fn regex_source_part_adds_the_typed_api_to_the_host_searches() {
         );
     }
     let merged = importable_builtin_namespace(&path("regex")).expect("regex is importable");
-    for name in ["compile", "escape", "__aura_is_match", "__aura_compile"] {
+    for name in ["compile", "escape"] {
         assert!(
             merged.functions.contains_key(name),
             "missing `regex.{name}`"
+        );
+    }
+    for name in ["__aura_is_match", "__aura_compile"] {
+        assert!(
+            !merged.functions.contains_key(name),
+            "internal `regex.{name}` should stay private"
+        );
+        assert!(
+            merged.all_functions.contains_key(name),
+            "missing internal `regex.{name}` in all_functions"
         );
     }
     for name in ["Regex", "Match", "Captures"] {
@@ -164,13 +174,20 @@ fn image_source_part_adds_the_typed_api_to_the_host_codecs() {
         "encode_jpeg",
         "encode_ppm",
         "format_of",
-        "__aura_decode",
     ] {
         assert!(
             merged.functions.contains_key(name),
             "missing `image.{name}`"
         );
     }
+    assert!(
+        !merged.functions.contains_key("__aura_decode"),
+        "internal `image.__aura_decode` should stay private"
+    );
+    assert!(
+        merged.all_functions.contains_key("__aura_decode"),
+        "missing internal `image.__aura_decode` in all_functions"
+    );
     for name in ["Image", "Info"] {
         assert!(merged.classes.contains_key(name), "missing `image.{name}`");
     }
@@ -219,4 +236,125 @@ fn time_source_part_adds_date_time_to_the_host_clocks() {
     assert!(date_time.decl.copy, "a DateTime is three integers");
     assert!(date_time.decl.public);
     assert!(merged.enums.contains_key("Error"));
+}
+
+#[test]
+fn internal_builtin_helpers_and_handles_are_private_to_user_code() {
+    let rejected = [
+        (
+            "sync.__aura_cell_new",
+            "import sync\ndef main():\n    _ = sync.__aura_cell_new[int64](1)\n",
+        ),
+        (
+            "sync.Cell type",
+            "import sync\ndef take_cell(c: sync.Cell) -> None:\n    pass\n",
+        ),
+        (
+            "sync.Atom type",
+            "import sync\ndef take_atom(a: sync.Atom) -> None:\n    pass\n",
+        ),
+        (
+            "Locked.__aura_take",
+            "import sync\ndef main():\n    m = sync.Mutex[int64](1)\n    locked = m.lock()\n    _ = locked.__aura_take()\n",
+        ),
+        (
+            "Locked.__aura_put",
+            "import sync\ndef main():\n    m = sync.Mutex[int64](1)\n    locked = m.lock()\n    locked.__aura_put(2)\n",
+        ),
+        (
+            "iter.__aura_generator_yield",
+            "import iter\ndef main():\n    _ = iter.__aura_generator_yield[int64](1)\n",
+        ),
+        (
+            "iter.__aura_generator_take",
+            "import iter\ndef bad(h: iter.GeneratorHandle) -> int64:\n    return iter.__aura_generator_take[int64](h)\n",
+        ),
+        (
+            "from sync import __aura_cell_new",
+            "from sync import __aura_cell_new\ndef main():\n    _ = __aura_cell_new[int64](1)\n",
+        ),
+        (
+            "tensor.__aura_filled",
+            "import tensor\ndef main():\n    _ = tensor.__aura_filled([1], 2, 0, 1, 0)\n",
+        ),
+        (
+            "tensor.__aura_node_op",
+            "import tensor\ndef main():\n    t = tensor.Tensor[float32].zeros([2], tensor.Device.cpu())\n    _ = tensor.__aura_node_op(t, 6, list[int64]())\n",
+        ),
+        (
+            "tensor.Node type",
+            "import tensor\ndef take_node(n: tensor.Node) -> None:\n    pass\n",
+        ),
+        (
+            "regex.__aura_compile",
+            "import regex\ndef main():\n    _ = regex.__aura_compile(\"a\")\n",
+        ),
+        (
+            "image.__aura_decode",
+            "import image\ndef main():\n    _ = image.__aura_decode(bytes())\n",
+        ),
+    ];
+    for (label, source) in rejected {
+        assert!(
+            crate::check_source(source).is_err(),
+            "expected `{label}` to be rejected in user code"
+        );
+    }
+
+    // Standard public APIs backed by those internal helpers continue to work.
+    let output = crate::run_source(
+        r#"
+import iter
+import sync
+from tensor import Device, Tensor
+
+def count_two() -> iter.Generator[int64]:
+    yield 10
+    yield 20
+
+def main():
+    m = sync.Mutex[int64](5)
+    with v = m.lock():
+        v += 7
+    mut total = 0
+    for item in count_two():
+        total += item
+    t = Tensor[float32].zeros([2], Device.cpu())
+    with v = m.lock():
+        print(f"{v}:{total}:{t.len()}")
+"#,
+    )
+    .expect("public sync, iter, and tensor APIs should keep working");
+    assert_eq!(output.stdout, "12:30:2\n");
+}
+
+#[test]
+fn target_constants_enter_the_registry_only_when_imported() {
+    for (source, expected) in [
+        ("def main():\n    pass\n", false),
+        ("import build\n", true),
+        ("from build import arch\n", true),
+    ] {
+        let program = crate::check_source(source).unwrap();
+        assert_eq!(program.module_registry.contains_key("build"), expected);
+        assert!(!program.module_registry["iter"]
+            .classes
+            .contains_key("ListIter"));
+    }
+}
+
+#[test]
+fn checked_source_namespaces_follow_nested_configuration_scopes() {
+    source_part("prelude").unwrap();
+    let cached = || CHECKED.with_borrow(|checked| checked.contains_key("prelude"));
+    assert!(cached());
+    crate::with_build_config(crate::current_build_config(), || assert!(cached()));
+    let mut other = crate::current_build_config();
+    other.apply_option("other").unwrap();
+    crate::with_build_config(other, || {
+        assert!(!cached());
+        source_part("prelude").unwrap();
+        assert!(cached());
+    });
+    assert!(cached());
 }

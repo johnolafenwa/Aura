@@ -1,0 +1,14 @@
+ROWS: fixed[uint16, 2] = [4, 7]
+
+class Cell:
+    words: fixed[uint16, 2]
+
+def update(i: int64, j: int64) -> uint16:
+    mut rows: fixed[fixed[uint16, 2], 2] = [ROWS, [2, 3]]
+    rows[i][j] += 10
+    mut records: fixed[Cell, 2] = [Cell(words=[1, 2]), Cell(words=[3, 4])]
+    records[j].words[i] = rows[i][j]
+    return records[j].words[i]
+
+def main():
+    print(update(0, 1))

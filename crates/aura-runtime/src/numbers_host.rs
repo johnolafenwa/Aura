@@ -40,8 +40,24 @@ const HEADER: usize = 4;
 const MAX_RESULT_BITS: u64 = 1 << 32;
 
 /// The largest power of ten, as an exponent, that aligning or scaling a
-/// decimal may build.
-const MAX_SCALE_DIGITS: u64 = 400_000_000;
+/// decimal may build. A decimal with more digits than a `str` can hold
+/// cannot be written out, so the limit is the string limit.
+const MAX_SCALE_DIGITS: u64 = crate::runtime_value::MAX_STRING_BYTES as u64;
+
+/// The most digits a magnitude of `bits` bits has in `radix`, rounded up.
+fn digits_in_radix(bits: u64, radix: u32) -> u64 {
+    (bits as f64 / f64::from(radix).log2()).ceil() as u64 + 1
+}
+
+/// Refuses a text of up to `bytes` bytes that the string limit does not
+/// allow, before the text is built.
+fn text_fits(bytes: u64, what: &str) -> Result<()> {
+    if bytes > crate::runtime_value::MAX_STRING_BYTES as u64 {
+        Err(too_large(what))
+    } else {
+        Ok(())
+    }
+}
 
 fn domain(message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded("AU4001", message)
@@ -171,7 +187,11 @@ fn no_value() -> Value {
 /// The wire form of `value` with decimal exponent `exponent`.
 fn wire(value: &BigInt, exponent: i64) -> Value {
     let limbs = value.iter_u64_digits();
-    let mut out = Vec::with_capacity(HEADER + limbs.len().max(1));
+    let length = HEADER + limbs.len().max(1);
+    if !crate::builtin_limit::fits(length as u64 * 8) {
+        return no_value();
+    }
+    let mut out = Vec::with_capacity(length);
     out.push(u64::from(value.to_i64().is_none()));
     out.push(u64::from(value.is_negative()));
     out.push(u64::from(exponent < 0));
@@ -189,16 +209,23 @@ fn int_value(value: i64) -> Value {
 }
 
 fn power_of_ten(digits: u64) -> Result<BigInt> {
+    // 3322 / 1000 bounds log2(10) from above.
+    crate::builtin_limit::check(digits.saturating_mul(3322).div_ceil(8000))?;
     if digits > MAX_SCALE_DIGITS {
         return Err(too_large("a power of ten"));
     }
     Ok(BigInt::from(10u8).pow(digits as u32))
 }
 
+// 30103 / 100000 is greater than log10(2).
+fn decimal_digit_bound(value: &BigInt) -> u64 {
+    value.bits().saturating_mul(30103).div_ceil(100000).max(1)
+}
+
 /// How many decimal digits `value` has. Zero has one.
-fn decimal_digits(value: &BigInt) -> u64 {
+fn decimal_digits(value: &BigInt) -> Result<u64> {
     if value.is_zero() {
-        return 1;
+        return Ok(1);
     }
     let bits = value.bits();
     if bits < 64 {
@@ -208,9 +235,10 @@ fn decimal_digits(value: &BigInt) -> u64 {
             magnitude /= 10;
             digits += 1;
         }
-        return digits;
+        return Ok(digits);
     }
-    value.magnitude().to_str_radix(10).len() as u64
+    crate::builtin_limit::check(decimal_digit_bound(value))?;
+    Ok(value.magnitude().to_str_radix(10).len() as u64)
 }
 
 /// Removes trailing decimal zeros from `coefficient`, raising `exponent`
@@ -219,21 +247,49 @@ fn normalized(mut coefficient: BigInt, mut exponent: i64) -> Result<(BigInt, i64
     if coefficient.is_zero() {
         return Ok((coefficient, 0));
     }
-    let ten = BigInt::from(10u8);
     // A number divisible by 10^k is divisible by 2^k, so the trailing zero
-    // bits bound the loop and most odd numbers skip it.
-    let mut budget = coefficient.trailing_zeros().unwrap_or(0);
-    while budget > 0 {
-        let (quotient, remainder) = coefficient.div_rem(&ten);
+    // bits bound the zeros and most odd numbers skip the search.
+    let budget = coefficient.trailing_zeros().unwrap_or(0);
+    if budget == 0 {
+        return Ok((coefficient, exponent));
+    }
+    // Divide by 10, 10^2, 10^4, ... while each divides, then by the same
+    // powers from the largest down, so that k zeros take about 2 log k
+    // divisions instead of k.
+    let mut removed: u64 = 0;
+    let mut powers = vec![BigInt::from(10u8)];
+    loop {
+        let step = 1u64 << (powers.len() - 1);
+        if removed + step > budget {
+            break;
+        }
+        let power = powers.last().expect("one power");
+        let (quotient, remainder) = coefficient.div_rem(power);
         if !remainder.is_zero() {
             break;
         }
         coefficient = quotient;
-        exponent = exponent
-            .checked_add(1)
-            .ok_or_else(|| overflow("`numbers.Decimal` exponent overflow"))?;
-        budget -= 1;
+        removed += step;
+        if power.bits() > coefficient.bits() {
+            break;
+        }
+        let square = power * power;
+        powers.push(square);
     }
+    for (index, power) in powers.iter().enumerate().rev() {
+        let step = 1u64 << index;
+        if removed + step > budget || power.bits() > coefficient.bits() + 1 {
+            continue;
+        }
+        let (quotient, remainder) = coefficient.div_rem(power);
+        if remainder.is_zero() {
+            coefficient = quotient;
+            removed += step;
+        }
+    }
+    exponent = exponent
+        .checked_add_unsigned(removed)
+        .ok_or_else(|| overflow("`numbers.Decimal` exponent overflow"))?;
     Ok((coefficient, exponent))
 }
 
@@ -329,7 +385,7 @@ fn rounded_to_digits(
     mode: i64,
     sticky: bool,
 ) -> Result<(BigInt, i64)> {
-    let have = decimal_digits(&coefficient);
+    let have = decimal_digits(&coefficient)?;
     let digits = digits as u64;
     if have <= digits {
         return Ok((coefficient, exponent));
@@ -354,6 +410,7 @@ fn positive_digits(name: &str, digits: i64) -> Result<i64> {
 }
 
 fn result_bits_fit(bits: u64) -> Result<()> {
+    crate::builtin_limit::check(bits.div_ceil(8))?;
     if bits > MAX_RESULT_BITS {
         Err(too_large("a result"))
     } else {
@@ -368,10 +425,29 @@ pub fn host_big_binary(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
     let op = int_argument(name, &args[0])?;
     let left = integer(name, &args, 1)?;
     let right = integer(name, &args, 3)?;
+    let wider = left.bits().max(right.bits());
+    let both = left.bits().saturating_add(right.bits());
+    if crate::builtin_limit::active() {
+        let bits = if matches!(op, 2 | 12) {
+            left.bits().saturating_add(right.bits())
+        } else {
+            left.bits().max(right.bits()).saturating_add(1)
+        };
+        crate::builtin_limit::check((HEADER as u64 + bits.div_ceil(64)) * 8)?;
+    }
     let result = match op {
-        0 => left + right,
-        1 => left - right,
-        2 => left * right,
+        0 | 1 => {
+            result_bits_fit(wider.saturating_add(1))?;
+            if op == 0 {
+                left + right
+            } else {
+                left - right
+            }
+        }
+        2 => {
+            result_bits_fit(both)?;
+            left * right
+        }
         3 | 4 => {
             if right.is_zero() {
                 return Err(domain("division by zero"));
@@ -416,7 +492,10 @@ pub fn host_big_binary(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
         9 => left & right,
         10 => left | right,
         11 => left ^ right,
-        12 => left.lcm(&right),
+        12 => {
+            result_bits_fit(both)?;
+            left.lcm(&right)
+        }
         _ => return Err(domain("`numbers.BigInt`: unknown operation")),
     };
     Ok(wire(&result, 0))
@@ -685,6 +764,12 @@ pub fn host_big_format(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
             "`BigInt` radix must be from 2 to 36, found {radix}"
         )));
     }
+    text_fits(
+        digits_in_radix(value.bits(), radix as u32).saturating_add(1),
+        "the text of a `BigInt`",
+    )?;
+    let bits_per_digit = u64::from((radix as u32).ilog2());
+    crate::builtin_limit::check(value.bits().div_ceil(bits_per_digit).saturating_add(1))?;
     Ok(Value::string(value.to_str_radix(radix as u32)))
 }
 
@@ -746,8 +831,16 @@ fn aligned(left: (BigInt, i64), right: (BigInt, i64)) -> Result<(BigInt, BigInt,
     if right_coefficient.is_zero() {
         return Ok((left_coefficient, right_coefficient, left_exponent));
     }
-    let gap = (i128::from(left_exponent) - i128::from(right_exponent)).unsigned_abs();
-    let scale = power_of_ten(u64::try_from(gap).map_err(|_| too_large("a power of ten"))?)?;
+    // Two `i64` exponents are at most `u64::MAX` apart.
+    let gap = left_exponent.abs_diff(right_exponent);
+    let scaled = if left_exponent >= right_exponent {
+        &left_coefficient
+    } else {
+        &right_coefficient
+    };
+    // 10^gap has under 3.33 * gap bits.
+    result_bits_fit(scaled.bits().saturating_add(gap.saturating_mul(10) / 3 + 1))?;
+    let scale = power_of_ten(gap)?;
     Ok(if left_exponent >= right_exponent {
         (left_coefficient * scale, right_coefficient, right_exponent)
     } else {
@@ -778,7 +871,7 @@ fn divided(
     // The quotient of the coefficients has `gap` or `gap + 1` digits before
     // its point. Scale so that the integer quotient has `digits` or
     // `digits + 1` digits, then round once.
-    let gap = decimal_digits(&numerator) as i128 - decimal_digits(&denominator) as i128;
+    let gap = decimal_digits(&numerator)? as i128 - decimal_digits(&denominator)? as i128;
     let shift = i128::from(digits) - gap;
     let scale = power_of_ten(
         u64::try_from(shift.unsigned_abs()).map_err(|_| too_large("a power of ten"))?,
@@ -794,7 +887,7 @@ fn divided(
         -i128::from(denominator_exponent),
         -shift,
     ])?;
-    if decimal_digits(&quotient) <= digits as u64 {
+    if decimal_digits(&quotient)? <= digits as u64 {
         // No digit to drop: round the last place from the remainder.
         let rounded = rounded_quotient(&scaled_numerator, &scaled_denominator, mode, false)?;
         return Ok((rounded, exponent));
@@ -816,10 +909,13 @@ pub fn host_dec_binary(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
             let (left, right, exponent) = aligned(left, right)?;
             (if op == 0 { left + right } else { left - right }, exponent)
         }
-        2 => (
-            left.0 * right.0,
-            exponent_sum(&[i128::from(left.1), i128::from(right.1)])?,
-        ),
+        2 => {
+            result_bits_fit(left.0.bits().saturating_add(right.0.bits()))?;
+            (
+                left.0 * right.0,
+                exponent_sum(&[i128::from(left.1), i128::from(right.1)])?,
+            )
+        }
         3 => {
             let digits = positive_digits("Decimal.divide", int_argument(name, &args[7])?)?;
             divided(left, right, digits, int_argument(name, &args[8])?)?
@@ -854,8 +950,8 @@ pub fn host_dec_compare(args: Vec<Value>, _program_args: Option<&[String]>) -> R
         (Sign::NoSign, _) => Ordering::Equal,
         (sign, _) => {
             // Compare by size first, which needs no scaling.
-            let left_top = decimal_digits(&left.0) as i128 + i128::from(left.1);
-            let right_top = decimal_digits(&right.0) as i128 + i128::from(right.1);
+            let left_top = decimal_digits(&left.0)? as i128 + i128::from(left.1);
+            let right_top = decimal_digits(&right.0)? as i128 + i128::from(right.1);
             let by_size = if sign == Sign::Minus {
                 right_top.cmp(&left_top)
             } else {
@@ -886,7 +982,7 @@ fn rounded_to_places(
         return Ok((coefficient, exponent));
     }
     let drop = (i128::from(target) - i128::from(exponent)) as u128;
-    if drop > u128::from(decimal_digits(&coefficient)) + 1 {
+    if drop > u128::from(decimal_digits(&coefficient)?) + 1 {
         // Every digit is dropped: the result is zero or one unit.
         let unit = rounded_quotient(&coefficient.signum(), &BigInt::from(4u8), mode, false)?;
         return Ok((unit, target));
@@ -970,6 +1066,21 @@ pub fn host_dec_parse(args: Vec<Value>, _program_args: Option<&[String]>) -> Res
 
 /// Plain notation: every digit written out, with no exponent.
 fn plain(coefficient: &BigInt, exponent: i64) -> Result<String> {
+    // The digits, the zeros or places the exponent adds, a sign, a point
+    // and a leading zero.
+    text_fits(
+        digits_in_radix(coefficient.bits(), 10)
+            .saturating_add(exponent.unsigned_abs())
+            .saturating_add(3),
+        "the text of a decimal",
+    )?;
+    let digit_bound = decimal_digit_bound(coefficient);
+    let length = if exponent >= 0 {
+        digit_bound.saturating_add(exponent as u64)
+    } else {
+        digit_bound.max(exponent.unsigned_abs()).saturating_add(2)
+    };
+    crate::builtin_limit::check(length.saturating_add(1))?;
     let digits = coefficient.magnitude().to_str_radix(10);
     let sign = if coefficient.is_negative() { "-" } else { "" };
     if exponent >= 0 {
@@ -995,6 +1106,12 @@ fn plain(coefficient: &BigInt, exponent: i64) -> Result<String> {
 /// between the seventh place after the point and the twenty-first before
 /// it, and `d.ddde30` otherwise, as a `float64` prints.
 fn display(coefficient: &BigInt, exponent: i64) -> Result<String> {
+    // The digits, a sign, a point and an exponent of up to 20 characters.
+    text_fits(
+        digits_in_radix(coefficient.bits(), 10).saturating_add(23),
+        "the text of a decimal",
+    )?;
+    crate::builtin_limit::check(decimal_digit_bound(coefficient).saturating_add(22))?;
     let digits = coefficient.magnitude().to_str_radix(10);
     let top = digits.len() as i128 + i128::from(exponent) - 1;
     if (-7..21).contains(&top) {
@@ -1048,6 +1165,7 @@ pub fn host_dec_to_float(args: Vec<Value>, _program_args: Option<&[String]>) -> 
     expect_arity(name, &args, 3)?;
     let (coefficient, exponent) = decimal(name, &args, 0)?;
     // The standard parser rounds a decimal text correctly.
+    crate::builtin_limit::check(decimal_digit_bound(&coefficient).saturating_add(22))?;
     let text = format!("{coefficient}e{exponent}");
     Ok(Value::Float(text.parse::<f64>().unwrap_or(f64::NAN)))
 }
@@ -1078,7 +1196,7 @@ pub fn host_dec_sqrt(args: Vec<Value>, _program_args: Option<&[String]>) -> Resu
     }
     // Scale to an even exponent and enough digits that the integer root
     // carries one digit more than asked for.
-    let have = decimal_digits(&coefficient) as i128;
+    let have = decimal_digits(&coefficient)? as i128;
     let mut shift = (2 * i128::from(digits) + 2 - have).max(0);
     if (i128::from(exponent) - shift) % 2 != 0 {
         shift += 1;

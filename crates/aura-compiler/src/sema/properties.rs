@@ -604,6 +604,16 @@ pub(super) fn type_is_copy_in_context_inner(
     module_registry: Option<&BTreeMap<String, ModuleNamespace>>,
     visiting: &mut BTreeSet<String>,
 ) -> bool {
+    if let Some((element, _)) = ty.as_fixed_array() {
+        return type_is_copy_in_context_inner(
+            element,
+            classes,
+            enums,
+            imported_modules,
+            module_registry,
+            visiting,
+        );
+    }
     match ty {
         // A union is Copy exactly when every member is Copy (ADR-0052 A6):
         // its storage is a tag plus one member payload.
@@ -755,7 +765,7 @@ pub(super) fn type_is_copy_in_context_inner(
 
 pub(super) fn type_contains_named(ty: &Type, target: &str) -> bool {
     // A trait object stores a handle; the trait it names is not a field.
-    if ty.is_trait_object() {
+    if ty.is_trait_object() || ty.as_raw_pointer().is_some() {
         return false;
     }
     match ty {
@@ -838,7 +848,7 @@ pub(super) fn type_reaches_class_through_non_indirect_fields(
     visiting: &mut BTreeSet<String>,
 ) -> bool {
     // A trait object holds its value behind a handle.
-    if ty.is_trait_object() {
+    if ty.is_trait_object() || ty.as_raw_pointer().is_some() {
         return false;
     }
     match ty {
@@ -1108,6 +1118,11 @@ impl<'a> FunctionChecker<'a> {
                 Type::Tuple(elements) => {
                     for element in elements {
                         self.collect_transfer_nominals(element, nominals);
+                    }
+                }
+                Type::Union(union) => {
+                    for member in &union.members {
+                        self.collect_transfer_nominals(member, nominals);
                     }
                 }
                 Type::Closure { captures, .. } => {

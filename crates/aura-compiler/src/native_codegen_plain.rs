@@ -57,6 +57,9 @@ impl PlainRecord {
     /// the bytes that C expects. Distinct native and C padding take the
     /// field-by-field conversion path.
     pub(super) fn matches_c_layout(&self, layout: &crate::c_layout::CStruct) -> bool {
+        if layout.has_controlled_layout() {
+            return false;
+        }
         if !layout.is_plain() || layout.size() as i64 != self.stride {
             return false;
         }
@@ -82,6 +85,8 @@ pub(super) struct PlainRecords {
     pub(super) enums: HashMap<String, Option<super::enums::EnumRecord>>,
     /// The module's Copy classes, whose instances keep every field inline.
     pub(super) copy_classes: HashSet<String>,
+    pub(super) hooked_classes: HashSet<String>,
+    pub(super) owner_types: HashSet<String>,
     /// The plain records made so far, which number their access codes.
     plain_count: u32,
     /// Each cell with its type's descriptor and access code, in the order
@@ -139,6 +144,18 @@ impl PlainRecords {
             by_class: HashMap::new(),
             classes: HashMap::new(),
             enums: HashMap::new(),
+            owner_types: super::class_drop::owner_types(module),
+            hooked_classes: module
+                .classes
+                .iter()
+                .filter(|class| {
+                    class
+                        .methods
+                        .iter()
+                        .any(|m| m.name == crate::sema::DROP_HOOK)
+                })
+                .map(|c| c.name.clone())
+                .collect(),
             copy_classes: module
                 .classes
                 .iter()
@@ -752,6 +769,66 @@ impl FunctionCompiler<'_> {
             self.runtime[RuntimeFn::VecSetPlain],
             &[list, index, line, column, slot, cell],
         );
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+    }
+
+    /// Swaps elements `first` and `second` of a list of records. A confined
+    /// list that keeps the records in place and shares its storage with no
+    /// other list exchanges the two elements' words where they lie. Any
+    /// other list, or an index out of range, calls `function`, which
+    /// reports the list-index diagnostic.
+    pub(super) fn emit_plain_list_swap(
+        &mut self,
+        record: &PlainRecord,
+        list: Val,
+        first: Val,
+        second: Val,
+        function: FuncRef,
+    ) {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let unshared_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.emit_plain_list_check(list, record, &layout, slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        // A view's room is 0 while another list shares the storage.
+        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        let shared = self.builder.icmp_imm(IntCC::Equal, capacity, 0);
+        self.builder
+            .brif(shared, slow_block, &[], unshared_block, &[]);
+
+        self.builder.switch_to_block(unshared_block);
+        self.builder.seal_block(unshared_block);
+        let elements = self
+            .builder
+            .load(types::I64, flags, list, layout.elements_offset);
+        let left = self.emit_list_view_bounds_check(list, first, &layout, slow_block);
+        let right = self.emit_list_view_bounds_check(list, second, &layout, slow_block);
+        let left = self.builder.imul_imm(left, record.stride);
+        let left = self.builder.iadd(elements, left);
+        let right = self.builder.imul_imm(right, record.stride);
+        let right = self.builder.iadd(elements, right);
+        // An element is whole words, padding included, so the words are
+        // exchanged as they are. Both are read before either is written,
+        // so swapping an element with itself keeps it.
+        for offset in (0..record.stride as i32).step_by(8) {
+            let a = self.builder.load(types::I64, flags, left, offset);
+            let b = self.builder.load(types::I64, flags, right, offset);
+            self.builder.store(flags, b, left, offset);
+            self.builder.store(flags, a, right, offset);
+        }
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        self.builder.call(function, &[list, first, second]);
         self.builder.jump(join_block, &[]);
 
         self.builder.switch_to_block(join_block);

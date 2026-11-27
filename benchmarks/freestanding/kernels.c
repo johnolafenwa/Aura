@@ -63,3 +63,15 @@ double c_orbit(int64_t steps) {
         body = step(body, 0.001);
     return body.x * body.x + body.y * body.y;
 }
+
+uint32_t c_ring_mix(uint32_t rounds) {
+    uint32_t ring[16] = {0};
+    uint32_t value = UINT32_C(0x13579bdf);
+    for (uint32_t i = 0; i < rounds; ++i) {
+        unsigned slot = i & 15;
+        value ^= ring[slot] ^ i;
+        value = (value << 7) | (value >> 25);
+        ring[slot] = value;
+    }
+    return value;
+}

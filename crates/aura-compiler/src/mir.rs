@@ -1,3 +1,4 @@
+mod module_state;
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, CompareLink, CompareOp,
     ComprehensionClause, ComprehensionOutput, DestructureStmt, Expr, ExprKind, IfStmt,
@@ -223,7 +224,22 @@ fn is_float_literal_expr(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Float(_) => true,
         ExprKind::Group(inner) => is_float_literal_expr(inner),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+        } => is_float_literal_expr(inner),
         _ => false,
+    }
+}
+
+fn sibling_literal_expected<'a>(expr: &Expr, sibling_ty: &'a Type) -> Option<&'a Type> {
+    if (is_integer_literal_expr(expr)
+        && (is_float_type(sibling_ty) || crate::sema::integer_type_bounds(sibling_ty).is_some()))
+        || (is_float_literal_expr(expr) && is_float_type(sibling_ty))
+    {
+        Some(sibling_ty)
+    } else {
+        None
     }
 }
 
@@ -412,12 +428,9 @@ fn adjusted_binary_operand_types(
             left_ty = right_ty.clone();
         } else if is_integer_literal_expr(right_expr) && is_float_type(&left_ty) {
             right_ty = left_ty.clone();
-        } else if is_integer_literal_expr(left_expr) || matches!(left_expr.kind, ExprKind::Float(_))
-        {
+        } else if is_integer_literal_expr(left_expr) || is_float_literal_expr(left_expr) {
             left_ty = right_ty.clone();
-        } else if is_integer_literal_expr(right_expr)
-            || matches!(right_expr.kind, ExprKind::Float(_))
-        {
+        } else if is_integer_literal_expr(right_expr) || is_float_literal_expr(right_expr) {
             right_ty = left_ty.clone();
         }
     }
@@ -736,6 +749,10 @@ impl MirOwnership {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirConstant {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen: Option<crate::const_eval::FrozenValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<crate::sema::StateImage>,
     pub key: String,
     pub initializer: String,
     pub ty: Type,
@@ -764,6 +781,9 @@ pub struct MirLocalType {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirClass {
+    /// A C record whose packed, aligned, or overlapping storage differs from Aura fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_layout: Option<crate::c_layout::CStruct>,
     pub name: String,
     pub type_params: Vec<String>,
     pub fields: Vec<MirClassField>,
@@ -850,6 +870,23 @@ pub const NATIVE_LOOP_SAFEPOINT_INTERVAL: u64 = 4_096;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Instruction {
+    InlineAsm {
+        asm: crate::inline_asm::MachineAsm,
+        inputs: Vec<Operand>,
+        outputs: Vec<String>,
+        span: Span,
+    },
+    /// An initialized class now owns its destructor. Its construction has
+    /// finished, including its initializer and invariant checks.
+    ArmDrop {
+        place: String,
+        function: String,
+    },
+    /// Last lexical use of a source owner. A moved owner is already empty.
+    EndOwner {
+        place: String,
+    },
+
     /// A compiler-inserted cooperative scheduling check. Loop lowering places
     /// one on each semantic backedge; runtimes amortize the actual yield with
     /// a per-function fuel counter.
@@ -1167,6 +1204,30 @@ pub enum Rvalue {
     NoneTest {
         value: Operand,
     },
+    /// Copy an aggregate between an Aura value and storage laid out by C.
+    CPointerAccess {
+        address: Operand,
+        store: Option<Operand>,
+        layout: crate::c_layout::CStruct,
+        volatile: bool,
+    },
+    /// The address of a field in a local with stable C representation.
+    CFieldAddress {
+        root: String,
+        layout: crate::c_layout::CStruct,
+        offset: usize,
+    },
+    /// Reads, writes and address formation for a freestanding data symbol.
+    ModuleLoad {
+        key: String,
+    },
+    ModuleAddress {
+        key: String,
+    },
+    ModuleStore {
+        key: String,
+        value: Operand,
+    },
     /// Read a once-initialized immutable module value. The initializer thunk
     /// is shared by MIR and direct execution and guarded against re-entry.
     ModuleConstant {
@@ -1340,6 +1401,9 @@ pub enum CallTarget {
     TraitMember {
         object: Operand,
         trait_name: String,
+        /// The selected trait specialization in a generated forwarder.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        trait_args: Vec<Type>,
         field: String,
         receiver_place: Option<String>,
         /// What the call runs, as on `Member`.
@@ -1390,6 +1454,10 @@ pub enum MethodDispatch {
 /// function it runs for a value of that type.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MethodCandidate {
+    /// A generic forwarder can select different implementations on the
+    /// same field type. Its enclosing receiver carries the trait arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_type: Option<Type>,
     pub ty: Type,
     pub function: String,
 }
@@ -1453,9 +1521,12 @@ impl CallTarget {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirExternCall {
+    /// The module that declares this `extern "C"` function.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub module_name: String,
     /// The name of the Aura declaration, which is not the C symbol when
     /// the declaration has a `symbol` clause. Its trusted contract is
-    /// found by this name.
+    /// found by `(module_name, name)`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
     pub symbol: String,
@@ -1572,7 +1643,7 @@ pub enum Operand {
     },
     Int(u128),
     Duration(i128),
-    Float(f64),
+    Float(#[serde(with = "crate::const_eval::float_operand")] f64),
     Bool(bool),
     String(String),
     Unit,
@@ -1615,6 +1686,8 @@ pub enum Terminator {
 /// The source check an `AssertFail` reports.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AssertKind {
+    /// A value exceeds the declared bit width of a C field.
+    CBitField,
     /// An `assert` statement or a compiler-inserted check: `AU4001`.
     #[default]
     Assert,
@@ -1638,6 +1711,7 @@ impl AssertKind {
     pub const fn code(self) -> &'static str {
         match self {
             AssertKind::Assert => "AU4001",
+            AssertKind::CBitField => "AU4033",
             AssertKind::Requires
             | AssertKind::Ensures
             | AssertKind::Invariant
@@ -1649,6 +1723,7 @@ impl AssertKind {
     pub const fn word(self) -> i64 {
         match self {
             AssertKind::Assert => 0,
+            AssertKind::CBitField => 5,
             AssertKind::Requires => 1,
             AssertKind::Ensures => 2,
             AssertKind::Invariant => 3,
@@ -4757,6 +4832,11 @@ fn rebase_callable_rvalue(
             }
             identities
         }
+        Rvalue::CPointerAccess { .. } => Vec::new(),
+        Rvalue::CFieldAddress { .. } => Vec::new(),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleStore { .. } | Rvalue::ModuleAddress { .. } => {
+            Vec::new()
+        }
         Rvalue::ModuleConstant { initializer, .. } => context
             .functions
             .get(initializer.as_str())
@@ -5172,6 +5252,15 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
             Rvalue::UnionTakePayload { place, .. } | Rvalue::TupleTakeElement { place, .. } => {
                 place.split('.').next() == Some(root)
             }
+            Rvalue::CPointerAccess { address, store, .. } => {
+                operand_moves(address, root)
+                    || store
+                        .as_ref()
+                        .is_some_and(|value| operand_moves(value, root))
+            }
+            Rvalue::CFieldAddress { .. } => false,
+            Rvalue::ModuleStore { value, .. } => operand_moves(value, root),
+            Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => false,
             Rvalue::UnionTagTest { .. } | Rvalue::ModuleConstant { .. } => false,
             Rvalue::Closure { captures, .. } => captures
                 .iter()
@@ -7458,6 +7547,42 @@ fn validate_loan_rvalue(
             validate_canonical_mir_identifier(function, field, false)?;
             validate_loan_operand(function, object, context, state)
         }
+        Rvalue::CPointerAccess { address, store, .. } => {
+            validate_loan_operand(function, address, context, state)?;
+            if let Some(value) = store {
+                validate_loan_operand(function, value, context, state)?;
+            }
+            Ok(())
+        }
+        Rvalue::CFieldAddress {
+            root,
+            layout,
+            offset,
+        } => {
+            if *offset >= layout.size()
+                || !context
+                    .operand_type(function, &Operand::Place(root.clone()))?
+                    .is_some_and(|ty| {
+                        if layout.name == "#fixed" {
+                            ty.as_fixed_array().is_some()
+                        } else {
+                            ty == Type::named(&layout.name)
+                        }
+                    })
+            {
+                return Err(format!("invalid MIR address of C field in `{root}`"));
+            }
+            validate_checked_loan_place_access(
+                function,
+                root,
+                LoanPlaceAccess::Mutate,
+                context,
+                state,
+                None,
+            )
+        }
+        Rvalue::ModuleStore { value, .. } => validate_loan_operand(function, value, context, state),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => Ok(()),
         Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             function: closure_function,
@@ -7846,7 +7971,13 @@ fn validate_loan_rvalue(
                     } = callee
                         .member_parts()
                         .expect("member and receiver runtime calls have member parts");
-                    validate_canonical_mir_identifier(function, field, false)?;
+                    let identifier = match callee {
+                        CallTarget::Member { .. } => field
+                            .strip_suffix(crate::ast::PROPERTY_SETTER_SUFFIX)
+                            .unwrap_or(field),
+                        _ => field,
+                    };
+                    validate_canonical_mir_identifier(function, identifier, false)?;
                     validate_loan_operand(function, object, context, state)?;
                     let receiver_passing =
                         context.member_receiver_passing(function, object, trait_name, field)?;
@@ -7929,6 +8060,9 @@ fn validate_loan_rvalue(
                         state,
                         None,
                     )?;
+                    // The callee may store any member in a `mut` argument,
+                    // so a tag proof over that place no longer holds.
+                    invalidate_union_facts_for_place(place, state);
                 }
             }
             let _ = context.pending_call(function, callee, args)?;
@@ -8271,9 +8405,7 @@ fn validate_loan_terminator(
     match terminator {
         Terminator::Return(value) => {
             validate_loan_operand(function, value, context, state)?;
-            // Lowering leaves a synthetic `Return(Unit)` in the dead
-            // fallthrough block after an exhaustive match; only a value that
-            // could carry a callable is checked against the return contract.
+            // Only a value that could carry a callable needs the return-contract check.
             if matches!(
                 value,
                 Operand::Place(_) | Operand::MovePlace(_) | Operand::Function { .. }
@@ -8476,6 +8608,20 @@ fn validate_loan_instruction(
         }
     }
     match instruction {
+        Instruction::EndOwner { place } => {
+            validate_released_root(function, place, known_roots, state)?
+        }
+        Instruction::ArmDrop {
+            place,
+            function: hook,
+        } => {
+            let ty = context.place_type(function, place)?;
+            if !matches!(ty, Some(Type::Named(ref name, _)) if context.classes.get(name.as_str()).is_some_and(|class| class.methods.iter().any(|method| method.name == crate::sema::DROP_HOOK && method.function_name == *hook && method.receiver == Some(MirReceiverKind::BorrowMut))))
+            {
+                return Err(format!("invalid drop hook `{hook}` for `{place}`"));
+            }
+            validate_loan_operand(function, &Operand::Place(place.clone()), context, state)?;
+        }
         Instruction::Retain { place } => {
             let root = place.split('.').next().unwrap_or_default();
             if !known_roots.contains(root) && !state.loans.contains_key(root) {
@@ -9549,6 +9695,23 @@ fn validate_loan_instruction(
                 )?;
             }
         }
+        Instruction::InlineAsm {
+            inputs, outputs, ..
+        } => {
+            for input in inputs {
+                validate_loan_operand(function, input, context, state)?;
+            }
+            for place in outputs {
+                validate_checked_loan_place_access(
+                    function,
+                    place,
+                    LoanPlaceAccess::Mutate,
+                    context,
+                    state,
+                    None,
+                )?;
+            }
+        }
         Instruction::PopCleanup { place, .. } => {
             if place_has_borrowed_value_origin(place, state) {
                 return Err(format!(
@@ -10467,7 +10630,18 @@ pub(crate) fn instruction_place_mentions<'a>(
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
         | Instruction::SourceName { .. } => {}
-        Instruction::Retain { place } | Instruction::Release { place } => mentions.push(place),
+        Instruction::InlineAsm {
+            inputs, outputs, ..
+        } => {
+            for input in inputs {
+                operand_place_mention(input, mentions);
+            }
+            mentions.extend(outputs.iter().map(String::as_str));
+        }
+        Instruction::ArmDrop { place, .. }
+        | Instruction::EndOwner { place }
+        | Instruction::Retain { place }
+        | Instruction::Release { place } => mentions.push(place),
         Instruction::Lend { place, temp, .. } | Instruction::EndLend { place, temp, .. } => {
             mentions.extend([place.as_str(), temp])
         }
@@ -10531,6 +10705,15 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
         Rvalue::UnionTagTest { place, .. }
         | Rvalue::UnionTakePayload { place, .. }
         | Rvalue::TupleTakeElement { place, .. } => mentions.push(place),
+        Rvalue::CPointerAccess { address, store, .. } => {
+            operand_place_mention(address, mentions);
+            if let Some(value) = store {
+                operand_place_mention(value, mentions);
+            }
+        }
+        Rvalue::CFieldAddress { root, .. } => mentions.push(root),
+        Rvalue::ModuleStore { value, .. } => operand_place_mention(value, mentions),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => {}
         Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
@@ -10696,6 +10879,10 @@ pub fn lower_for_verification(program: &Program) -> MirModule {
 /// them, so proved checks still map onto that lowering.
 const GHOST_NUMBERING: usize = 1_000_000_000;
 
+/// The most elements of a list literal a `for` loop reads from locals. A
+/// longer literal is built as a list, which takes less code.
+const LITERAL_ITERATION_ELEMENTS: usize = 8;
+
 /// Whether a block holds `ghost` code, whose checks no run performs.
 pub(crate) fn is_ghost_label(label: &str) -> bool {
     label
@@ -10749,7 +10936,14 @@ fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
 /// every access, and decides ownership itself, so it gains nothing from
 /// them.
 pub fn lower_implicit(program: &Program) -> MirModule {
-    let mut module = lower_unresolved(program);
+    lower_implicit_with_constants(program, program.constant_init_plan.iter())
+}
+
+pub(crate) fn lower_implicit_with_constants<'a>(
+    program: &Program,
+    constants: impl Iterator<Item = &'a crate::sema::ConstantInfo>,
+) -> MirModule {
+    let mut module = lower_unresolved_with_constants(program, constants);
     resolve_runtime_ops_and_unions(program, &mut module);
     module
 }
@@ -10854,11 +11048,18 @@ fn drop_measure_checks_outside_cycles(functions: &mut [MirFunction], calls: Meas
 }
 
 fn lower_unresolved(program: &Program) -> MirModule {
+    lower_unresolved_with_constants(program, program.constant_init_plan.iter())
+}
+
+fn lower_unresolved_with_constants<'a>(
+    program: &Program,
+    constants: impl Iterator<Item = &'a crate::sema::ConstantInfo>,
+) -> MirModule {
     let measured = program_has_function_measures(program);
     if measured {
         MEASURE_CALLS.with(|calls| *calls.borrow_mut() = Some(MeasureCalls::default()));
     }
-    let mut module = lower_unresolved_functions(program);
+    let mut module = lower_unresolved_functions(program, constants);
     if measured {
         if let Some(calls) = MEASURE_CALLS.with(|calls| calls.borrow_mut().take()) {
             drop_measure_checks_outside_cycles(&mut module.functions, calls);
@@ -10868,7 +11069,10 @@ fn lower_unresolved(program: &Program) -> MirModule {
     module
 }
 
-fn lower_unresolved_functions(program: &Program) -> MirModule {
+fn lower_unresolved_functions<'a>(
+    program: &Program,
+    constant_plan: impl Iterator<Item = &'a crate::sema::ConstantInfo>,
+) -> MirModule {
     let mut functions = program
         .functions
         .values()
@@ -10944,6 +11148,7 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
         }
         let copy = mir_class_is_copy(program, &class_name, class);
         classes.push(MirClass {
+            c_layout: c_bit_fields::record_storage(class, &class_name, &program.classes),
             name: class_name,
             type_params: class.decl.type_params.clone(),
             fields,
@@ -10995,14 +11200,26 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
 
     let mut constants = Vec::new();
     let mut seen_constants = BTreeSet::new();
-    for constant in &program.constant_init_plan {
+    for constant in constant_plan {
         let key = format!("{}::{}", constant.module_name, constant.decl.name);
         if !seen_constants.insert(key.clone()) {
             continue;
         }
         let initializer = format!("__aura_const_init::{key}");
+        if let Some(state) = &constant.state {
+            constants.push(MirConstant {
+                key,
+                initializer: String::new(),
+                ty: constant.ty.clone(),
+                state: Some(state.as_ref().clone()),
+                frozen: None,
+            });
+            continue;
+        }
         functions.extend(lower_constant_initializer(program, &initializer, constant));
         constants.push(MirConstant {
+            frozen: program.frozen_constants.get(&key).cloned(),
+            state: None,
             key,
             initializer,
             ty: constant.ty.clone(),
@@ -11023,7 +11240,23 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
     }
 
     let mut foreign_link = program.foreign_link.clone();
+    crate::inline_asm::append_module(program, &mut foreign_link);
+    foreign_link.asm_externs.sort();
+    foreign_link.asm_externs.dedup();
     foreign_link.exports = exported_functions(program);
+    if program.machine_target.is_some() {
+        foreign_link.machine = crate::machine_attributes::collect(program);
+        foreign_link.placed_data = crate::machine_data::collect(program);
+    }
+    for export in &mut foreign_link.exports {
+        if let Some(symbol) = foreign_link
+            .machine
+            .get(&export.function)
+            .and_then(|a| a.link_name.as_ref())
+        {
+            export.symbol.clone_from(symbol);
+        }
+    }
 
     MirModule {
         foreign_link,
@@ -11280,6 +11513,32 @@ fn program_imports_control_retry(program: &Program) -> bool {
             .any(namespace_imports_control_retry)
 }
 
+fn namespace_imports_mem(namespace: &ModuleNamespace) -> bool {
+    namespace.path == "mem"
+        || namespace
+            .all_functions
+            .values()
+            .any(|function| function.module_name == "mem")
+        || namespace.modules.values().any(namespace_imports_mem)
+        || namespace
+            .imported_modules
+            .values()
+            .any(namespace_imports_mem)
+}
+
+fn program_imports_mem(program: &Program) -> bool {
+    program
+        .functions
+        .values()
+        .any(|function| function.module_name == "mem")
+        || program.imported_modules.values().any(namespace_imports_mem)
+        || program
+            .module_registry
+            .values()
+            .filter(|namespace| namespace.path != "mem")
+            .any(namespace_imports_mem)
+}
+
 fn push_imported_module_classes(
     program: &Program,
     classes: &mut Vec<MirClass>,
@@ -11371,6 +11630,7 @@ fn push_imported_module_classes_from_namespace(
         }
         let copy = mir_class_is_copy(program, &class_name, class);
         classes.push(MirClass {
+            c_layout: c_bit_fields::record_storage(class, &class_name, &namespace.all_classes),
             name: class_name,
             type_params: class.decl.type_params.clone(),
             fields,
@@ -11542,6 +11802,18 @@ fn push_display_wrappers(program: &Program, functions: &mut Vec<MirFunction>) {
     }
 }
 
+pub(crate) fn trait_impl_method_name(
+    trait_impl: &crate::sema::TraitImplInfo,
+    method_name: &str,
+) -> String {
+    format!(
+        "{}{} for {}.{method_name}",
+        trait_impl.trait_name,
+        format_trait_args(&trait_impl.trait_args),
+        trait_impl.for_type
+    )
+}
+
 fn lower_trait_impl(
     program: &Program,
     module_name: &str,
@@ -11551,13 +11823,11 @@ fn lower_trait_impl(
 ) -> MirTraitImpl {
     let mut methods = Vec::new();
     for method in trait_impl.methods.values() {
-        let qualified_name = format!(
-            "{}{} for {}.{}",
-            trait_impl.trait_name,
-            format_trait_args(&trait_impl.trait_args),
-            trait_impl.for_type,
-            method.decl.name
-        );
+        // A receiverless generic forwarder is an alias resolved at its use.
+        if crate::sema::delegation::deferred_associated(trait_impl, method) {
+            continue;
+        }
+        let qualified_name = trait_impl_method_name(trait_impl, &method.decl.name);
         // A default body the implementation inherits names what its
         // trait's module sees, so it lowers in that module.
         let inherited = !trait_impl
@@ -11648,6 +11918,11 @@ fn push_imported_module_functions_from_namespace(
             // which cannot name it; besides keeping the MIR honest, this
             // prevents its runtime adapters from leaking into unrelated
             // native objects.
+            continue;
+        }
+        if qualified_name.starts_with("mem::") && !program_imports_mem(program) {
+            // `mem` requires `allow_ffi = true`; omit its wrappers unless a
+            // module in the program actually imports `mem`.
             continue;
         }
         if seen.insert(qualified_name.clone()) {
@@ -11863,6 +12138,12 @@ fn lower_function_or_initializer(
         if initializer.is_none() && receiver != Some(ReceiverKind::Value) {
             lowerer.non_owning_roots.insert("self".to_string());
         }
+        if receiver == Some(ReceiverKind::Value) {
+            lowerer
+                .current_binding_block()
+                .owners
+                .push("self".to_string());
+        }
     }
     for ((param, ty), passing) in function
         .params
@@ -11875,6 +12156,11 @@ fn lower_function_or_initializer(
             .insert(param.name.clone(), spans::span_type_as_list(ty));
         if *passing != ReceiverKind::Value {
             lowerer.non_owning_roots.insert(param.name.clone());
+        } else {
+            lowerer
+                .current_binding_block()
+                .owners
+                .push(param.name.clone());
         }
     }
     for param in &span_params {
@@ -11938,7 +12224,7 @@ fn lower_function_or_initializer(
         lowerer.emit_initializer_slot(class, return_type);
         lowerer.lower_contract_checks(function, crate::ast::ContractKind::Requires);
         lowerer.lower_stmts(&function.body);
-    } else {
+    } else if !naked::lower_export(&mut lowerer, function, &params, return_type) {
         lowerer.lower_contracted_body(function);
     }
     let default_return = if initializer.is_some() {
@@ -12350,7 +12636,13 @@ struct ReturnedViewCallee {
     trait_name: Option<String>,
 }
 
+#[path = "mir_class_drop.rs"]
+mod class_drop;
+#[path = "mir_naked.rs"]
+mod naked;
+
 struct Lowerer<'a> {
+    has_class_hooks: bool,
     program: &'a Program,
     function_name: &'a str,
     module_name: &'a str,
@@ -12433,6 +12725,8 @@ struct Lowerer<'a> {
 /// even with another type.
 #[derive(Default)]
 struct BindingBlock {
+    /// Materialized source owner slots in declaration order.
+    owners: Vec<String>,
     /// Names declared here under their own spelling.
     declared: Vec<String>,
     /// Names declared here with another type than an ended binding of the
@@ -12539,6 +12833,7 @@ struct MatchWritebackState {
 }
 
 struct LoopLabels {
+    owner_depth: usize,
     break_label: String,
     continue_label: String,
     cleanup_depth: usize,
@@ -12641,6 +12936,7 @@ impl<'a> Lowerer<'a> {
             program,
             function_name,
             module_name,
+            has_class_hooks: class_drop::program_has_hooks(program),
             default_helper_owner: None,
             recursive_local: None,
             metadata_module_name: None,
@@ -13171,7 +13467,10 @@ impl<'a> Lowerer<'a> {
         namespace: &'n ModuleNamespace,
         name: &str,
     ) -> Option<&'n crate::sema::FunctionInfo> {
-        if namespace.path == self.module_name {
+        if namespace.path == self.module_name
+            || (namespace.path == "iter"
+                && matches!(name, "__aura_generator" | "__aura_generator_yield"))
+        {
             namespace.all_functions.get(name)
         } else {
             namespace.functions.get(name)
@@ -13244,6 +13543,7 @@ impl<'a> Lowerer<'a> {
 
     fn extern_call_target(function: &crate::sema::ExternFunctionInfo) -> MirExternCall {
         MirExternCall {
+            module_name: function.module_name.clone(),
             name: function.decl.name.clone(),
             symbol: function.decl.link_name().to_string(),
             abi: function.decl.abi.clone(),
@@ -14030,7 +14330,33 @@ impl<'a> Lowerer<'a> {
 
     fn lower_constant_read(&mut self, constant: &crate::sema::ConstantInfo) -> Operand {
         let temp = self.new_typed_temp(constant.ty.clone());
-        if is_scalar_literal_constant(constant) {
+        if constant.decl.mutable {
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::ModuleLoad {
+                    key: module_state::cell_key(constant),
+                },
+            });
+            return Operand::Place(temp);
+        }
+        let key = format!("{}::{}", constant.module_name, constant.decl.name);
+        if let Some(expr) = self
+            .program
+            .frozen_constants
+            .get(&key)
+            .and_then(|value| crate::const_eval::scalar_expr(value, constant.decl.value.span))
+        {
+            let value = self.lower_expr_with_expected(&expr, Some(&constant.ty));
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::Use(value),
+            });
+            return Operand::Place(temp);
+        }
+        if is_scalar_literal_constant(constant)
+            || constant.ty.as_fixed_array().is_some()
+                && fixed_arrays::constant_initializer(&constant.decl.value)
+        {
             // The literal has no effects, so each read computes it where
             // it stands; the program still runs the initializer at startup.
             let value = self.lower_expr_with_expected(&constant.decl.value, Some(&constant.ty));
@@ -14040,7 +14366,6 @@ impl<'a> Lowerer<'a> {
             });
             return Operand::Place(temp);
         }
-        let key = format!("{}::{}", constant.module_name, constant.decl.name);
         self.emit(Instruction::Assign {
             target: temp.clone(),
             value: Rvalue::ModuleConstant {
@@ -14137,7 +14462,13 @@ impl<'a> Lowerer<'a> {
     }
 
     fn finish(mut self, spec: MirFunctionSpec) -> MirFunction {
-        if self.blocks[self.current_block].terminator.is_none() {
+        // The checker requires every live path of a value-returning function
+        // to return. A join with no value (e.g. after an exhaustive match)
+        // stays unterminated here and becomes Unreachable below.
+        if self.blocks[self.current_block].terminator.is_none()
+            && (spec.return_type == Type::Unit || spec.default_return != Operand::Unit)
+        {
+            self.end_owners_from(0);
             self.blocks[self.current_block].terminator =
                 Some(Terminator::Return(spec.default_return));
         }
@@ -14318,6 +14649,9 @@ impl<'a> Lowerer<'a> {
                     self.emit(Instruction::EndLoan { loan });
                 }
             }
+        }
+        if !self.current_terminated() {
+            self.end_owners_from(self.binding_blocks.len() - 1);
         }
         self.loan_scopes.pop();
         self.end_binding_block();
@@ -14752,6 +15086,9 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::Pass(_) => true,
+            Stmt::Expr(stmt) if crate::inline_asm::is_asm(&stmt.expr) => {
+                self.lower_inline_asm(&stmt.expr)
+            }
             Stmt::Expr(expr_stmt) if self.erased_lemma_call(&expr_stmt.expr) => true,
             Stmt::Assert(assert_stmt) if crate::parser::mentions_ghost(&assert_stmt.condition) => {
                 self.lower_ghost(|this| match &assert_stmt.clause {
@@ -14914,10 +15251,11 @@ impl<'a> Lowerer<'a> {
                         value: Rvalue::Use(value),
                     });
                     self.emit_cleanup_range(cleanup_depth, true, 0);
+                    self.end_owners_from(1);
                     self.terminate(Terminator::Goto(label));
                 } else {
                     let mut value = value;
-                    if !self.with_stack.is_empty() {
+                    if !self.with_stack.is_empty() || self.has_live_drop_owners() {
                         let temp = self.new_temp();
                         self.emit(Instruction::Assign {
                             target: temp.clone(),
@@ -14926,6 +15264,7 @@ impl<'a> Lowerer<'a> {
                         value = self.move_place_for_type(temp, &self.return_type);
                     }
                     self.emit_cleanup_range(0, true, 0);
+                    self.end_owners_from(0);
                     self.terminate(Terminator::Return(value));
                 }
                 false
@@ -14956,9 +15295,11 @@ impl<'a> Lowerer<'a> {
                 let loop_labels = self.loop_stack.last().expect("checked loop context");
                 let cleanup_depth = loop_labels.cleanup_depth;
                 let loan_depth = loop_labels.loan_depth;
+                let owner_depth = loop_labels.owner_depth;
                 let continue_label = loop_labels.continue_label.clone();
                 self.emit_loan_cleanup_from(loan_depth, None);
                 self.emit_cleanup_range(cleanup_depth, true, loan_depth);
+                self.end_owners_from(owner_depth);
                 self.terminate(Terminator::Goto(continue_label));
                 false
             }
@@ -14972,9 +15313,11 @@ impl<'a> Lowerer<'a> {
         let loop_labels = self.loop_stack.last().expect("checked loop context");
         let cleanup_depth = loop_labels.cleanup_depth;
         let loan_depth = loop_labels.loan_depth;
+        let owner_depth = loop_labels.owner_depth;
         let break_label = loop_labels.break_label.clone();
         self.emit_loan_cleanup_from(loan_depth, None);
         self.emit_cleanup_range(cleanup_depth, true, loan_depth);
+        self.end_owners_from(owner_depth);
         self.terminate(Terminator::Goto(break_label));
     }
 
@@ -15020,12 +15363,16 @@ impl<'a> Lowerer<'a> {
         self.lower_stmts(&function.body);
         self.return_redirects.pop();
         if !self.current_terminated() {
-            // Falling off the end returns `None`.
-            self.emit(Instruction::Assign {
-                target: return_place.clone(),
-                value: Rvalue::Use(default_return_operand(&return_type)),
-            });
-            self.terminate(Terminator::Goto(self.label(exit)));
+            if return_type == Type::Unit {
+                self.emit(Instruction::Assign {
+                    target: return_place.clone(),
+                    value: Rvalue::Use(Operand::Unit),
+                });
+                self.terminate(Terminator::Goto(self.label(exit)));
+            } else {
+                // All live paths already sent their result to the postcondition.
+                self.terminate(Terminator::Unreachable);
+            }
         }
         self.switch_to(exit);
         self.scoped_names.push(std::collections::HashMap::from([(
@@ -15041,6 +15388,7 @@ impl<'a> Lowerer<'a> {
             self.emit_class_invariant_check("self", class);
         }
         let value = self.move_place_for_type(return_place, &return_type);
+        self.end_owners_from(0);
         self.terminate(Terminator::Return(value));
     }
 
@@ -15560,26 +15908,12 @@ impl<'a> Lowerer<'a> {
         let shared_equality_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
             .then(|| self.infer_equality_hint(left, right))
             .flatten();
-        let left_expected = shared_equality_expected.as_ref().or_else(|| {
-            if is_integer_literal_expr(left)
-                && (is_float_type(&inferred_right_ty)
-                    || crate::sema::integer_type_bounds(&inferred_right_ty).is_some())
-            {
-                Some(&inferred_right_ty)
-            } else {
-                None
-            }
-        });
-        let right_expected = shared_equality_expected.as_ref().or_else(|| {
-            if is_integer_literal_expr(right)
-                && (is_float_type(&inferred_left_ty)
-                    || crate::sema::integer_type_bounds(&inferred_left_ty).is_some())
-            {
-                Some(&inferred_left_ty)
-            } else {
-                None
-            }
-        });
+        let left_expected = shared_equality_expected
+            .as_ref()
+            .or_else(|| sibling_literal_expected(left, &inferred_right_ty));
+        let right_expected = shared_equality_expected
+            .as_ref()
+            .or_else(|| sibling_literal_expected(right, &inferred_left_ty));
 
         let left_value = self.lower_expr_at_sequence_point(left, left_expected);
         let right_value = self.lower_expr_at_sequence_point(right, right_expected);
@@ -15596,6 +15930,7 @@ impl<'a> Lowerer<'a> {
                 target: result.clone(),
                 value: Rvalue::Call {
                     callee: CallTarget::TraitMember {
+                        trait_args: Vec::new(),
                         object: left_value.clone(),
                         trait_name,
                         field,
@@ -15679,6 +16014,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_assign(&mut self, assign: &AssignStmt) {
+        if self.lower_state_assignment(assign) {
+            return;
+        }
         let named_target_type = match (&assign.target, &assign.annotation) {
             (AssignTarget::Name(name), Some(annotation)) => {
                 let annotation = self.lower_type_ref_with_provenance(annotation);
@@ -15711,13 +16049,15 @@ impl<'a> Lowerer<'a> {
                     .is_some_and(|scope| !scope.contains_key(name))
             {
                 let slot = self.new_typed_temp(ty.clone());
+                self.current_binding_block().owners.push(slot.clone());
                 self.scoped_names
                     .last_mut()
                     .expect("checked scoped local declaration")
                     .insert(name.clone(), slot);
             } else if declares {
                 // A sibling block may have bound the name with another type.
-                self.declare_binding(name, Some(&ty));
+                let slot = self.declare_binding(name, Some(&ty));
+                self.current_binding_block().owners.push(slot);
             }
             let target = self.render_local_name(name);
             self.local_types.entry(target).or_insert(ty);
@@ -15748,6 +16088,9 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
+        if self.lower_fixed_assign(assign) {
+            return;
+        }
         if self.lower_element_write_beside_loans(assign) {
             return;
         }
@@ -16083,6 +16426,7 @@ impl<'a> Lowerer<'a> {
                 span: assign.span,
             };
             let value = self.lower_expr_for_owned_value(&compound, target_ty.as_ref());
+            self.check_member_bit_store(assign, &value);
             self.emit(Instruction::Assign {
                 target,
                 value: Rvalue::Use(value),
@@ -16098,6 +16442,7 @@ impl<'a> Lowerer<'a> {
         }
 
         let value = self.lower_expr_for_owned_value(&assign.value, target_ty.as_ref());
+        self.check_member_bit_store(assign, &value);
         if let Some(target_ty) = target_ty {
             self.retarget_operand_place(&value, &target_ty);
         }
@@ -16360,6 +16705,7 @@ impl<'a> Lowerer<'a> {
                     self.local_types.insert(target.clone(), source_ty.clone());
                     target
                 };
+                self.current_binding_block().owners.push(target.clone());
                 let source =
                     if consume_non_copy && !type_is_copy_in_program(source_ty, self.program) {
                         Operand::MovePlace(source_place.to_string())
@@ -16483,6 +16829,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_collection_literal_with_type(&mut self, expr: &Expr, ty: &Type) -> Option<Rvalue> {
+        if let Some(value) = self.fixed_literal(expr, ty) {
+            return Some(value);
+        }
         match (&expr.kind, ty) {
             (ExprKind::List(elements), Type::Named(name, args))
                 if name == "list" && args.len() == 1 =>
@@ -17474,10 +17823,6 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_if(&mut self, if_stmt: &IfStmt, needed_after: &BTreeSet<String>) {
-        let after_block = self.new_block("if_end");
-        let mut next_condition_block = self.current_block;
-        let mut else_block_to_lower = None;
-        let mut false_cleanup_block = None;
         let ending_loans = self
             .view_sources
             .keys()
@@ -17502,6 +17847,18 @@ impl<'a> Lowerer<'a> {
             .cloned()
             .collect::<BTreeSet<_>>();
 
+        if if_stmt.branches.is_empty() {
+            if let Some(body) = &if_stmt.else_body {
+                self.scoped_names.push(std::collections::HashMap::new());
+                self.lower_stmts_with_inherited_endings(body, ending_loans);
+                self.pop_scoped_names();
+            }
+            return;
+        }
+        let after_block = self.new_block("if_end");
+        let mut next_condition_block = self.current_block;
+        let mut else_block_to_lower = None;
+        let mut false_cleanup_block = None;
         for (index, branch) in if_stmt.branches.iter().enumerate() {
             self.switch_to(next_condition_block);
             let then_block = self.new_block("if_then");
@@ -19735,6 +20092,7 @@ impl<'a> Lowerer<'a> {
         });
 
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
@@ -19876,9 +20234,30 @@ impl<'a> Lowerer<'a> {
         let lent_list_iteration =
             self.lendable_list_iteration(for_stmt, checked_binding, iterable_ty.as_ref());
         let mut counted_range = None;
+        let mut literal_values = None;
         let iterable = if mutable_list_iteration || lent_list_iteration {
             // Each iteration lends the element in place; see
             // `lower_list_iteration_by_loan`.
+            Operand::Unit
+        } else if let Some((elements, element_ty)) =
+            self.scalar_literal_iteration(for_stmt, checked_binding)
+        {
+            // A loop over a short literal of scalars keeps each element in
+            // a local, evaluated once and in order as the literal would;
+            // no list is ever built.
+            let values = elements
+                .iter()
+                .map(|element| {
+                    let value = self.lower_expr_at_sequence_point(element, Some(&element_ty));
+                    let kept = self.new_typed_temp(element_ty.clone());
+                    self.emit(Instruction::Assign {
+                        target: kept.clone(),
+                        value: Rvalue::Use(value),
+                    });
+                    kept
+                })
+                .collect::<Vec<_>>();
+            literal_values = Some(values);
             Operand::Unit
         } else if let Some(range_args) = counted_range_args(for_stmt, iterable_ty.as_ref()) {
             // A loop over a `range(...)` call counts on int64 locals; no Range
@@ -19903,6 +20282,7 @@ impl<'a> Lowerer<'a> {
         let target_ty = checked_binding
             .map(|binding| binding.binding_type.clone())
             .unwrap_or_else(|| match iterable_ty.as_ref() {
+                Some(ty) if ty.as_fixed_array().is_some() => ty.as_fixed_array().unwrap().0.clone(),
                 Some(Type::Named(name, _)) if name == "Range" => Type::named("int64"),
                 Some(Type::Named(name, args))
                     if matches!(name.as_str(), "Queue" | "list" | "set") && args.len() == 1 =>
@@ -19943,6 +20323,98 @@ impl<'a> Lowerer<'a> {
         let mut stepped_next = dispatch_block;
 
         match iterable_ty {
+            _ if literal_values.is_some() => {
+                let values = literal_values
+                    .take()
+                    .expect("the guard checked the literal's values");
+                let binding = simple_binding
+                    .clone()
+                    .expect("a literal of scalars is iterated by a simple target");
+                let int64 = Type::named("int64");
+                let index = self.new_typed_temp(int64.clone());
+                self.emit(Instruction::Assign {
+                    target: index.clone(),
+                    value: Rvalue::Use(Operand::Int(0)),
+                });
+                let stop = self.new_typed_temp(int64);
+                self.emit(Instruction::Assign {
+                    target: stop.clone(),
+                    value: Rvalue::Use(Operand::Int(values.len() as u128)),
+                });
+                self.terminate(Terminator::Goto(self.label(dispatch_block)));
+                self.switch_to(dispatch_block);
+                let fetch_block = self.new_block("for_literal_fetch");
+                self.emit_span_iteration_bound(
+                    &stop,
+                    &index,
+                    fetch_block,
+                    after_block,
+                    for_stmt.span,
+                );
+                // The element at `index` is chosen by comparing the index
+                // with each position but the last.
+                let bound_block = self.new_block("for_literal_bound");
+                let last = values.len() - 1;
+                for (position, value) in values.into_iter().enumerate() {
+                    if position < last {
+                        let chosen = self.new_typed_temp(Type::named("bool"));
+                        self.emit(Instruction::Assign {
+                            target: chosen.clone(),
+                            value: Rvalue::Binary {
+                                op: BinaryOp::Eq,
+                                left: Operand::Place(index.clone()),
+                                right: Operand::Int(position as u128),
+                                span: for_stmt.span,
+                                trap: ArithmeticTrap::None,
+                            },
+                        });
+                        let take_block = self.new_block("for_literal_take");
+                        let next_block = self.new_block("for_literal_next");
+                        self.terminate(Terminator::Branch {
+                            condition: Operand::Place(chosen),
+                            then_label: self.label(take_block),
+                            else_label: self.label(next_block),
+                        });
+                        self.switch_to(take_block);
+                        self.emit(Instruction::Assign {
+                            target: binding.clone(),
+                            value: Rvalue::Use(Operand::Place(value)),
+                        });
+                        self.terminate(Terminator::Goto(self.label(bound_block)));
+                        self.switch_to(next_block);
+                    } else {
+                        self.emit(Instruction::Assign {
+                            target: binding.clone(),
+                            value: Rvalue::Use(Operand::Place(value)),
+                        });
+                        self.terminate(Terminator::Goto(self.label(bound_block)));
+                    }
+                }
+                self.switch_to(bound_block);
+                self.emit(Instruction::Assign {
+                    target: index.clone(),
+                    value: Rvalue::Binary {
+                        op: BinaryOp::Add,
+                        left: Operand::Place(index),
+                        right: Operand::Int(1),
+                        span: for_stmt.span,
+                        trap: ArithmeticTrap::None,
+                    },
+                });
+                self.terminate(Terminator::Goto(self.label(body_block)));
+                self.switch_to(body_block);
+            }
+            Some(ref ty) if ty.as_fixed_array().is_some() => {
+                self.fixed_iteration(
+                    ty,
+                    iterable,
+                    simple_binding.clone().expect("fixed array loop binding"),
+                    for_stmt.span,
+                    dispatch_block,
+                    body_block,
+                    after_block,
+                );
+            }
             Some(Type::Named(name, _)) if name == "Range" && counted_range.is_some() => {
                 let binding = simple_binding
                     .clone()
@@ -20450,6 +20922,7 @@ impl<'a> Lowerer<'a> {
 
         let safepoint_block = self.new_block("for_safepoint");
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
@@ -20492,6 +20965,37 @@ impl<'a> Lowerer<'a> {
     /// they happen, so a later trap cannot discard an earlier write, and a
     /// non-Copy element is never cloned. The loan ends on every edge out of
     /// the body: fallthrough, `continue`, `break`, and `return`.
+    /// The elements and element type of a `for` loop's iterable when it is
+    /// a short list literal of `int64`, `float64` or `bool` values: such a
+    /// loop reads its elements from locals.
+    fn scalar_literal_iteration<'e>(
+        &self,
+        for_stmt: &'e crate::ast::ForStmt,
+        checked_binding: Option<&ComprehensionClauseInfo>,
+    ) -> Option<(&'e [Expr], Type)> {
+        if checked_binding.is_some()
+            || for_stmt.borrow_mode.is_some()
+            || !for_stmt.contracts.is_empty()
+        {
+            return None;
+        }
+        let ExprKind::List(elements) = &grouped_mir_expr(&for_stmt.iterable).kind else {
+            return None;
+        };
+        if elements.is_empty() || elements.len() > LITERAL_ITERATION_ELEMENTS {
+            return None;
+        }
+        let element_ty = self.infer_expr_type(&elements[0])?;
+        let scalar = ["int64", "float64", "bool"]
+            .iter()
+            .any(|name| element_ty == Type::named(*name));
+        (scalar
+            && elements[1..]
+                .iter()
+                .all(|element| self.infer_expr_type(element).as_ref() == Some(&element_ty)))
+        .then_some((elements.as_slice(), element_ty))
+    }
+
     /// Whether a shared loop lends each element of its list instead of
     /// copying it out: the iterable is a local list, not a view or a
     /// constant, and the body only reads the binding in place (see
@@ -20847,6 +21351,7 @@ impl<'a> Lowerer<'a> {
         let loan_depth = self.loan_scopes.len();
         self.loan_scopes.push(Vec::new());
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(continue_block),
             cleanup_depth: self.with_stack.len(),
@@ -20944,6 +21449,7 @@ impl<'a> Lowerer<'a> {
         self.lower_condition_branch(&while_stmt.condition, body_label, after_label);
 
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
@@ -21751,6 +22257,7 @@ impl<'a> Lowerer<'a> {
                         target: temp.clone(),
                         value: Rvalue::Call {
                             callee: CallTarget::TraitMember {
+                                trait_args: Vec::new(),
                                 object,
                                 trait_name,
                                 field,
@@ -21887,6 +22394,7 @@ impl<'a> Lowerer<'a> {
                         target: temp.clone(),
                         value: Rvalue::Call {
                             callee: CallTarget::TraitMember {
+                                trait_args: Vec::new(),
                                 object,
                                 trait_name,
                                 field,
@@ -21913,26 +22421,14 @@ impl<'a> Lowerer<'a> {
                     .then(|| self.infer_equality_hint(left, right))
                     .flatten();
                 let left_expected = shared_equality_expected.as_ref().or_else(|| {
-                    if is_integer_literal_expr(left)
-                        && right_ty.as_ref().is_some_and(|ty| {
-                            is_float_type(ty) || crate::sema::integer_type_bounds(ty).is_some()
-                        })
-                    {
-                        right_ty.as_ref()
-                    } else {
-                        None
-                    }
+                    right_ty
+                        .as_ref()
+                        .and_then(|ty| sibling_literal_expected(left, ty))
                 });
                 let right_expected = shared_equality_expected.as_ref().or_else(|| {
-                    if is_integer_literal_expr(right)
-                        && left_ty.as_ref().is_some_and(|ty| {
-                            is_float_type(ty) || crate::sema::integer_type_bounds(ty).is_some()
-                        })
-                    {
-                        left_ty.as_ref()
-                    } else {
-                        None
-                    }
+                    left_ty
+                        .as_ref()
+                        .and_then(|ty| sibling_literal_expected(right, ty))
                 });
                 let left = self.lower_expr_at_sequence_point(left, left_expected);
                 let right = self.lower_expr_with_expected(right, right_expected);
@@ -22025,6 +22521,9 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Index { object, index } => {
+                if let Some(value) = self.lower_fixed_read(object, index) {
+                    return value;
+                }
                 // `receiver.method[T]`: the checker registered the bound
                 // method's closure at the member; the index only fixed its
                 // type arguments.
@@ -23628,9 +24127,14 @@ impl<'a> Lowerer<'a> {
         let short_circuit_block = self.new_block("compare_chain_false");
 
         let first_expected = links.first().and_then(|link| {
-            matches!(link.op.as_binary_op(), Some(BinaryOp::Eq | BinaryOp::NotEq))
-                .then(|| self.infer_equality_hint(first, &link.operand))
-                .flatten()
+            let op = link.op.as_binary_op()?;
+            if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                if let Some(hint) = self.infer_equality_hint(first, &link.operand) {
+                    return Some(hint);
+                }
+            }
+            let right_ty = self.infer_expr_type(&link.operand)?;
+            sibling_literal_expected(first, &right_ty).cloned()
         });
         let mut left_ty = first_expected
             .clone()
@@ -23640,16 +24144,17 @@ impl<'a> Lowerer<'a> {
         for (index, link) in links.iter().enumerate() {
             let link_value = match link.op.as_binary_op() {
                 Some(op) => {
-                    let shared_equality_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                    let right_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
                         self.infer_equality_hint(left_expr, &link.operand)
                             .or_else(|| left_ty.clone())
                     } else {
-                        None
+                        left_ty
+                            .as_ref()
+                            .and_then(|ty| sibling_literal_expected(&link.operand, ty))
+                            .cloned()
                     };
-                    let right = self.lower_expr_at_sequence_point(
-                        &link.operand,
-                        shared_equality_expected.as_ref(),
-                    );
+                    let right =
+                        self.lower_expr_at_sequence_point(&link.operand, right_expected.as_ref());
                     let compared = self.new_typed_temp(Type::named("bool"));
                     self.emit(Instruction::Assign {
                         target: compared.clone(),
@@ -23662,8 +24167,7 @@ impl<'a> Lowerer<'a> {
                         },
                     });
                     left = right;
-                    left_ty =
-                        shared_equality_expected.or_else(|| self.infer_expr_type(&link.operand));
+                    left_ty = right_expected.or_else(|| self.infer_expr_type(&link.operand));
                     Operand::Place(compared)
                 }
                 None => {
@@ -23829,7 +24333,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 expr: inner,
-            } => match &inner.kind {
+            } => match &grouped_mir_expr(inner).kind {
                 ExprKind::Float(value) if expected.is_some_and(is_float32_type) => {
                     Operand::Float(f64::from(-*value as f32))
                 }
@@ -25997,6 +26501,17 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some(Ok(value)) = self.c_layout_query(callee, args) {
+            let place = self.new_typed_temp(Type::named("uint64"));
+            self.emit(Instruction::Assign {
+                target: place.clone(),
+                value: Rvalue::Use(Operand::Int(value as u128)),
+            });
+            return Operand::Place(place);
+        }
+        if let Some(value) = self.lower_delegated_call(expr, callee, args) {
+            return value;
+        }
         if let Some(info) = self.recursive_local_call(callee).cloned() {
             let mut forwarded = info
                 .captures
@@ -26028,11 +26543,24 @@ impl<'a> Lowerer<'a> {
         self.lower_recursive_call_measure(callee, args);
         match &callee.kind {
             ExprKind::Name(name) if name == "len" && args.len() == 1 => {
+                if let Some(ty) = self.infer_expr_type(&args[0].value) {
+                    if let Some((_, length)) = ty.as_fixed_array() {
+                        self.lower_expr(&args[0].value);
+                        return Operand::Int(length as u128);
+                    }
+                }
                 if let Some(len) = self.lower_span_len(&args[0].value) {
                     return len;
                 }
             }
             ExprKind::Member { object, field } => {
+                if field == "address_of" && self.infer_module_path(object).as_deref() == Some("mem")
+                {
+                    return self.lower_raw_address(&args[0].value);
+                }
+                if let Some(value) = self.lower_raw_pointer_call(expr, object, field, args) {
+                    return value;
+                }
                 if let Some(value) = self.lower_span_member_call(expr, object, field, args) {
                     return value;
                 }
@@ -26338,6 +26866,16 @@ impl<'a> Lowerer<'a> {
                         );
                         self.retarget_operand_place(&value, &field_type);
                     }
+                    self.check_bit_store(
+                        class
+                            .decl
+                            .layout_controls
+                            .bit_widths
+                            .get(&field_name)
+                            .copied(),
+                        &value,
+                        argument.span,
+                    );
                     provided.insert(field_name, value);
                 }
                 let fields = class
@@ -26382,6 +26920,7 @@ impl<'a> Lowerer<'a> {
                     },
                 });
                 self.emit_class_invariant_check(&temp, &class);
+                self.arm_class_drop(&temp, &class);
             }
             ExprKind::Name(name) if name == "Queue" => {
                 let lowered_args = self.lower_args(args);
@@ -26669,6 +27208,11 @@ impl<'a> Lowerer<'a> {
                 if let Some(module_path) = self.infer_module_path(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(function) = namespace.extern_functions.get(field).cloned() {
+                            let function = function
+                                .with_raw_arguments(args, callee.span, |arg| {
+                                    self.infer_expr_type(arg)
+                                })
+                                .expect("checked extern pointer arguments");
                             let lowered_args = self.lower_user_args_with_types(
                                 &format!("extern function `{}`", function.decl.name),
                                 &function.decl.params,
@@ -26859,6 +27403,16 @@ impl<'a> Lowerer<'a> {
                                     );
                                     self.retarget_operand_place(&value, &field_type);
                                 }
+                                self.check_bit_store(
+                                    class
+                                        .decl
+                                        .layout_controls
+                                        .bit_widths
+                                        .get(&field_name)
+                                        .copied(),
+                                    &value,
+                                    argument.span,
+                                );
                                 provided.insert(field_name, value);
                             }
                             let fields = class
@@ -26905,6 +27459,7 @@ impl<'a> Lowerer<'a> {
                                 },
                             });
                             self.emit_class_invariant_check(&temp, &class);
+                            self.arm_class_drop(&temp, &class);
                             return Operand::Place(temp);
                         }
                     }
@@ -26974,18 +27529,15 @@ impl<'a> Lowerer<'a> {
                     if let Some((function_name, params, param_passings)) = self
                         .trait_impl_method_for_class_name(class_name, &written_type_args, field)
                         .filter(|(_, method)| method.decl.receiver.is_none())
-                        .map(|(trait_impl, method)| {
-                            (
-                                format!(
-                                    "{}{} for {}.{}",
-                                    trait_impl.trait_name,
-                                    format_trait_args(&trait_impl.trait_args),
-                                    trait_impl.for_type,
-                                    field
-                                ),
+                        .and_then(|(trait_impl, method)| {
+                            let actual =
+                                Type::Named(class_name.to_owned(), written_type_args.clone());
+                            let selected = self.associated_alias(&trait_impl, &method, actual)?;
+                            Some((
+                                selected,
                                 method.decl.params.clone(),
                                 method.signature.param_passings.clone(),
-                            )
+                            ))
                         })
                     {
                         let lowered_args = self.lower_user_args(
@@ -27094,6 +27646,8 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: match trait_name {
                             Some(trait_name) => CallTarget::TraitMember {
+                                trait_args: self
+                                    .trait_object_call_args(receiver_type.as_ref(), field),
                                 object: lowered_object,
                                 trait_name,
                                 field: field.clone(),
@@ -27292,6 +27846,9 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Name(name) => {
                 if let Some(function) = self.resolve_extern_function_info(name).cloned() {
+                    let function = function
+                        .with_raw_arguments(args, callee.span, |arg| self.infer_expr_type(arg))
+                        .expect("checked extern pointer arguments");
                     let lowered_args = self.lower_user_args_with_types(
                         &format!("extern function `{}`", function.decl.name),
                         &function.decl.params,
@@ -28332,6 +28889,7 @@ impl<'a> Lowerer<'a> {
             },
         });
         self.emit_class_invariant_check(target, class);
+        self.arm_class_drop(target, class);
     }
 
     /// Calls the class's hidden invariant method on `object`, when the class
@@ -29322,6 +29880,11 @@ impl<'a> Lowerer<'a> {
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
+        let lowerer = self as *const Self as usize;
+        infer_cache::memoized(lowerer, expr, || self.infer_expr_type_uncached(expr))
+    }
+
+    fn infer_expr_type_uncached(&self, expr: &Expr) -> Option<Type> {
         if let Some(indexed) = expr.indexed_collection_callee(|object| {
             self.infer_expr_type(object).is_some_and(
                 |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
@@ -29333,6 +29896,9 @@ impl<'a> Lowerer<'a> {
             return Some(read.member_type);
         }
         if let ExprKind::Call { callee, args } = &expr.kind {
+            if self.c_layout_query(callee, args).is_some() {
+                return Some(Type::named("uint64"));
+            }
             if let Some(info) = self.recursive_local_call(callee) {
                 return Some(info.return_type.clone());
             }
@@ -29543,6 +30109,27 @@ impl<'a> Lowerer<'a> {
                 _ => None,
             },
             ExprKind::Call { callee, args } => {
+                if let ExprKind::Member { object, field } = &callee.kind {
+                    if field == "address_of"
+                        && self.infer_module_path(object).as_deref() == Some("mem")
+                    {
+                        return Some(Type::Named(
+                            "ptr".into(),
+                            vec![self.infer_expr_type(&args.first()?.value)?],
+                        ));
+                    }
+                    if matches!(
+                        field.as_str(),
+                        "read" | "write" | "volatile_read" | "volatile_write" | "offset"
+                    ) {
+                        if let Some(element) = self
+                            .infer_expr_type(object)
+                            .and_then(|ty| ty.as_raw_pointer().cloned())
+                        {
+                            return crate::sema::raw_pointer_result(&element, field);
+                        }
+                    }
+                }
                 let (base_callee, explicit_type_args) = match &callee.kind {
                     ExprKind::Specialize { expr, type_args } => {
                         (&**expr, Some(type_args.as_slice()))
@@ -30268,6 +30855,9 @@ impl<'a> Lowerer<'a> {
                             .is_some_and(crate::sema::ClassInfo::is_deque) =>
                     {
                         args.first().cloned()
+                    }
+                    ref ty if ty.as_fixed_array().is_some() => {
+                        ty.as_fixed_array().map(|(elem, _)| elem.clone())
                     }
                     Type::Named(name, args) if name == "list" && args.len() == 1 => {
                         Some(args[0].clone())
@@ -31559,6 +32149,7 @@ impl<'a> Lowerer<'a> {
             } else {
                 self.declare_binding(&with_stmt.binding, manager_ty.as_ref())
             };
+            self.current_binding_block().owners.push(place.clone());
             let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
             self.emit(Instruction::Assign {
                 target: place.clone(),
@@ -31651,6 +32242,7 @@ impl<'a> Lowerer<'a> {
         self.with_stack.pop();
         if !self.current_terminated() {
             self.emit_with_exit(place.clone(), false);
+            self.end_owners_from(self.binding_blocks.len() - 1);
         }
         self.manager_exits.remove(&place);
         self.lock_exits.remove(&place);
@@ -32051,8 +32643,23 @@ fn mir_class_type_name(
         })
 }
 
+#[path = "mir_inline_asm.rs"]
+mod inline_asm;
+#[path = "mir_raw_pointers.rs"]
+mod raw_pointers;
+
+#[path = "mir_fixed_arrays.rs"]
+pub(crate) mod fixed_arrays;
+
+#[path = "mir_delegation.rs"]
+mod delegation;
 #[path = "mir_spans.rs"]
 mod spans;
+
+#[path = "mir_c_bit_fields.rs"]
+mod c_bit_fields;
+#[path = "mir_infer_cache.rs"]
+mod infer_cache;
 
 #[path = "mir_simd.rs"]
 mod simd;

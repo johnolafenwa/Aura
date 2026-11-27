@@ -803,11 +803,19 @@ fn dense_arrays_validate_shape_storage_and_deep_clone() {
         )
     );
 
-    ArrayValue::new(
+    // A zero dimension empties the array, but the other dimensions still
+    // feed row-major strides, so their product must fit too.
+    let zero_error = ArrayValue::new(
         vec![i64::MAX as usize, 2, 0].into_boxed_slice(),
         ArrayStorage::Float32(Vec::new().into_boxed_slice().into()),
     )
-    .expect("a zero dimension makes the checked row-major product zero regardless of axis order");
+    .expect_err("non-zero dimensions of an empty array must still fit");
+    assert_eq!(zero_error.code, "AU4005");
+    ArrayValue::new(
+        vec![3, 0, 2].into_boxed_slice(),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice().into()),
+    )
+    .expect("a zero dimension makes the element count zero");
 
     let dimension_error = ArrayValue::new(
         vec![i64::MAX as usize + 1, 0].into_boxed_slice(),
@@ -6168,11 +6176,11 @@ fn float_floor_divmod_matches_python_sign_precision_and_zero_rules() {
 fn float_power_uses_destination_width_and_shared_exception_rules() {
     assert_eq!(
         float_power(1.5, 2.0, FloatPowerWidth::Float32).expect("float32 power should succeed"),
-        (1.5_f32.powf(2.0)) as f64
+        2.25
     );
     assert_eq!(
         float_power(1.5, 2.0, FloatPowerWidth::Float64).expect("float64 power should succeed"),
-        1.5_f64.powf(2.0)
+        2.25
     );
 
     let float32_overflow = float_power(100.0, 100.0, FloatPowerWidth::Float32)
@@ -9112,6 +9120,16 @@ fn host_control_plane_builtins_cover_success_and_error_boundaries() {
         .render(),
         "None"
     );
+    std::env::set_var("AURA_TEST_ENV_THAT_IS_SET_52D3", "present");
+    let present = call(
+        "sys::env",
+        vec![Value::String(
+            "AURA_TEST_ENV_THAT_IS_SET_52D3".to_string().into(),
+        )],
+    )
+    .render();
+    std::env::remove_var("AURA_TEST_ENV_THAT_IS_SET_52D3");
+    assert!(present.contains("present"), "{present}");
     assert!(call("sys::current_dir", vec![])
         .render()
         .starts_with("Result.Ok("));
@@ -9601,6 +9619,18 @@ fn lightweight_worker_count_defaults_and_rejects_invalid_overrides() {
     assert_eq!(
         error.message,
         format!("invalid AURA_WORKERS value `{overflow}`: expected a positive integer")
+    );
+
+    assert_eq!(
+        super::decode_lightweight_worker_count(Some(OsStr::new("4096")), 7).unwrap(),
+        super::MAX_LIGHTWEIGHT_WORKERS
+    );
+    let error = super::decode_lightweight_worker_count(Some(OsStr::new("1000000000000")), 7)
+        .expect_err("a worker count past the maximum must be rejected");
+    assert_eq!(error.code, "AU4006");
+    assert_eq!(
+        error.message,
+        "invalid AURA_WORKERS value `1000000000000`: expected at most 4096 workers"
     );
 
     let error = super::decode_lightweight_worker_count(None, 0)
@@ -17386,11 +17416,11 @@ fn tls_and_websocket_validation_fail_before_remote_protocol_io() {
         "custom://example.com/socket",
         Some(StdDuration::from_secs(1)),
     )
-    .expect_err("a websocket URL without a known scheme port must fail before resolution");
+    .expect_err("a websocket URL with another scheme must fail before resolution");
     assert_eq!(websocket_error.kind(), io::ErrorKind::InvalidInput);
     assert_eq!(
         websocket_error.to_string(),
-        "websocket URL is missing a known port"
+        "websocket URL scheme must be `ws` or `wss`, not `custom`"
     );
 }
 
@@ -18791,7 +18821,7 @@ fn unix_and_tls_helpers_cover_local_socket_and_tls_surface() {
         .to_string()
         .contains("did not contain a key"));
     super::load_tls_root_store(Some(cert_path.to_str().expect("cert path should be UTF-8")))
-        .expect("custom CA PEM should extend the TLS root store");
+        .expect("custom CA PEM should form the TLS root store");
 
     let tls_listener = TlsListenerValue::bind(
         "127.0.0.1:0",
@@ -21391,4 +21421,727 @@ fn first_stack_gives_the_arguments_after_the_program_name() {
     let stack = stack_of(&strings, 9);
     assert_eq!(args(&stack, 5), None);
     assert_eq!(unsafe { super::initial_stack_args(std::ptr::null()) }, None);
+}
+
+#[test]
+fn closure_environment_settle_blocks_concurrent_readers_until_captures_are_ready() {
+    use super::DirectCallable;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+    static ENTERED: AtomicBool = AtomicBool::new(false);
+    static RELEASE: AtomicBool = AtomicBool::new(false);
+    ENTERED.store(false, Ordering::SeqCst);
+    RELEASE.store(false, Ordering::SeqCst);
+
+    unsafe extern "C-unwind" fn noop_drop(_words: *mut i64) {}
+    #[repr(C)]
+    struct Descriptor {
+        _invoke: usize,
+        drop_fn: unsafe extern "C-unwind" fn(*mut i64),
+    }
+    static DESCRIPTOR: Descriptor = Descriptor {
+        _invoke: 0,
+        drop_fn: noop_drop,
+    };
+
+    fn slow_box_captures(_callable: &DirectCallable) -> Vec<ClosureCaptureValue> {
+        ENTERED.store(true, Ordering::SeqCst);
+        while !RELEASE.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        vec![ClosureCaptureValue {
+            name: "x".to_string(),
+            ty: Type::named("int64"),
+            value: Value::Int(IntegerValue::from_i64(42)),
+            source_place: None,
+            mutable: false,
+        }]
+    }
+
+    let callable = Arc::new(unsafe {
+        DirectCallable::new(
+            [(&raw const DESCRIPTOR) as i64, 0, 0, 0],
+            7,
+            false,
+            1,
+            slow_box_captures,
+        )
+    });
+    let env = Arc::new(ClosureEnvironment::deferred(callable));
+
+    let env1 = Arc::clone(&env);
+    let t1 = std::thread::spawn(move || env1.arguments("worker").expect("settler succeeds"));
+
+    while !ENTERED.load(Ordering::SeqCst) {
+        std::thread::yield_now();
+    }
+
+    let env2 = Arc::clone(&env);
+    let t2 = std::thread::spawn(move || {
+        env2.arguments("worker")
+            .expect("concurrent reader succeeds")
+    });
+
+    // Give t2 time to enter `settle()` while `slow_box_captures` is still running.
+    std::thread::sleep(Duration::from_millis(25));
+    RELEASE.store(true, Ordering::SeqCst);
+
+    let first = t1.join().expect("settler thread should not panic");
+    let second = t2.join().expect("reader thread should not panic");
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert_eq!(first[0].value, Value::Int(IntegerValue::from_i64(42)));
+    assert_eq!(second[0].value, Value::Int(IntegerValue::from_i64(42)));
+}
+
+#[test]
+fn mutable_direct_callable_clone_settles_and_detaches() {
+    use super::DirectCallable;
+    unsafe extern "C-unwind" fn noop_drop(_words: *mut i64) {}
+    #[repr(C)]
+    struct Descriptor {
+        _invoke: usize,
+        drop_fn: unsafe extern "C-unwind" fn(*mut i64),
+    }
+    static DESCRIPTOR: Descriptor = Descriptor {
+        _invoke: 0,
+        drop_fn: noop_drop,
+    };
+
+    fn box_captures(_callable: &DirectCallable) -> Vec<ClosureCaptureValue> {
+        vec![ClosureCaptureValue {
+            name: "count".to_string(),
+            ty: Type::named("int64"),
+            value: Value::Int(IntegerValue::from_i64(9)),
+            source_place: None,
+            mutable: true,
+        }]
+    }
+
+    let callable = Arc::new(unsafe {
+        DirectCallable::new(
+            [(&raw const DESCRIPTOR) as i64, 0, 0, 0],
+            11,
+            true,
+            1,
+            box_captures,
+        )
+    });
+    let func = FunctionValue {
+        name: "mut_cb".to_string(),
+        signature: Type::Unit,
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+        closure_environment: Some(Arc::new(ClosureEnvironment::deferred(Arc::clone(
+            &callable,
+        )))),
+        direct_callable: Some(Arc::clone(&callable)),
+    };
+
+    let cloned = func.clone();
+    assert!(
+        cloned.direct_callable.is_none(),
+        "cloning a mutable FunctionValue must not share an unlocked DirectCallable"
+    );
+    assert!(
+        callable.words_for(11).is_none(),
+        "original mutable DirectCallable must be settled and released on clone"
+    );
+    let captures = cloned
+        .closure_environment
+        .as_ref()
+        .expect("environment preserved")
+        .arguments("mut_cb")
+        .expect("captures settled");
+    assert_eq!(captures.len(), 1);
+    assert_eq!(captures[0].value, Value::Int(IntegerValue::from_i64(9)));
+}
+
+#[test]
+fn float_precision_past_the_rust_formatter_limit_pads_with_zeros() {
+    let float = Type::named("float64");
+    let fixed = format_runtime_value(&Value::Float(1.0), &float, ".65536f").unwrap();
+    assert_eq!(fixed.len(), 65538);
+    assert!(fixed.starts_with("1.000") && fixed.ends_with('0'));
+    let third = format_runtime_value(&Value::Float(1.0 / 3.0), &float, ".70000f").unwrap();
+    let exact = format!("{:.65535}", 1.0f64 / 3.0);
+    assert_eq!(&third[..exact.len()], exact);
+    assert!(third[exact.len()..].bytes().all(|byte| byte == b'0'));
+    assert_eq!(third.len(), 70002);
+    let scientific = format_runtime_value(&Value::Float(-2.5), &float, ".65536e").unwrap();
+    assert!(scientific.starts_with("-2.5000"), "{}", &scientific[..8]);
+    assert!(
+        scientific.ends_with("0e+00"),
+        "{}",
+        &scientific[scientific.len() - 8..]
+    );
+    assert_eq!(scientific.len(), 65536 + 7);
+    let percent = format_runtime_value(&Value::Float(0.5), &float, ".65536%").unwrap();
+    assert!(percent.starts_with("50.000") && percent.ends_with("0%"));
+    // At the limit nothing is appended.
+    let at_limit = format_runtime_value(&Value::Float(1.0), &float, ".65535f").unwrap();
+    assert_eq!(at_limit.len(), 65537);
+}
+
+#[test]
+fn a_custom_ca_file_replaces_the_built_in_roots() {
+    let built_in = super::build_tls_root_store(None).expect("built-in roots");
+    assert!(built_in.len() > 1);
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let custom = super::build_tls_root_store(Some(certificate.cert.pem().into_bytes()))
+        .expect("one custom root");
+    assert_eq!(custom.len(), 1);
+    for empty in [&b""[..], b"no certificate here\n"] {
+        let error = super::build_tls_root_store(Some(empty.to_vec()))
+            .expect_err("a CA file with no certificate is an error");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("did not contain a certificate"));
+    }
+}
+
+#[test]
+fn chunked_request_bodies_are_framed_strictly_and_read_once() {
+    for refused in [
+        &b" 4\r\nWiki\r\n0\r\n\r\n"[..],
+        b"4 \r\nWiki\r\n0\r\n\r\n",
+        b"4\n\r\nWiki\r\n0\r\n\r\n",
+        b"4;a\x01\r\nWiki\r\n0\r\n\r\n",
+        b"0\r\nnot a field\r\n\r\n",
+        b"0\r\nBad Name: x\r\n\r\n",
+    ] {
+        let error =
+            super::try_decode_chunked_http_body(refused, 0).expect_err("strict chunk framing");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{refused:?}");
+    }
+    assert_eq!(
+        super::try_decode_chunked_http_body(b"4;name=\"v\"\r\nWiki\r\n0\r\nA: b\r\n\r\n", 0)
+            .unwrap(),
+        Some(b"Wiki".to_vec())
+    );
+    // A size line that never ends is refused once it is too long.
+    let long = vec![b'0'; super::MAX_HTTP_CHUNK_LINE_BYTES + 2];
+    assert!(super::try_decode_chunked_http_body(&long, 0).is_err());
+    // Trailers past their cap are refused before they end.
+    let mut trailer = b"0\r\n".to_vec();
+    trailer.extend(std::iter::repeat_n(b'a', super::MAX_HTTP_TRAILER_BYTES + 1));
+    assert!(super::try_decode_chunked_http_body(&trailer, 0).is_err());
+
+    // The decoder resumes where the last whole chunk ended.
+    let body = b"3\r\nabc\r\n2\r\nde\r\n0\r\nX: y\r\n\r\n";
+    let mut decoder = super::ChunkedBodyDecoder::default();
+    for end in 0..body.len() {
+        assert!(
+            decoder.step(&body[..end], 0, 1 << 20).unwrap().is_none(),
+            "{end}"
+        );
+    }
+    assert_eq!(
+        decoder.step(body, 0, 1 << 20).unwrap(),
+        Some(b"abcde".to_vec())
+    );
+}
+
+#[test]
+fn request_framing_headers_must_agree() {
+    let with_both = vec![
+        ("Transfer-Encoding".to_string(), "identity".to_string()),
+        ("Content-Length".to_string(), "2".to_string()),
+    ];
+    assert_eq!(
+        super::parse_http_body_framing(&with_both, super::HttpBodyFraming::UntilClose)
+            .expect_err("transfer-encoding and content-length together")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    let bare_lf = b"GET / HTTP/1.1\nHost: a\r\n\r\n";
+    assert_eq!(
+        super::parse_http_request_head(bare_lf)
+            .expect_err("a bare LF ends no line")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(
+        super::parse_http_request_head(b"GET / HTTP/1.1\r\nHost: a\r\n\r\n")
+            .unwrap()
+            .is_some()
+    );
+
+    let url = url::Url::parse("http://127.0.0.1:1/").unwrap();
+    let request = |headers: &[(&str, &str)]| {
+        super::build_http_request_bytes(
+            "POST",
+            &url,
+            b"ok",
+            headers
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+        )
+    };
+    assert!(request(&[("Content-Length", "2")]).is_ok());
+    for refused in [
+        &[("Content-Length", "3")][..],
+        &[("Content-Length", "2"), ("content-length", "2")],
+        &[("Host", "a"), ("host", "b")],
+        &[("Transfer-Encoding", "chunked")],
+    ] {
+        assert_eq!(
+            request(refused).expect_err("conflicting framing").kind(),
+            io::ErrorKind::InvalidInput,
+            "{refused:?}"
+        );
+    }
+}
+
+#[test]
+fn a_socket_wait_leaves_the_socket_free_for_other_tasks_on_its_worker() {
+    // One worker: a task that waits while it holds a socket's lock blocks
+    // every other task that touches the socket, and the worker with them.
+    let timeout = StdDuration::from_secs(5);
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
+        let error = |error: io::Error| Diagnostic::new(error.to_string());
+        let unbound = UdpSocketValue::bind("not an address").map_err(error);
+        assert!(
+            unbound.is_err(),
+            "an address that does not parse is refused"
+        );
+        let socket = UdpSocketValue::bind("127.0.0.1:0").map_err(error)?;
+        let receiver = socket.clone();
+        let waiting = spawn_lightweight_task(move || {
+            let datagram = receiver.recv(16, Some(timeout), None).map_err(error)?;
+            assert_eq!(datagram.as_deref(), Some(&b"ping"[..]));
+            Ok(Value::Unit)
+        })?;
+        sleep_with_runtime_scheduler(StdDuration::from_millis(20), None).map_err(error)?;
+        let address = socket.local_addr().map_err(error)?;
+        socket
+            .send_to_bytes(&address, b"ping", Some(timeout), None)
+            .map_err(error)?;
+        wait_task_ready(&waiting)?;
+
+        let listener = TcpListenerValue::bind("127.0.0.1:0").map_err(error)?;
+        let accepting = listener.clone();
+        let accepted = spawn_lightweight_task(move || {
+            accepting.accept(Some(timeout), None).map_err(error)?;
+            Ok(Value::Unit)
+        })?;
+        sleep_with_runtime_scheduler(StdDuration::from_millis(20), None).map_err(error)?;
+        let address = listener.local_addr().map_err(error)?;
+        let _client = TcpStreamValue::connect(&address, Some(timeout), None).map_err(error)?;
+        wait_task_ready(&accepted)?;
+        Ok(Value::Unit)
+    });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn an_http_listener_goes_on_past_a_client_that_fails() {
+    let timeout = StdDuration::from_secs(5);
+    let listener = HttpListenerValue::bind("127.0.0.1:0").expect("http listener should bind");
+    let address = listener.local_addr().expect("listener address");
+    let server = thread::spawn(move || {
+        let exchange = listener
+            .accept(Some(timeout), None)
+            .expect("the good client is reached");
+        let path = exchange.path();
+        exchange
+            .respond_text(200, "ok", Vec::new())
+            .expect("a response");
+        path
+    });
+    // A client that connects and sends nothing.
+    drop(std::net::TcpStream::connect(&address).expect("connect"));
+    // A client that asks for a framing the server does not read.
+    let mut unsupported = std::net::TcpStream::connect(&address).expect("connect");
+    unsupported
+        .write_all(b"POST /a HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: gzip, chunked\r\n\r\n")
+        .expect("write");
+    let mut reply = String::new();
+    unsupported
+        .read_to_string(&mut reply)
+        .expect("the server answers and closes");
+    assert!(reply.starts_with("HTTP/1.1 501"), "{reply}");
+    // A client with a good request.
+    let mut good = std::net::TcpStream::connect(&address).expect("connect");
+    good.write_all(b"GET /good HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n")
+        .expect("write");
+    let mut reply = String::new();
+    good.read_to_string(&mut reply).expect("a reply");
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    assert_eq!(server.join().expect("the server"), "/good");
+}
+
+#[test]
+fn a_websocket_listener_goes_on_past_a_failed_handshake() {
+    let timeout = StdDuration::from_secs(5);
+    let listener = WebSocketListenerValue::bind("127.0.0.1:0").expect("listener should bind");
+    let address = listener.local_addr().expect("listener address");
+    let server = thread::spawn(move || {
+        let socket = listener.accept(Some(timeout)).expect("the good client");
+        socket.recv_text(Some(timeout)).expect("a message")
+    });
+    let mut bad = std::net::TcpStream::connect(&address).expect("connect");
+    bad.write_all(b"GET / HTTP/1.1\r\nHost: a\r\n\r\n")
+        .expect("write");
+    let mut ignored = Vec::new();
+    let _ = bad.read_to_end(&mut ignored);
+    let client = super::WebSocketValue::connect(&format!("ws://{address}"), Some(timeout))
+        .expect("websocket client should connect");
+    client.send_text("hi", Some(timeout)).expect("send");
+    assert_eq!(server.join().expect("the server").as_deref(), Some("hi"));
+}
+
+#[test]
+fn a_websocket_url_must_use_a_websocket_scheme() {
+    let Err(error) = super::WebSocketValue::connect("http://127.0.0.1:1/", None) else {
+        panic!("an http URL is refused");
+    };
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("`ws` or `wss`"), "{error}");
+}
+
+#[test]
+fn websocket_reads_pass_over_control_frames_and_writes_are_sent_once() {
+    use tungstenite::Message;
+    let timeout = StdDuration::from_secs(10);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let address = listener.local_addr().expect("address");
+    let big = 12 << 20;
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept");
+        let mut socket = tungstenite::accept(stream).expect("handshake");
+        socket
+            .send(Message::Ping(b"p".to_vec().into()))
+            .expect("ping");
+        socket.send(Message::Text("hi".into())).expect("text");
+        // Read late, so the client's large write fills the socket.
+        thread::sleep(StdDuration::from_millis(200));
+        let mut sizes = Vec::new();
+        loop {
+            match socket.read().expect("a message") {
+                Message::Binary(bytes) => sizes.push(bytes.len()),
+                Message::Text(text) if text.as_str() == "end" => break,
+                _ => {}
+            }
+        }
+        sizes
+    });
+    let client = super::WebSocketValue::connect(&format!("ws://{address}"), Some(timeout))
+        .expect("websocket client should connect");
+    assert_eq!(
+        client.recv_text(Some(timeout)).expect("a read").as_deref(),
+        Some("hi")
+    );
+    client
+        .send_bytes(&vec![7u8; big], Some(timeout))
+        .expect("a large send");
+    client.send_text("end", Some(timeout)).expect("send");
+    assert_eq!(server.join().expect("the server"), vec![big]);
+}
+
+#[test]
+fn a_websocket_close_ends_while_a_read_waits() {
+    let listener = WebSocketListenerValue::bind("127.0.0.1:0").expect("listener should bind");
+    let address = listener.local_addr().expect("listener address");
+    let server = thread::spawn(move || {
+        listener
+            .accept(Some(StdDuration::from_secs(5)))
+            .expect("accept")
+    });
+    let client =
+        super::WebSocketValue::connect(&format!("ws://{address}"), Some(StdDuration::from_secs(5)))
+            .expect("websocket client should connect");
+    let _server_socket = server.join().expect("the server");
+    let reader = client.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    let reading = thread::spawn(move || {
+        let _ = reader.recv_text(None);
+        done.send(()).expect("report");
+    });
+    thread::sleep(StdDuration::from_millis(100));
+    let closer = client.clone();
+    let (closed, close_finished) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = closer.close();
+        closed.send(()).expect("report");
+    });
+    close_finished
+        .recv_timeout(StdDuration::from_secs(20))
+        .expect("close ends");
+    finished
+        .recv_timeout(StdDuration::from_secs(20))
+        .expect("the waiting read ends");
+    reading.join().expect("the reader");
+}
+
+#[test]
+fn mutable_direct_callable_clone_without_environment_releases_the_words() {
+    use super::DirectCallable;
+    use std::sync::atomic::AtomicUsize;
+    static DROPS: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C-unwind" fn counting_drop(_words: *mut i64) {
+        DROPS.fetch_add(1, Ordering::SeqCst);
+    }
+    #[repr(C)]
+    struct Descriptor {
+        _invoke: usize,
+        drop_fn: unsafe extern "C-unwind" fn(*mut i64),
+    }
+    static DESCRIPTOR: Descriptor = Descriptor {
+        _invoke: 0,
+        drop_fn: counting_drop,
+    };
+    fn no_captures(_callable: &DirectCallable) -> Vec<ClosureCaptureValue> {
+        Vec::new()
+    }
+    DROPS.store(0, Ordering::SeqCst);
+
+    let callable = Arc::new(unsafe {
+        DirectCallable::new(
+            [(&raw const DESCRIPTOR) as i64, 0, 0, 0],
+            5,
+            true,
+            0,
+            no_captures,
+        )
+    });
+    assert!(callable.live_words().is_some());
+    let func = FunctionValue {
+        name: "bare_mut_cb".to_string(),
+        signature: Type::Unit,
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+        closure_environment: None,
+        direct_callable: Some(Arc::clone(&callable)),
+    };
+    let cloned = func.clone();
+    assert!(cloned.direct_callable.is_none());
+    assert!(cloned.closure_environment.is_none());
+    assert!(
+        callable.live_words().is_none(),
+        "the clone released the words"
+    );
+    assert!(callable.words_for(5).is_none());
+    assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+    drop(func);
+    drop(callable);
+    assert_eq!(DROPS.load(Ordering::SeqCst), 1, "a release runs only once");
+}
+
+#[test]
+fn a_closure_environment_gives_up_its_captures_only_when_uniquely_owned() {
+    let capture = |value: i64| ClosureCaptureValue {
+        name: "x".to_string(),
+        ty: Type::named("int64"),
+        value: Value::Int(IntegerValue::from_i64(value)),
+        source_place: None,
+        mutable: false,
+    };
+    let env = Arc::new(ClosureEnvironment::new(vec![capture(1), capture(2)], false));
+    assert!(env.any_capture(|value| *value == Value::Int(IntegerValue::from_i64(2))));
+    let shared = Arc::clone(&env);
+    assert!(shared.into_captured_values().is_empty());
+    assert_eq!(
+        env.into_captured_values(),
+        vec![
+            Value::Int(IntegerValue::from_i64(1)),
+            Value::Int(IntegerValue::from_i64(2))
+        ]
+    );
+    let taken = Arc::new(ClosureEnvironment::new(vec![capture(3)], true));
+    assert_eq!(
+        taken.take_captures().map(|captures| captures.len()),
+        Some(1)
+    );
+    assert!(taken.into_captured_values().is_empty());
+}
+
+#[test]
+fn a_pending_task_exit_from_a_trap_hands_the_trap_back() {
+    use super::PendingTaskExit;
+    let exit = PendingTaskExit::from_trap(Diagnostic::coded("AU4001", "cleanup failed"));
+    assert!(!exit.is_cancelled());
+    let trap = exit.into_trap().ok().expect("a trap exit yields its trap");
+    assert_eq!(trap.code, "AU4001");
+    assert_eq!(trap.message, "cleanup failed");
+
+    let cancelled = PendingTaskExit(TaskExecutionResult::Cancelled);
+    assert!(cancelled.is_cancelled());
+    let Err(unchanged) = cancelled.into_trap() else {
+        panic!("a cancellation is not a trap");
+    };
+    assert!(
+        unchanged.is_cancelled(),
+        "a non-trap exit comes back unchanged"
+    );
+}
+
+#[test]
+fn a_closure_environment_still_answers_after_a_holder_of_its_lock_panicked() {
+    let env = Arc::new(ClosureEnvironment::new(
+        vec![ClosureCaptureValue {
+            name: "x".to_string(),
+            ty: Type::named("int64"),
+            value: Value::Int(IntegerValue::from_i64(5)),
+            source_place: None,
+            mutable: false,
+        }],
+        false,
+    ));
+    let poisoner = Arc::clone(&env);
+    let joined = std::thread::spawn(move || {
+        let _held = poisoner.captures.lock().expect("an unpoisoned lock");
+        panic!("poison the capture lock");
+    })
+    .join();
+    assert!(joined.is_err());
+    assert!(env.captures.is_poisoned());
+    assert!(env.any_capture(|value| *value == Value::Int(IntegerValue::from_i64(5))));
+    assert_eq!(
+        env.into_captured_values(),
+        vec![Value::Int(IntegerValue::from_i64(5))]
+    );
+}
+
+#[test]
+fn only_an_accept_the_peer_gave_up_on_is_transient() {
+    for kind in [
+        io::ErrorKind::ConnectionAborted,
+        io::ErrorKind::ConnectionReset,
+        io::ErrorKind::Interrupted,
+    ] {
+        assert!(super::is_transient_accept_error(&io::Error::from(kind)));
+    }
+    for kind in [
+        io::ErrorKind::WouldBlock,
+        io::ErrorKind::PermissionDenied,
+        io::ErrorKind::OutOfMemory,
+        io::ErrorKind::Other,
+    ] {
+        assert!(!super::is_transient_accept_error(&io::Error::from(kind)));
+    }
+}
+
+/// Whether a read that waited on a peer ended because the peer went away,
+/// not because the wait ran out.
+fn ended_by_peer<T: std::fmt::Debug>(read: io::Result<Option<T>>) -> bool {
+    match read {
+        Ok(None) => true,
+        Ok(Some(value)) => panic!("the peer sent nothing, yet {value:?} was read"),
+        Err(error) => error.kind() != io::ErrorKind::TimedOut,
+    }
+}
+
+#[test]
+fn closing_a_tls_stream_in_use_shuts_its_socket_down_instead_of_waiting() {
+    let timeout = StdDuration::from_secs(10);
+    let temp = TempDir::new("aura-tls-busy-close");
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = temp.path().join("cert.pem");
+    let key_path = temp.path().join("key.pem");
+    fs::write(&cert_path, certificate.cert.pem()).expect("certificate should write");
+    fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("key should write");
+    let cert = cert_path
+        .to_str()
+        .expect("UTF-8 certificate path")
+        .to_string();
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        &cert,
+        key_path.to_str().expect("UTF-8 key path"),
+    )
+    .expect("TLS listener should bind");
+    let address = listener.local_addr().expect("TLS address should exist");
+    let server_listener = listener.clone();
+    let server = thread::spawn(move || {
+        let stream = server_listener
+            .accept(Some(timeout), Some(&CancellationContext::default()))
+            .expect("TLS server should accept");
+        // Another operation holds the stream: `close` marks it closed and
+        // shuts the socket down under that operation rather than wait.
+        stream.inner.busy.store(true, Ordering::SeqCst);
+        let started = Instant::now();
+        stream.close();
+        assert!(started.elapsed() < StdDuration::from_secs(4));
+        assert!(stream.inner.closed.load(Ordering::SeqCst));
+        assert!(
+            lock_mutex(&stream.inner.stream).is_some(),
+            "the operation keeps its stream"
+        );
+        stream.inner.busy.store(false, Ordering::SeqCst);
+        // A second close of a closed stream does nothing.
+        stream.close();
+        server_listener.close();
+    });
+    let client = TlsStreamValue::connect(
+        &address,
+        "localhost",
+        Some(&cert),
+        Some(timeout),
+        Some(&CancellationContext::default()),
+    )
+    .expect("TLS client should connect");
+    assert!(ended_by_peer(client.read_line(
+        Some(timeout),
+        Some(&CancellationContext::default())
+    )));
+    server.join().expect("TLS server thread");
+    client.close();
+}
+
+#[test]
+fn closing_a_websocket_in_use_shuts_its_socket_down_instead_of_waiting() {
+    let timeout = StdDuration::from_secs(10);
+    let listener =
+        WebSocketListenerValue::bind("127.0.0.1:0").expect("websocket listener should bind");
+    let address = listener.local_addr().expect("websocket listener address");
+    let server = thread::spawn(move || {
+        let socket = listener
+            .accept(Some(timeout))
+            .expect("websocket server should accept");
+        socket.inner.busy.store(true, Ordering::SeqCst);
+        let started = Instant::now();
+        socket.close().expect("a close in use is not an error");
+        assert!(started.elapsed() < StdDuration::from_secs(4));
+        assert!(socket.inner.closed.load(Ordering::SeqCst));
+        socket.inner.busy.store(false, Ordering::SeqCst);
+        assert_eq!(
+            socket.close().expect_err("a closed websocket").kind(),
+            super::closed_resource_error().kind()
+        );
+    });
+    let client = super::WebSocketValue::connect(&format!("ws://{address}"), Some(timeout))
+        .expect("websocket client should connect");
+    assert!(ended_by_peer(client.recv_bytes(Some(timeout))));
+    server.join().expect("websocket server thread");
+    // The client side, whose socket may be TLS, closes the same way.
+    client.inner.busy.store(true, Ordering::SeqCst);
+    client.close().expect("a close in use is not an error");
+    assert!(client.inner.closed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn floating_point_casts_check_the_exclusive_upper_bound_of_wide_integers() {
+    for (name, exponent) in [("int128", 127), ("uint128", 128)] {
+        let upper = 2.0_f64.powi(exponent);
+        let largest = f64::from_bits(upper.to_bits() - 1);
+        let target = Type::named(name);
+        let valid = cast_numeric_value(Value::Float(largest), &target, None)
+            .expect("the preceding representable float fits");
+        let Value::Int(valid) = valid else {
+            panic!("expected an integer")
+        };
+        assert_eq!(valid.to_f64(), largest);
+        let overflow = cast_numeric_value(Value::Float(upper), &target, None)
+            .expect_err("the power of two just above the maximum is out of range");
+        assert!(overflow
+            .message
+            .contains(&format!("does not fit in `{name}`")));
+    }
 }

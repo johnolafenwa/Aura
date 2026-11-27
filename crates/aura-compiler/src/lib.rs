@@ -1,5 +1,7 @@
 pub mod analysis;
 pub mod ast;
+pub mod build_config;
+pub use build_config::{current_build_config, with_build_config, BuildConfig};
 mod builtin_modules;
 mod builtin_sources;
 pub(crate) use aura_runtime::bytes_codec;
@@ -11,8 +13,13 @@ pub use aura_runtime::ffi;
 pub mod format;
 pub use aura_core::integer;
 pub(crate) use aura_runtime::json_codec;
+mod freestanding_mode;
+mod hardware;
+pub(crate) mod inline_asm;
 pub mod lexer;
 pub mod limits;
+mod machine_attributes;
+mod machine_data;
 pub mod mir;
 mod mir_copies;
 pub mod mir_runtime;
@@ -47,6 +54,10 @@ pub use diag::{
     AssertionOperand, Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame,
     Span, StructuredDiagnostic, StructuredEdit, StructuredRuntimeCallFrame,
     StructuredRuntimeSourceSpan, StructuredRuntimeTaskFrame, StructuredSpan,
+};
+pub use freestanding_mode::{
+    enter_freestanding_target, freestanding_check_target, with_freestanding_target,
+    FreestandingScope,
 };
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{
@@ -226,6 +237,8 @@ pub mod native_runtime_coverage {
     };
 }
 
+pub mod const_eval;
+
 pub fn parse_source(source: &str) -> Result<ast::Module> {
     parser::parse(source)
 }
@@ -233,7 +246,14 @@ pub fn parse_source(source: &str) -> Result<ast::Module> {
 pub fn check_source(source: &str) -> Result<Program> {
     let module = parse_source(source)?;
     reject_source_only_ffi(&module)?;
-    check_module_with_builtin_imports(module)
+    let program = check_module_with_builtin_imports(module)?;
+    if program.type_definitions.uses_raw_pointer.get() {
+        return Err(Diagnostic::coded(
+            "AU2084",
+            "typed raw pointers require a manifest-rooted package with allow_ffi = true",
+        ));
+    }
+    Ok(program)
 }
 
 fn reject_source_only_ffi(module: &ast::Module) -> Result<()> {
@@ -366,7 +386,7 @@ fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
         &builtin_sources::imported_source_parts(&module),
         BTreeMap::new(),
     );
-    sema::check_with_context(
+    let mut program = sema::check_with_context(
         module,
         ModuleContext {
             module_name: "<main>".to_string(),
@@ -374,7 +394,9 @@ fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
             module_registry,
             is_entry_module: true,
         },
-    )
+    )?;
+    const_eval::evaluate(&mut program)?;
+    Ok(program)
 }
 
 pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirModule> {
@@ -385,8 +407,7 @@ pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirMod
 /// Proves the checks of the program at `path` with an SMT solver
 /// (`aura verify`).
 pub fn verify_path(path: &Path, options: &verify::Options) -> Result<verify::Report> {
-    let program = check_path(path)?;
-    verify_program(&program, options)
+    verify_file(path, None, options)
 }
 
 /// `verify_path` for source text that stands in for the file at `path`.
@@ -395,7 +416,19 @@ pub fn verify_path_with_source(
     source: &str,
     options: &verify::Options,
 ) -> Result<verify::Report> {
-    let program = check_path_with_source(path, source)?;
+    verify_file(path, Some(source), options)
+}
+
+fn verify_file(
+    path: &Path,
+    source: Option<&str>,
+    options: &verify::Options,
+) -> Result<verify::Report> {
+    let mut loader = ModuleLoader::new_with_source(path, source)?;
+    loader.verifying = true;
+    let _config = loader.package_config();
+    let program = loader.load_program_internal(path, source)?;
+    loader.write_lockfile()?;
     verify_program(&program, options)
 }
 
@@ -414,18 +447,40 @@ pub fn lower_path_to_mir_with_proved_checks(
         Some(source) => check_path_with_source(path, source)?,
         None => check_path(path)?,
     };
+    lower_program_to_mir_with_proved_checks(&program, debug, options)
+}
+
+pub fn lower_program_to_mir_with_proved_checks(
+    program: &Program,
+    debug: bool,
+    options: &verify::Options,
+) -> Result<(MirModule, mir::ProvedChecks)> {
     let options = verify::Options {
         prove_sites: true,
         ..options.clone()
     };
-    mir::lower_with_proved_checks(&program, debug, |module| {
-        verify::verify_module(&program, module, &options).map(|report| report.proved_sites)
+    mir::lower_with_proved_checks(program, debug, |module| {
+        match verify::verify_module(program, module, &options) {
+            Ok(report) => Ok(report.proved_sites),
+            Err(error) if error.code == "AU4035" => Ok(BTreeSet::new()),
+            Err(error) => Err(error),
+        }
     })
 }
 
-fn verify_program(program: &Program, options: &verify::Options) -> Result<verify::Report> {
+pub fn verify_program(program: &Program, options: &verify::Options) -> Result<verify::Report> {
     let module = mir::lower_for_verification(program);
     verify::verify_module(program, &module, options)
+}
+
+/// Parse a file's selected declarations, resolving only imports needed by its guards.
+pub fn parse_path_with_source(path: &Path, source: &str) -> Result<ast::Module> {
+    let mut loader = ModuleLoader::new_with_source(path, Some(source))?;
+    let _config = loader.package_config();
+    let path = absolutize(path);
+    loader.stack.push(path.clone());
+    let declaration_module = loader.freestanding;
+    parser::parse_for_path(source, &mut loader, &path, declaration_module)
 }
 
 pub fn check_path(path: &Path) -> Result<Program> {
@@ -440,7 +495,53 @@ pub fn check_path_with_source(path: &Path, source: &str) -> Result<Program> {
 }
 
 fn check_path_with_source_without_lockfile(path: &Path, source: &str) -> Result<Program> {
-    check_path_with_source_inner(path, source, false)
+    check_path_with_source_without_lockfile_profile(
+        path,
+        source,
+        current_build_config().freestanding,
+    )
+}
+
+pub(crate) fn check_path_with_source_without_lockfile_profile(
+    path: &Path,
+    source: &str,
+    freestanding: bool,
+) -> Result<Program> {
+    let _target = if freestanding {
+        enter_freestanding_build_config()
+    } else {
+        None
+    };
+    let mut loader = ModuleLoader::new_with_source(path, Some(source))?;
+    loader.freestanding = freestanding;
+    loader.load_program_with_source(path, source)
+}
+
+/// Use the active freestanding target, or the bare triple for the selected architecture.
+pub(crate) fn enter_freestanding_build_config() -> Option<build_config::BuildConfigGuard> {
+    let current = current_build_config();
+    let target = freestanding_check_target().or_else(|| {
+        FreestandingTarget::ALL
+            .into_iter()
+            .find(|target| target.arch() == current.arch)
+    })?;
+    if current.target == target.name() {
+        return None;
+    }
+    let mut bare = BuildConfig::for_target(target.name(), current.debug)?;
+    bare.cfg = current.cfg;
+    Some(bare.enter())
+}
+
+/// Loads a freestanding program with the same package and FFI checks as a hosted build.
+pub fn check_freestanding_path(path: &Path, source: Option<&str>) -> Result<Program> {
+    let _target = enter_freestanding_build_config();
+    let mut loader = ModuleLoader::new_with_source(path, source)?;
+    loader.freestanding = true;
+    let _config = loader.package_config();
+    let program = loader.load_program_internal(path, source)?;
+    loader.write_lockfile()?;
+    Ok(program)
 }
 
 thread_local! {
@@ -493,13 +594,17 @@ pub(crate) fn with_source_reads<T>(operation: impl FnOnce() -> T) -> (T, BTreeSe
     (result, reads.unwrap_or_default())
 }
 
-/// Reads a source file, preferring an active overlay for the same file.
-pub(crate) fn read_source_file(path: &Path) -> std::io::Result<String> {
+fn record_source_read(path: &Path) {
     SOURCE_READS.with(|reads| {
         if let Some(reads) = reads.borrow_mut().as_mut() {
             reads.insert(absolutize(path));
         }
     });
+}
+
+/// Reads a source file, preferring an active overlay for the same file.
+pub(crate) fn read_source_file(path: &Path) -> std::io::Result<String> {
+    record_source_read(path);
     let overlay = SOURCE_OVERLAYS.with(|overlays| {
         let overlays = overlays.borrow();
         if overlays.is_empty() {
@@ -619,6 +724,8 @@ struct LoadedModule {
 }
 
 struct ModuleLoader {
+    verifying: bool,
+    freestanding: bool,
     package_root: PathBuf,
     package_graph: Option<PackageGraph>,
     cache: HashMap<PathBuf, LoadedModule>,
@@ -642,6 +749,8 @@ impl ModuleLoader {
             infer_package_root(&absolute_entry, source_override)?
         };
         Ok(Self {
+            verifying: false,
+            freestanding: current_build_config().freestanding,
             package_root,
             package_graph,
             cache: HashMap::new(),
@@ -650,11 +759,21 @@ impl ModuleLoader {
         })
     }
 
+    fn package_config(&self) -> Option<build_config::BuildConfigGuard> {
+        if !self.stack.is_empty() {
+            return None;
+        }
+        let defaults = self.package_graph.as_ref()?.entry_cfg();
+        (!defaults.is_empty()).then(|| current_build_config().with_manifest(defaults).enter())
+    }
+
     fn load_program(&mut self, path: &Path) -> Result<Program> {
+        let _config = self.package_config();
         self.load_program_internal(path, None)
     }
 
     fn load_program_with_source(&mut self, path: &Path, source: &str) -> Result<Program> {
+        let _config = self.package_config();
         self.load_program_internal(path, Some(source))
     }
 
@@ -685,8 +804,22 @@ impl ModuleLoader {
             })?
         };
         let display_path = path.display().to_string();
-        let module = parse_source(&source)
-            .map_err(|error| error.with_render_context(display_path.clone(), source.clone()))?;
+        let declaration_module = self.freestanding || !is_entry_module;
+        let module =
+            parser::parse_for_path(&source, self, &path, declaration_module).map_err(|error| {
+                if error.render_path.is_some() {
+                    error
+                } else {
+                    error.with_render_context(display_path.clone(), source.clone())
+                }
+            })?;
+        if self.verifying {
+            if let Some(span) = module.asm_span {
+                return Err(
+                    verify::assembly_boundary(span).with_render_context(display_path, source)
+                );
+            }
+        }
         if module.uses_ffi() {
             match &self.package_graph {
                 Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,
@@ -704,7 +837,7 @@ impl ModuleLoader {
         let module_name = self.module_name_for_path(&path);
         let imported_bindings = self.resolve_imports(&module, &path)?;
         let module_registry = self.build_module_registry();
-        let program = sema::check_with_context(
+        let program = sema::check_with_profile(
             module,
             ModuleContext {
                 module_name,
@@ -712,9 +845,19 @@ impl ModuleLoader {
                 module_registry,
                 is_entry_module,
             },
+            self.freestanding,
         )
         .map_err(|error| error.with_render_context(display_path, source.clone()))?;
         let mut program = program;
+        if program.type_definitions.uses_raw_pointer.get() {
+            match &self.package_graph {
+                Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,
+                None => return Err(Diagnostic::coded(
+                    "AU2084",
+                    "typed raw pointers require a manifest-rooted package with allow_ffi = true",
+                )),
+            }
+        }
         self.qualify_program_imported_modules(&path, &mut program);
         program.source_path = Some(path.display().to_string());
 
@@ -728,7 +871,13 @@ impl ModuleLoader {
             if let Some(graph) = &self.package_graph {
                 program.foreign_link = graph.foreign_link_plan();
             }
-            program.constant_init_plan = self.build_constant_init_plan(&path)?;
+            program.constant_init_plan =
+                self.build_constant_init_plan(&path, &mut |import, dependency| {
+                    if import != path {
+                        inline_asm::append_module(dependency, &mut program.foreign_link);
+                    }
+                })?;
+            const_eval::evaluate(&mut program)?;
             self.cache.insert(
                 path.clone(),
                 LoadedModule {
@@ -740,12 +889,18 @@ impl ModuleLoader {
         Ok(program)
     }
 
-    fn build_constant_init_plan(&self, entry_path: &Path) -> Result<Vec<sema::ConstantInfo>> {
+    fn build_constant_init_plan(
+        &self,
+        entry_path: &Path,
+        visit_module: &mut dyn FnMut(&Path, &Program),
+    ) -> Result<Vec<sema::ConstantInfo>> {
         fn visit(
             loader: &ModuleLoader,
             path: &Path,
+            imported: bool,
             visited: &mut BTreeSet<PathBuf>,
             plan: &mut Vec<sema::ConstantInfo>,
+            visit_module: &mut dyn FnMut(&Path, &Program),
         ) -> Result<()> {
             let path = absolutize(path);
             if !visited.insert(path.clone()) {
@@ -773,14 +928,23 @@ impl ModuleLoader {
                     continue;
                 }
                 let dependency = loader.resolve_import_path(&path, module_path)?;
-                visit(loader, &dependency, visited, plan)?;
+                visit(loader, &dependency, true, visited, plan, visit_module)?;
             }
+            visit_module(&path, &loaded.program);
             let mut local = loaded
                 .program
                 .constants
                 .values()
                 .filter(|constant| constant.module_name == loaded.program.module_name)
-                .cloned()
+                .map(|constant| {
+                    // A dependency's initializer and every read must agree on
+                    // the module-qualified nominal types in its signature.
+                    if imported {
+                        qualify_constant_info_for_export(&loaded.program, constant)
+                    } else {
+                        constant.clone()
+                    }
+                })
                 .collect::<Vec<_>>();
             local.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
             plan.extend(local);
@@ -789,7 +953,14 @@ impl ModuleLoader {
 
         let mut visited = BTreeSet::new();
         let mut plan = Vec::new();
-        visit(self, entry_path, &mut visited, &mut plan)?;
+        visit(
+            self,
+            entry_path,
+            false,
+            &mut visited,
+            &mut plan,
+            visit_module,
+        )?;
         let mut seen = BTreeSet::new();
         plan.retain(|constant| {
             seen.insert((constant.module_name.clone(), constant.decl.name.clone()))
@@ -807,7 +978,7 @@ impl ModuleLoader {
             match &import.kind {
                 ImportKind::From { module_path, names } => {
                     if builtin_modules::builtin_module_namespace(module_path).is_some() {
-                        if builtin_sources::has_source_part(module_path) {
+                        if builtin_sources::needs_registry_entry(module_path) {
                             self.source_parts.insert(module_path[0].clone());
                         }
                         for imported_name in names {
@@ -863,7 +1034,7 @@ impl ModuleLoader {
                 }
                 ImportKind::Module { path, alias } => {
                     if let Some(leaf) = builtin_sources::importable_builtin_namespace(path) {
-                        if builtin_sources::has_source_part(path) {
+                        if builtin_sources::needs_registry_entry(path) {
                             self.source_parts.insert(path[0].clone());
                         }
                         if let Some(alias) = alias {
@@ -1024,21 +1195,12 @@ fn absolutize(path: &Path) -> PathBuf {
 fn infer_package_root(entry_path: &Path, source_override: Option<&str>) -> Result<PathBuf> {
     let entry_dir = entry_path.parent().unwrap_or(Path::new("."));
 
-    let parsed_entry = source_override
+    let import_paths = source_override
         .map(str::to_string)
         .or_else(|| fs::read_to_string(entry_path).ok())
-        .and_then(|source| parse_source(&source).ok());
+        .and_then(|source| parser::root_imports(&source).ok());
 
-    if let Some(module) = parsed_entry {
-        let import_paths = module
-            .imports
-            .iter()
-            .map(|import| match &import.kind {
-                ImportKind::From { module_path, .. } => module_path.clone(),
-                ImportKind::Module { path, .. } => path.clone(),
-            })
-            .collect::<Vec<_>>();
-
+    if let Some(import_paths) = import_paths {
         if !import_paths.is_empty() {
             for candidate in entry_dir.ancestors() {
                 if import_paths
@@ -2145,4 +2307,17 @@ fn insert_aliased_namespace_import(
 mod tests;
 
 #[cfg(test)]
+#[path = "compile_limits_tests.rs"]
+mod compile_limits_tests;
+
+#[cfg(test)]
 use aura_runtime::array_kernel_corpus;
+
+#[cfg(test)]
+mod conditional_tests;
+
+#[cfg(test)]
+mod inline_asm_tests;
+
+#[cfg(test)]
+mod hardware_tests;

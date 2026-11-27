@@ -1722,8 +1722,9 @@ impl FunctionCompiler<'_> {
             values: vec![boxed],
             ty: loan_ty,
         };
-        // The element's box belongs to its list, which never lets a box's
-        // list view run ahead of its list, as a field box's list.
+        // The element's box belongs to its list, which takes in what
+        // generated code appends to it but not what it pops, as a field
+        // box's instance.
         let outer = std::mem::replace(&mut self.field_box_receiver, true);
         let added =
             self.compile_member_callee_on_receiver(object, MemberCallee::Runtime(op), None, args);

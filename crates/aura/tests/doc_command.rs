@@ -166,3 +166,19 @@ fn doc_reports_check_errors_and_bad_arguments() {
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("two modules named `shapes`"));
 }
+
+#[test]
+fn doc_emits_only_active_public_declarations() {
+    let temp = TempDir::new("aura-doc-conditional");
+    fs::write(
+        temp.path.join("api.au"),
+        include_str!("../../aura-compiler/tests/fixtures/check-pass/conditional_tooling.au"),
+    )
+    .unwrap();
+    let output = aura(&temp.path, &["doc", "--json", "api.au"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let page: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let items = page["declarations"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["name"], "native_name");
+}

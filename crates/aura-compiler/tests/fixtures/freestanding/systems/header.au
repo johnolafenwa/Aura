@@ -1,0 +1,18 @@
+import mem
+
+extern "C" packed align(8) class Header:
+    tag: uint8
+    words: fixed[uint16, 3]
+    count: uint16 bits(5)
+    mode: uint16 bits(3)
+
+mut header: Header = Header(tag=7, words=[12, 24, 36], count=3, mode=6)
+
+export "C" def advance_header(delta: uint16) -> uint16:
+    p = mem.address_of(header.words[1])
+    p.write(p.read() + delta)
+    header.count = 5
+    return header.words[1]
+
+export "C" def header_flags() -> uint16:
+    return header.count + (header.mode << 5)

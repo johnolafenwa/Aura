@@ -635,10 +635,13 @@ fn every_host_function_has_a_name() {
 
 #[test]
 fn digit_counts_and_powers() {
-    assert_eq!(decimal_digits(&BigInt::zero()), 1);
-    assert_eq!(decimal_digits(&BigInt::from(-999)), 3);
-    assert_eq!(decimal_digits(&BigInt::from(u64::MAX)), 20);
-    assert_eq!(decimal_digits(&HUGE.parse().expect("an integer")), 39);
+    assert_eq!(decimal_digits(&BigInt::zero()).unwrap(), 1);
+    assert_eq!(decimal_digits(&BigInt::from(-999)).unwrap(), 3);
+    assert_eq!(decimal_digits(&BigInt::from(u64::MAX)).unwrap(), 20);
+    assert_eq!(
+        decimal_digits(&HUGE.parse().expect("an integer")).unwrap(),
+        39
+    );
     assert_eq!(
         code(power_of_ten(MAX_SCALE_DIGITS + 1).map(|_| int(0))),
         "AU4005"
@@ -726,4 +729,76 @@ fn compact_decimal_operations_normalize_and_defer_overflow() {
     assert_eq!(small_decimal_binary(false, i64::MAX, 0, 1, 0), None);
     assert_eq!(small_decimal_binary(true, i64::MAX, 0, 2, 0), None);
     assert_eq!(small_decimal_binary(true, 2, 1 << 62, 5, 0), None);
+}
+
+#[test]
+fn normalizing_strips_every_trailing_zero_in_few_divisions() {
+    let naive = |mut coefficient: BigInt, mut exponent: i64| {
+        let ten = BigInt::from(10u8);
+        while !coefficient.is_zero() && (&coefficient % &ten).is_zero() {
+            coefficient /= &ten;
+            exponent += 1;
+        }
+        (coefficient, exponent)
+    };
+    for digits in ["7", "1", "12", "-35", "1024", "999999999999999999999999"] {
+        for zeros in [0u32, 1, 2, 3, 7, 8, 15, 16, 17, 63, 64, 100, 257] {
+            let scale = BigInt::from(if zeros % 2 == 0 { 1u8 } else { 8u8 });
+            let coefficient =
+                digits.parse::<BigInt>().unwrap() * BigInt::from(10u8).pow(zeros) * scale;
+            assert_eq!(
+                normalized(coefficient.clone(), -5).unwrap(),
+                naive(coefficient.clone(), -5),
+                "{coefficient}"
+            );
+        }
+    }
+    assert_eq!(normalized(BigInt::zero(), 9).unwrap(), (BigInt::zero(), 0));
+    // A coefficient of 200000 trailing zeros normalizes quickly.
+    let (coefficient, exponent) =
+        normalized(BigInt::from(3u8) * BigInt::from(10u8).pow(200_000), 0).unwrap();
+    assert_eq!((coefficient, exponent), (BigInt::from(3u8), 200_000));
+    assert_eq!(
+        normalized(BigInt::from(10u8), i64::MAX).unwrap_err().code,
+        "AU4002"
+    );
+}
+
+#[test]
+fn texts_over_the_string_limit_are_refused_before_they_are_built() {
+    let limit = crate::runtime_value::MAX_STRING_BYTES as u64;
+    assert_eq!(digits_in_radix(0, 10), 1);
+    assert!(digits_in_radix(64, 2) >= 64);
+    assert!(digits_in_radix(64, 10) >= 20);
+    assert!(text_fits(limit, "x").is_ok());
+    assert_eq!(text_fits(limit + 1, "x").unwrap_err().code, "AU4005");
+    // 2^(64 Mi) written in base 2 is over the limit.
+    let large = BigInt::one() << (limit + 8);
+    let error = host_big_format(args([&[int(0)], &[wire(&large, 0)], &[int(2)]]), None);
+    assert_eq!(code(error), "AU4005");
+    // Plain notation of 1e70000000 is seventy million bytes.
+    let plain = host_dec_format(args([&dec("1", 70_000_000), &[int(-2)]]), None);
+    assert_eq!(code(plain), "AU4005");
+    // Aligning across an exponent gap past the limit is refused.
+    let far = host_dec_binary(
+        args([
+            &[int(0)],
+            &dec("1", 70_000_000),
+            &dec("1", 0),
+            &[int(0), int(0)],
+        ]),
+        None,
+    );
+    assert_eq!(code(far), "AU4005");
+}
+
+#[test]
+fn decimal_digit_materialization_obeys_a_scoped_output_allowance() {
+    let integer = BigInt::from(10_u8).pow(100);
+    for result in [
+        crate::builtin_limit::with_allowance(32, || decimal_digits(&integer).map(|_| ())),
+        crate::builtin_limit::with_allowance(32, || display(&integer, -50).map(|_| ())),
+    ] {
+        assert_eq!(result.unwrap_err().code, "AU3028");
+    }
 }

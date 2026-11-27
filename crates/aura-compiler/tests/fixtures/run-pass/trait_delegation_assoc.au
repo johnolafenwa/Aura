@@ -1,0 +1,10 @@
+import iter
+from assoc_type_supertraits_imported_support.bags import Bag, Pair, total
+
+class Wrapped:
+    pair: Pair
+
+impl Bag[int64] for Wrapped by pair
+
+def main():
+    print(total(Wrapped(pair=Pair(left=3, right=4))))

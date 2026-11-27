@@ -81,6 +81,7 @@ pub(crate) fn synthetic_returned_view_decl(
         span,
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: Vec::new(),
         spec: false,
@@ -177,8 +178,11 @@ pub(super) fn last_name_reference_span_in_stmt(
                 .map(|span| later_span(Some(for_stmt.span), Some(span)).unwrap_or(for_stmt.span))
                 .unwrap_or(for_stmt.span),
         ),
+        // A name the body reads is read again on the next iteration, after
+        // every later statement of the body.
         Stmt::For(for_stmt) => Some(
             last_name_reference_span_in_block(&for_stmt.body, name)
+                .map(|span| later_span(Some(span), block_end_span(&for_stmt.body)).unwrap_or(span))
                 .map(|span| later_span(Some(for_stmt.span), Some(span)).unwrap_or(for_stmt.span))
                 .or_else(|| last_name_reference_span_in_expr(&for_stmt.iterable, name))
                 .unwrap_or(for_stmt.span),
@@ -335,10 +339,14 @@ pub(super) fn last_name_reference_span_in_expr(
             scrutinee, arms, ..
         } => combine(
             std::iter::once(last_name_reference_span_in_expr(scrutinee, name))
-                .chain(
-                    arms.iter()
-                        .map(|arm| last_name_reference_span_in_expr(&arm.value, name)),
-                )
+                .chain(arms.iter().flat_map(|arm| {
+                    [
+                        arm.guard
+                            .as_ref()
+                            .and_then(|guard| last_name_reference_span_in_expr(guard, name)),
+                        last_name_reference_span_in_expr(&arm.value, name),
+                    ]
+                }))
                 .collect(),
         ),
         ExprKind::Membership {
@@ -984,6 +992,17 @@ impl<'a> FunctionChecker<'a> {
                         )));
                     }
                 }
+                if receiver_ty.is_trait_object() {
+                    if let Ok(Some(method)) =
+                        self.trait_object_method(&receiver_ty, field, callee.span)
+                    {
+                        return Ok(Some((
+                            method.decl,
+                            Some((**object).clone()),
+                            method.module_name,
+                        )));
+                    }
+                }
                 if let Some((trait_impl, method, _substitutions)) =
                     self.trait_method_for_concrete_type(&receiver_ty, field, callee.span)?
                 {
@@ -1024,10 +1043,29 @@ impl<'a> FunctionChecker<'a> {
                         }
                     }
                 }
-                self.returned_view_callee(object, locals)
+                if let Some(found) = self.returned_view_callee(object, locals)? {
+                    return Ok(Some(found));
+                }
+                Ok(self.returned_view_callee_from_type(base, locals))
             }
-            _ => Ok(None),
+            // Any other callee expression, such as a call result, a
+            // conditional, or a nested element, still carries its callable
+            // type, and that type says whether the call returns a view.
+            _ => Ok(self.returned_view_callee_from_type(base, locals)),
         }
+    }
+
+    fn returned_view_callee_from_type(
+        &self,
+        callee: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<(crate::ast::FunctionDecl, Option<Expr>, String)> {
+        // Typing the callee on a copy keeps the caller's own checks the only
+        // ones that consume or borrow its operands.
+        let mut scratch = locals.clone();
+        let ty = self.type_of_expr(callee, &mut scratch).ok()?;
+        synthetic_returned_view_decl(&ty, callee.span)
+            .map(|decl| (decl, None, self.module_name.to_string()))
     }
 
     pub(super) fn returned_view_call_place(
@@ -1069,6 +1107,7 @@ impl<'a> FunctionChecker<'a> {
                     "returned view origin `self` requires an instance receiver",
                 )
             })?;
+            self.reject_state_loan(receiver, locals)?;
             let conservative = self.view_expr_has_conservative_footprint(receiver, locals)?;
             return self
                 .view_place(receiver, locals)?
@@ -1141,6 +1180,7 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Slice { object, .. } => (&**object, true),
             _ => (&argument.value, false),
         };
+        self.reject_state_loan(origin_value, locals)?;
         let conservative =
             range_origin || self.view_expr_has_conservative_footprint(origin_value, locals)?;
         self.view_place(origin_value, locals)?
@@ -1255,6 +1295,47 @@ impl<'a> FunctionChecker<'a> {
         substitutions: &HashMap<String, Type>,
     ) -> ReturnedProjectionSummary {
         let expr = grouped_expr(expr);
+        // A step below a list element or dict entry stays inside that
+        // element, so its footprint is the collection's path too. Appending
+        // the step to the collection path would name a place that does not
+        // exist and looks disjoint from every element.
+        if matches!(expr.kind, ExprKind::Member { .. } | ExprKind::Index { .. }) {
+            let mut step = expr;
+            while let ExprKind::Member { object, .. } | ExprKind::Index { object, .. } = &step.kind
+            {
+                let object = grouped_expr(object);
+                if let ExprKind::Index {
+                    object: collection, ..
+                } = &object.kind
+                {
+                    let context = self.returned_view_summary_context(owner_module, enclosing_decl);
+                    if matches!(
+                        self.returned_view_expr_type_in_owner(
+                            owner_module,
+                            enclosing_decl,
+                            collection,
+                            &context,
+                            substitutions,
+                            aliases,
+                            &mut BTreeSet::new(),
+                        ),
+                        Some(Type::Named(ref name, _)) if name == "list" || name == "dict"
+                    ) {
+                        return self.returned_view_expr_projection_summary_with_aliases(
+                            owner_module,
+                            enclosing_decl,
+                            collection,
+                            outer_origin,
+                            seen,
+                            aliases,
+                            alias_seen,
+                            substitutions,
+                        );
+                    }
+                }
+                step = object;
+            }
+        }
         match &expr.kind {
             ExprKind::Name(name) if name == outer_origin => {
                 return ReturnedProjectionSummary::Known(BTreeSet::from([String::new()]));
@@ -2305,6 +2386,9 @@ impl<'a> FunctionChecker<'a> {
         destination: &str,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        if passing == ReceiverKind::BorrowMut {
+            self.reject_state_loan(expr, locals)?;
+        }
         self.reject_mutable_returned_view_value(expr, locals, passing == ReceiverKind::BorrowMut)?;
         if passing == ReceiverKind::Value {
             self.reject_owned_view_value(expr, locals, destination)?;
@@ -2531,6 +2615,9 @@ impl<'a> FunctionChecker<'a> {
             } => {
                 self.reject_mutable_returned_view_value(scrutinee, locals, false)?;
                 for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.reject_mutable_returned_view_value(guard, locals, false)?;
+                    }
                     self.reject_mutable_returned_view_value(&arm.value, locals, false)?;
                 }
             }
@@ -2607,6 +2694,17 @@ impl<'a> FunctionChecker<'a> {
         control_last_uses: &BTreeMap<String, crate::diag::Span>,
         locals: &mut HashMap<String, LocalBinding>,
     ) {
+        // Inside a loop, a loan made before the loop is used again on the
+        // next iteration even when this branch does not use it.
+        let loop_start = self
+            .loop_exits
+            .borrow()
+            .last()
+            .and_then(|exits| exits.start);
+        let ends_here = |view: &ViewBinding, control_last_use: Option<crate::diag::Span>| {
+            control_last_use == Some(view.last_use)
+                && !loop_start.is_some_and(|start| span_precedes(view.created_at, start))
+        };
         for (name, binding) in locals.iter_mut() {
             if block_references_name(body, name) {
                 continue;
@@ -2615,13 +2713,13 @@ impl<'a> FunctionChecker<'a> {
             if binding
                 .view
                 .as_ref()
-                .is_some_and(|view| control_last_use == Some(view.last_use))
+                .is_some_and(|view| ends_here(view, control_last_use))
             {
                 binding.view = None;
             }
             binding
                 .closure_loans
-                .retain(|loan| control_last_use != Some(loan.last_use));
+                .retain(|loan| !ends_here(loan, control_last_use));
         }
     }
 
@@ -3392,6 +3490,9 @@ impl<'a> FunctionChecker<'a> {
             } => {
                 self.collect_expr_call_places(scrutinee, locals, places, include_consumed)?;
                 for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_expr_call_places(guard, locals, places, include_consumed)?;
+                    }
                     self.collect_expr_call_places(&arm.value, locals, places, include_consumed)?;
                 }
                 Ok(())
@@ -3528,6 +3629,9 @@ impl<'a> FunctionChecker<'a> {
             } => {
                 self.collect_expr_place_reads(scrutinee, locals, label, places);
                 for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_expr_place_reads(guard, locals, label, places);
+                    }
                     self.collect_expr_place_reads(&arm.value, locals, label, places);
                 }
             }
@@ -3704,6 +3808,20 @@ impl<'a> FunctionChecker<'a> {
                     return Ok(());
                 };
                 let Some(class_info) = self.resolve_class_info(&receiver_name) else {
+                    // A mutating builtin method, as in `xs[xs.pop()]`, holds
+                    // its receiver mutably for the call.
+                    if let Some(builtin_member) = BuiltinMember::resolve(&receiver_name, field) {
+                        if builtin_member.receiver_passing() == ReceiverKind::BorrowMut {
+                            if let Some(path) = self.borrow_call_place(object) {
+                                places.push(BorrowedCallPlace {
+                                    path,
+                                    passing: ReceiverKind::BorrowMut,
+                                    param_name: "self".to_string(),
+                                    origin_span: object.span,
+                                });
+                            }
+                        }
+                    }
                     return Ok(());
                 };
                 let Some(method) = class_info.methods.get(field) else {
@@ -4096,7 +4214,16 @@ impl<'a> FunctionChecker<'a> {
         }
 
         let mut borrowed_places = Vec::new();
-        if let Some(place) = self.borrow_call_place(object) {
+        // A receiver that is a returned view, as in `get_mut(a).add(a)`,
+        // borrows the place the view comes from.
+        let place = match self.borrow_call_place(object) {
+            Some(place) => Some(place),
+            None if matches!(grouped_expr(object).kind, ExprKind::Call { .. }) => {
+                self.view_place(object, locals)?
+            }
+            None => None,
+        };
+        if let Some(place) = place {
             borrowed_places.push(BorrowedCallPlace {
                 path: place,
                 passing: receiver_kind,
@@ -4359,6 +4486,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Option<PlacePath>> {
+        self.reject_state_loan(scrutinee, locals)?;
         self.reject_property_place(scrutinee, "matched with `match mut`", locals)?;
         let Some(access) = self.borrow_call_place(scrutinee) else {
             return Err(Diagnostic::coded_at(

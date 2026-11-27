@@ -1,0 +1,6 @@
+error[AU3028]: while evaluating module constant `text`: constant evaluation exceeds the memory limit of 8 MiB
+ --> crates/aura-compiler/tests/fixtures/check-fail/compile_time_memory_limit.au:1:7
+  |
+1 | const text = "x".repeat(8388609)
+  |       ^
+  = note: Aura call chain (innermost first): const text at 1:7

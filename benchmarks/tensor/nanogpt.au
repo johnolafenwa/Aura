@@ -1,0 +1,178 @@
+import fs
+import random
+import sys
+import tensor
+from tensor import AdamW, Device, Embedding, LayerNorm, Linear, Module, MultiheadAttention, Tensor
+
+
+# Trains a character model of the nanoGPT shape on a real text. Pass the
+# path of the text, such as Tiny Shakespeare's `input.txt`, then `gpu`
+# for the GPU device and `small` for sizes that finish in seconds. The
+# row prints `<name> <size> <milliseconds> <last loss> <first step
+# milliseconds>`.
+
+
+class Block:
+    norm1: LayerNorm
+    mix: MultiheadAttention
+    norm2: LayerNorm
+    wide: Linear
+    narrow: Linear
+
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        attended = x + self.mix.forward(self.norm1.forward(x), true)
+        return attended + self.narrow.forward(
+            self.wide.forward(self.norm2.forward(attended)).gelu()
+        )
+
+
+impl Module for Block
+
+
+class Transformer:
+    tokens: Embedding
+    places: Embedding
+    blocks: list[Block]
+    norm: LayerNorm
+    head: Linear
+
+    def forward(self, ids: Tensor[int64]) -> Tensor[float32]:
+        length = ids.shape()[1]
+        mut hidden = self.tokens.forward(ids) + self.places.forward(
+            tensor.arange(length, ids.device())
+        )
+        for at in range(self.blocks.len()):
+            view block = self.blocks[at]
+            hidden = block.forward(hidden)
+        return self.head.forward(self.norm.forward(hidden))
+
+
+impl Module for Transformer
+
+
+def build(words: int64, context: int64, width: int64, heads: int64, layers: int64, device: Device) -> Transformer:
+    mut blocks: list[Block] = []
+    for layer in range(layers):
+        seed = 100 + layer * 20
+        blocks.append(
+            Block(
+                norm1=LayerNorm(width, device),
+                mix=MultiheadAttention(width, heads, seed, device),
+                norm2=LayerNorm(width, device),
+                wide=Linear(width, 4 * width, seed + 8, device),
+                narrow=Linear(4 * width, width, seed + 10, device),
+            )
+        )
+    return Transformer(
+        tokens=Embedding(words, width, 1, device),
+        places=Embedding(context, width, 2, device),
+        blocks=blocks,
+        norm=LayerNorm(width, device),
+        head=Linear(width, words, 3, device),
+    )
+
+
+def encode(text: str) -> (list[int64], int64):
+    # Each character as its place among the sorted characters of the text.
+    mut seen = set[str]()
+    for letter in text.chars():
+        seen.add(letter.clone())
+    letters = sorted(seen)
+    mut numbers = dict[str, int64]()
+    for at in range(letters.len()):
+        numbers[letters[at].clone()] = at
+    mut ids: list[int64] = []
+    for letter in text.chars():
+        ids.append(numbers[letter])
+    return (ids, letters.len())
+
+
+def as_tensor(ids: list[int64], device: Device) -> Tensor[int64]:
+    return Tensor[int64].from_array(Array[int64].from_list(ids, [ids.len()]), device)
+
+
+def batch_of(data: Tensor[int64], rows: int64, context: int64, rng: mut random.Rng) -> (Tensor[int64], Tensor[int64]):
+    # `rows` windows of `context` characters, and the same windows one
+    # step later.
+    mut starts: list[int64] = []
+    for row in range(rows):
+        starts.append(rng.next_int(0, data.len() - context - 1))
+    device = data.device()
+    first = Tensor[int64].from_array(Array[int64].from_list(starts, [rows, 1]), device)
+    places = first + tensor.arange(context, device).reshape([1, context])
+    return (data.index_select(0, places), data.index_select(0, places + 1))
+
+
+def loss_of(scores: Tensor[float32], targets: Tensor[int64]) -> Tensor[float32]:
+    shape = scores.shape()
+    return tensor.cross_entropy(
+        scores.reshape([shape[0] * shape[1], shape[2]]),
+        targets.reshape([shape[0] * shape[1]]),
+    )
+
+
+def main() -> int32:
+    mut device = Device.cpu()
+    mut small = false
+    mut path = ""
+    for arg in sys.args():
+        if arg == "gpu":
+            device = Device.default()
+            if not device.is_gpu():
+                print("this machine has no GPU device")
+                return 1
+        elif arg == "small":
+            small = true
+        elif arg.ends_with(".txt"):
+            path = arg.clone()
+    if path == "":
+        print("usage: nanogpt <input.txt> [gpu] [small]")
+        return 1
+    print(f"device {device.name()}")
+    mut layers = 6
+    mut heads = 6
+    mut width = 384
+    mut context = 256
+    mut rows = 64
+    mut steps = 200
+    if small:
+        layers = 1
+        heads = 4
+        width = 32
+        context = 32
+        rows = 8
+        steps = 3
+    match own fs.read_to_string(path):
+        case Err(error):
+            print(f"cannot read {path}: {error}")
+            return 1
+        case Ok(text):
+            ids, words = encode(text)
+            split = ids.len() * 9 // 10
+            data = as_tensor(ids[:split], device)
+            held = as_tensor(ids[split:], device)
+            mut model = build(words, context, width, heads, layers, device)
+            mut optimizer = AdamW(model.parameters(), lr=0.001)
+            mut rng = random.Rng(1)
+            mut last: float32 = 0.0
+            mut first = 0
+            mut start = sys.monotonic_time_ms()
+            for step in range(steps + 1):
+                inputs, targets = batch_of(data, rows, context, rng)
+                loss = loss_of(model.forward(inputs), targets)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                if step == 0:
+                    last = loss.item()
+                    first = sys.monotonic_time_ms() - start
+                    start = sys.monotonic_time_ms()
+                if step == steps:
+                    last = loss.item()
+            print(f"nanogpt_train {layers}x{width} {sys.monotonic_time_ms() - start} {last} {first}")
+            tensor.set_grad_enabled(false)
+            mut held_rng = random.Rng(2)
+            held_inputs, held_targets = batch_of(held, rows, context, held_rng)
+            held_loss = loss_of(model.forward(held_inputs), held_targets).item()
+            print(f"# nanogpt_train held-out loss {held_loss}")
+    return 0

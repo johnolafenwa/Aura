@@ -1,0 +1,2 @@
+def main() -> None:
+    row: fixed[uint8, 3] = [1, 2]

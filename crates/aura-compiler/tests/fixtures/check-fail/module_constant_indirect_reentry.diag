@@ -1,0 +1,6 @@
+error[AU3026]: while evaluating module constant `value`: module constant `<main>::value` was read while its module was still initializing
+ --> crates/aura-compiler/tests/fixtures/check-fail/module_constant_indirect_reentry.au:1:1
+  |
+1 | def read_value() -> int64:
+  | ^
+  = note: Aura call chain (innermost first): read_value at 1:1 -> const value at 4:1

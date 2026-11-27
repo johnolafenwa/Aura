@@ -49,6 +49,7 @@ const {
 } = require("./verification");
 const { canonicalFileUri, uriToPath } = require("./uri");
 
+const { machineCompletions, machineHover } = require("./machine_syntax");
 const { registerEditorHandlers, editorCapabilities } = require("./editor_handlers");
 const {
   SEMANTIC_TOKEN_MODIFIERS,
@@ -159,6 +160,8 @@ connection.onCompletion(async (params, cancellationToken) => {
     return [];
   }
 
+  const syntax = machineCompletions(document.getText(), params.position.line, params.position.character);
+  if (syntax) return syntax.map(item => compilerCompletionToLsp(item, completionKind(item.kind)));
   const compilerItems = await completeWithCompiler(
     params.textDocument.uri,
     document.getText(),
@@ -267,14 +270,21 @@ connection.onDocumentSymbol(async (params) => {
   );
 });
 
+function inactiveSuiteAtLine(analysis, line) {
+  return analysis?.inactive_lines?.find(({ start, end }) => start <= line && line < end);
+}
+
 connection.onHover(async (params) => {
   const document = documents.get(params.textDocument.uri);
   if (!document) {
     return null;
   }
 
+  const syntax = machineHover(document.getText(), params.position.line, params.position.character);
+  if (syntax) return { contents: { kind: MarkupKind.Markdown, value: syntax.value }, range: syntax.range };
   const state = await getDocumentState(document);
-  if (state.compilerAnalysis) {
+  const inactiveSuite = inactiveSuiteAtLine(state.compilerAnalysis, params.position.line);
+  if (state.compilerAnalysis && !inactiveSuite) {
     const compilerHover = compilerHoverAtPosition(
       state.compilerAnalysis,
       params.position.line,
@@ -295,7 +305,8 @@ connection.onHover(async (params) => {
   const hover = hoverForPosition(
     document.getText(),
     params.position.line,
-    params.position.character
+    params.position.character,
+    inactiveSuite
   );
   if (!hover) {
     return null;
@@ -317,7 +328,8 @@ connection.onDefinition(async (params) => {
   }
 
   const state = await getDocumentState(document);
-  if (state.compilerAnalysis) {
+  const inactiveSuite = inactiveSuiteAtLine(state.compilerAnalysis, params.position.line);
+  if (state.compilerAnalysis && !inactiveSuite) {
     const location = compilerDefinitionAtPosition(
       params.textDocument.uri,
       state.compilerAnalysis,
@@ -333,7 +345,8 @@ connection.onDefinition(async (params) => {
   const definition = definitionForPosition(
     document.getText(),
     params.position.line,
-    params.position.character
+    params.position.character,
+    inactiveSuite
   );
   if (!definition) {
     return null;
@@ -378,11 +391,16 @@ documents.onDidClose((event) => {
 // A document whose analysis failed or is in flight may not know every file it
 // imports yet, so it is checked again too.
 connection.onDidChangeWatchedFiles((params) => {
-  const affected = documentStateCache.invalidateWhere(
-    (state) =>
-      !state || !state.compilerAnalysis || (state.compilerAnalysis.diagnostics || []).length > 0
-  );
-  for (const change of params.changes || []) {
+  const changes = params.changes || [];
+  // A new or removed manifest can change which package owns an open file.
+  const manifestChanged = changes.some(({ uri }) => uri.endsWith("/Aura.toml"));
+  const affected = manifestChanged
+    ? documentStateCache.invalidateAll()
+    : documentStateCache.invalidateWhere(
+        (state) =>
+          !state || !state.compilerAnalysis || (state.compilerAnalysis.diagnostics || []).length > 0
+      );
+  for (const change of changes) {
     for (const uri of invalidateDocument(change.uri)) {
       affected.add(uri);
     }
@@ -436,21 +454,34 @@ function completionKind(kind) {
   }
 }
 
-function toDocumentSymbol(document, symbol) {
-  const line = Math.max(0, Math.min(symbol.line, document.lineCount - 1));
-  const range = {
-    start: { line, character: symbol.startCharacter || 0 },
-    end: { line, character: symbol.endCharacter || symbol.startCharacter || 0 }
+function toDocumentSymbol(document, rootSymbol) {
+  const makeNode = (symbol) => {
+    const line = Math.max(0, Math.min(symbol.line, document.lineCount - 1));
+    const range = {
+      start: { line, character: symbol.startCharacter || 0 },
+      end: { line, character: symbol.endCharacter || symbol.startCharacter || 0 }
+    };
+    return {
+      name: symbol.name,
+      detail: symbol.detail || "",
+      kind: symbolKind(symbol.kind),
+      range,
+      selectionRange: range,
+      children: []
+    };
   };
-
-  return {
-    name: symbol.name,
-    detail: symbol.detail || "",
-    kind: symbolKind(symbol.kind),
-    range,
-    selectionRange: range,
-    children: (symbol.children || []).map((child) => toDocumentSymbol(document, child))
-  };
+  const rootNode = makeNode(rootSymbol);
+  const stack = [{ source: rootSymbol, target: rootNode }];
+  while (stack.length > 0) {
+    const { source, target } = stack.pop();
+    const children = source.children || [];
+    for (const child of children) {
+      const childNode = makeNode(child);
+      target.children.push(childNode);
+      stack.push({ source: child, target: childNode });
+    }
+  }
+  return rootNode;
 }
 
 function validateDocument(document) {
@@ -461,7 +492,7 @@ function validateDocument(document) {
       return;
     }
     const diagnostics = state.compilerAnalysis
-      ? compilerDiagnosticsToLsp(state.compilerAnalysis, document.uri)
+      ? compilerDiagnosticsToLsp(state.compilerAnalysis, document.uri, document.getText())
       : diagnosticsForDocument(document.getText()).map((diagnostic) => ({
           severity: mapSeverity(diagnostic.severity),
           range: {
@@ -577,6 +608,8 @@ function symbolKind(kind) {
       return SymbolKind.Field;
     case "trait":
       return SymbolKind.Interface;
+    case "constant":
+      return SymbolKind.Constant;
     default:
       return SymbolKind.Variable;
   }

@@ -1,0 +1,96 @@
+class Named:
+    label: str | None
+    size: int64
+
+def find(names: list[str], n: int64) -> str | None:
+    if n < names.len():
+        view name = names[n]
+        return name + ""
+    return None
+
+def size(text: str | None) -> int64:
+    if text is None:
+        return 0
+    return text.len()
+
+def pick(n: int64) -> str | int64:
+    if n > 2:
+        return "many"
+    return n
+
+enum Chain:
+    End
+    Link(int64, indirect Chain)
+
+def length(chain: Chain) -> int64:
+    match chain:
+        case Chain.End:
+            return 0
+        case Chain.Link(_, rest):
+            return 1 + length(rest)
+
+def either(n: int64) -> (Chain | int64, int64):
+    if n > 0:
+        return (Chain.Link(n, Chain.Link(1, Chain.End)), n)
+    return (n, n)
+
+def numbers(n: int64) -> list[int64] | None:
+    if n > 0:
+        return [n, n + 1]
+    return None
+
+def first_word(n: int64) -> Result[str | None, int64]:
+    if n < 0:
+        return Err(n)
+    if n == 0:
+        return Ok(None)
+    return Ok("word")
+
+def work(n: int64) -> int64:
+    mut names: list[str] = ["ab", "cde"]
+    found = find(names, n)
+    mut sum = size(found) + size(None) + size("four")
+    match find(names, 0):
+        case None:
+            sum = sum + 100
+        case str as text:
+            sum = sum + text.len()
+    match pick(n):
+        case str as text:
+            sum = sum + text.len() * 1000
+        case int64 as count:
+            sum = sum + count
+    mut later: str | None = None
+    if n > 0:
+        later = "set"
+    if later is not None:
+        sum = sum + later.len() * 10
+    named = Named(label=find(names, 1), size=2)
+    sum = sum + size(named.label) + named.size
+    (which, extra) = either(n)
+    sum = sum + extra
+    match which:
+        case Chain as chain:
+            sum = sum + length(chain) * 100000
+        case int64 as count:
+            sum = sum + count
+    made = numbers(n)
+    if made is not None:
+        sum = sum + made[1] + made.len()
+    mut maybe: list[str | None] = [None, "x"]
+    maybe.append(find(names, 0))
+    for item in maybe:
+        if item is not None:
+            sum = sum + item.len() * 1000000
+    match first_word(n):
+        case Ok(word):
+            sum = sum + size(word) * 10000000
+        case Err(code):
+            sum = sum + code
+    return sum
+
+export "C" def entry(n: int64) -> int64:
+    return work(n)
+
+def main() -> None:
+    print(entry(40))

@@ -1,7 +1,11 @@
 mod capabilities;
+mod drop_hooks;
 use capabilities::resolve_param_passings;
 pub(crate) use capabilities::{assertion_dispatch_is_non_consuming, resolve_param_passing};
+pub(crate) use drop_hooks::DROP_HOOK;
+mod atomic_order;
 mod callables;
+mod integer_bits;
 pub use aura_core::types::{
     CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
     ClosureOwner, FunctionParamContract,
@@ -18,6 +22,7 @@ use callables::{
 pub(crate) use loans::{synthetic_returned_view_decl, SYNTHETIC_CALLABLE_DECL};
 pub(crate) use types::closure_call_kind_for;
 mod display;
+pub(crate) mod fixed_arrays;
 mod generators;
 pub(crate) use display::{is_prelude_display, DISPLAY_METHOD, DISPLAY_TRAIT};
 mod iterator_loops;
@@ -25,6 +30,7 @@ mod prelude;
 mod property_reads;
 #[cfg(test)]
 mod property_reads_tests;
+mod property_setters;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
 mod trait_objects;
@@ -64,8 +70,14 @@ pub(crate) use contracts::RESULT_NAME as CONTRACT_RESULT_NAME;
 mod decorators;
 mod init;
 pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
+pub(crate) mod delegation;
 mod json_derive;
 pub(crate) use json_derive::GENERATED_LINE_OFFSET;
+mod module_state;
+#[cfg(test)]
+mod module_state_tests;
+pub use module_state::StateImage;
+pub(crate) use program::check_with_profile;
 mod program;
 mod tensor_derive;
 #[cfg(test)]
@@ -79,6 +91,7 @@ pub use program::{
 };
 mod aliases;
 mod assoc_bounds;
+mod inline_asm;
 mod iterator_fast;
 mod iterator_fast_args;
 #[cfg(test)]
@@ -88,6 +101,8 @@ mod managers;
 pub(crate) use managers::{
     classify_manager, hidden_manager_binding, manager_method_call, ManagerEntry, ManagerExit,
 };
+#[cfg(test)]
+mod ownership_soundness_tests;
 mod patterns;
 mod structural_patterns;
 mod unions;
@@ -101,6 +116,9 @@ pub(crate) use type_param_calls::{
     collect_type_param_calls, lookup_type_param_call, specialized_functions,
 };
 pub use type_param_calls::{GenericUse, TypeParamCall, TypeParamCallId};
+pub(crate) mod c_layout_queries;
+mod c_union_writes;
+pub(crate) use c_union_writes::setter_statement as state_union_setter_statement;
 #[cfg(test)]
 mod type_budget_tests;
 mod types;
@@ -144,6 +162,8 @@ pub(crate) use types::{
     substitute_trait_bound, substitute_type, substitutions_from_decl_type_args,
     trait_impl_specificity, trait_impl_specificity_parts, type_pattern_matches, wrap_returned_view,
 };
+mod raw_pointers;
+pub(crate) use raw_pointers::{raw_pointer_parameter, raw_pointer_result};
 mod properties;
 pub(crate) use properties::integer_type_bounds;
 #[cfg(test)]
@@ -292,6 +312,11 @@ fn reject_initializer_member(expr: &Expr) -> Result<()> {
         _ => None,
     };
     match member {
+        Some((field, span)) if field == DROP_HOOK => Err(Diagnostic::coded_at(
+            "AU2066",
+            span,
+            "`__drop__` runs automatically when an owner releases the value",
+        )),
         Some((field, span)) if field == INITIALIZER_NAME => Err(Diagnostic::coded_at(
             "AU2005",
             span,
@@ -519,8 +544,11 @@ pub(crate) fn ffi_struct<'a>(
 }
 
 /// The scalar an FFI scalar type crosses as.
-fn ffi_scalar(ty: &Type) -> Option<crate::ffi::FfiScalar> {
+pub(crate) fn ffi_scalar(ty: &Type) -> Option<crate::ffi::FfiScalar> {
     use crate::ffi::FfiScalar as Scalar;
+    if ty.as_raw_pointer().is_some() {
+        return Some(Scalar::U64);
+    }
     let Type::Named(name, args) = ty else {
         return None;
     };
@@ -577,9 +605,17 @@ pub(crate) fn ffi_struct_layout(
             })
         })
         .collect::<Option<Vec<_>>>()?;
+    let mut layout_controls = holder.decl.layout_controls.clone();
+    layout_controls.inline_union = class.decl.layout_controls.inline_union;
+    for (field, info) in &holder.fields {
+        if matches!(&info.ty, Type::Named(name, _) if name == "fixed") {
+            layout_controls.inline_arrays.insert(field.clone());
+        }
+    }
     Some(CStruct {
         name: name.clone(),
         fields,
+        layout_controls: Box::new(layout_controls),
         union: class.decl.c_union.is_some(),
     })
 }
@@ -605,6 +641,12 @@ fn ffi_field_kind(
         let element = ffi_field_kind(element, inner, classes)?;
         return Some(CFieldKind::Array(Box::new(element), *length));
     }
+    if let Some((element, length)) = ty.as_fixed_array() {
+        return Some(CFieldKind::Array(
+            Box::new(ffi_field_kind(element, &[], classes)?),
+            length,
+        ));
+    }
     match ffi_scalar(ty) {
         Some(scalar) => Some(CFieldKind::Scalar(scalar)),
         None => Some(CFieldKind::Struct(ffi_struct_layout(ty, classes)?)),
@@ -627,7 +669,8 @@ pub(crate) fn ffi_struct_elements_layout(
 }
 
 /// Checks that every field of the `extern "C" class` `class` has a type C
-/// can lay out: a fixed-width scalar or another `extern "C" class`.
+/// can lay out: a fixed-width scalar or another `extern "C" class`, and that
+/// the total byte size and leaf count stay within Aura's C layout bounds.
 pub(crate) fn validate_ffi_struct_fields(
     class: &ClassInfo,
     classes: &BTreeMap<String, ClassInfo>,
@@ -651,6 +694,9 @@ pub(crate) fn validate_ffi_struct_fields(
                 element = args.first().unwrap_or(element);
             }
         }
+        while let Some((inner, _)) = element.as_fixed_array() {
+            element = inner;
+        }
         if ffi_scalar_type(element) || ffi_struct(element, classes).is_some() {
             continue;
         }
@@ -670,7 +716,137 @@ pub(crate) fn validate_ffi_struct_fields(
             "a C struct or union holds fixed-width scalars, `extern \"C\"` classes and unions, and `array[T, N]` fields of those; keep a pointer to anything else in a `uint64` or an opaque handle",
         ));
     }
+    if let Err(reason) = checked_ffi_class_metrics(class, classes, &mut BTreeSet::new()) {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            class.decl.span,
+            format!("`extern \"C\"` {what} `{owner}` {reason}"),
+        )
+        .with_help(format!(
+            "a C struct or union layout may use at most {} bytes and {} scalar elements",
+            aura_runtime::c_layout::MAX_C_STRUCT_BYTES,
+            aura_runtime::c_layout::MAX_C_STRUCT_LEAVES
+        )));
+    }
     Ok(())
+}
+
+/// Computes `(size, align, leaf_count)` for an `extern "C"` class or union
+/// using checked arithmetic and cycle detection.
+fn checked_ffi_class_metrics(
+    class: &ClassInfo,
+    classes: &BTreeMap<String, ClassInfo>,
+    visiting: &mut BTreeSet<(String, String)>,
+) -> std::result::Result<(usize, usize, usize), String> {
+    use aura_runtime::c_layout::{MAX_C_STRUCT_BYTES, MAX_C_STRUCT_LEAVES};
+
+    let (holder, is_union) = match &class.decl.c_union {
+        Some(members) => {
+            let Some(holder) = classes.values().find(|other| {
+                other.decl.name == *members && other.module_name == class.module_name
+            }) else {
+                return Err("references missing union members".to_string());
+            };
+            (holder, true)
+        }
+        None => (
+            class,
+            crate::ast::c_union_of_members_class(&class.decl.name).is_some(),
+        ),
+    };
+    let key = (holder.module_name.clone(), holder.decl.name.clone());
+    if !visiting.insert(key.clone()) {
+        return Err("has a recursive C layout".to_string());
+    }
+
+    let mut end = 0usize;
+    let mut align = 1usize;
+    let mut leaves = 0usize;
+
+    let result = (|| -> std::result::Result<(usize, usize, usize), String> {
+        for field in &holder.decl.fields {
+            let info = &holder.fields[&field.name];
+            let lengths = holder
+                .decl
+                .c_arrays
+                .get(&field.name)
+                .map_or(&[][..], Vec::as_slice);
+            let mut element = &info.ty;
+            for _ in lengths {
+                if let Type::Named(_, args) = element {
+                    element = args.first().unwrap_or(element);
+                }
+            }
+            // An inline `fixed[T, N]` field holds its elements in place.
+            let mut lengths = lengths.to_vec();
+            while let Some((inner, length)) = element.as_fixed_array() {
+                lengths.push(length);
+                element = inner;
+            }
+            let (mut field_size, field_align, mut field_leaves) =
+                if let Some(scalar) = ffi_scalar(element) {
+                    (scalar.size(), scalar.size(), 1usize)
+                } else if let Some(inner) = ffi_struct(element, classes) {
+                    checked_ffi_class_metrics(inner, classes, visiting)?
+                } else {
+                    return Err(format!("field `{}` has no C layout", field.name));
+                };
+            for &length in &lengths {
+                field_size = field_size
+                    .checked_mul(length)
+                    .filter(|size| *size <= MAX_C_STRUCT_BYTES)
+                    .ok_or_else(|| {
+                        format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+                    })?;
+                field_leaves = field_leaves
+                    .checked_mul(length)
+                    .filter(|count| *count <= MAX_C_STRUCT_LEAVES)
+                    .ok_or_else(|| {
+                        format!(
+                            "exceeds the maximum C layout scalar count of {MAX_C_STRUCT_LEAVES}"
+                        )
+                    })?;
+            }
+            align = align.max(field_align);
+            leaves = leaves
+                .checked_add(field_leaves)
+                .filter(|count| *count <= MAX_C_STRUCT_LEAVES)
+                .ok_or_else(|| {
+                    format!("exceeds the maximum C layout scalar count of {MAX_C_STRUCT_LEAVES}")
+                })?;
+            let offset = if is_union {
+                0
+            } else {
+                end.checked_next_multiple_of(field_align).ok_or_else(|| {
+                    format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+                })?
+            };
+            let field_end = offset
+                .checked_add(field_size)
+                .filter(|size| *size <= MAX_C_STRUCT_BYTES)
+                .ok_or_else(|| {
+                    format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+                })?;
+            end = end.max(field_end);
+        }
+        // An `align(N)` record is at least that aligned.
+        align = align.max(holder.decl.layout_controls.alignment.unwrap_or(1));
+        let total_size = end
+            .checked_next_multiple_of(align)
+            .filter(|size| {
+                *size <= MAX_C_STRUCT_BYTES
+                    && size
+                        .checked_next_multiple_of(8)
+                        .is_some_and(|slot| i32::try_from(slot).is_ok())
+            })
+            .ok_or_else(|| {
+                format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+            })?;
+        Ok((total_size, align, leaves))
+    })();
+
+    visiting.remove(&key);
+    result
 }
 
 /// The C symbol of the `drop` function an opaque class declares. The
@@ -702,6 +878,18 @@ pub(crate) fn ffi_drop_symbol(
         [param] if param.mode == ParamMode::Own
             && matches!(&param.ty.kind, crate::ast::TypeRefKind::Named { name, args } if *name == class.name && args.is_empty())
     );
+    if let crate::ast::TypeRefKind::Named { name: ret, args } = &function.return_type.kind {
+        if args.is_empty() && matches!(ret.as_str(), "float32" | "float64") {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                *span,
+                format!(
+                    "`drop` function `{name}` of opaque class `{}` cannot return a floating-point type `{ret}`; it must return an integer scalar, `bool`, or `None`",
+                    class.name
+                ),
+            ));
+        }
+    }
     let result_is_plain = matches!(
         &function.return_type.kind,
         crate::ast::TypeRefKind::Named { name, args }
@@ -713,6 +901,16 @@ pub(crate) fn ffi_drop_symbol(
             *span,
             format!(
                 "`drop` function `{name}` of opaque class `{0}` must take one `own {0}` parameter and return a scalar or nothing",
+                class.name
+            ),
+        ));
+    }
+    if !function.contracts.is_empty() {
+        return Err(Diagnostic::coded_at(
+            "AU2005",
+            *span,
+            format!(
+                "`drop` function `{name}` of opaque class `{}` cannot declare `requires` or `ensures` contracts",
                 class.name
             ),
         ));
@@ -841,7 +1039,11 @@ fn validate_ffi_parameter(
             && elements
                 .iter()
                 .all(|element| ffi_struct(element, classes).is_some());
-        if !structs && !elements.iter().all(ffi_scalar_type) {
+        if !structs
+            && !elements
+                .iter()
+                .all(|ty| ffi_scalar_type(ty) || raw_pointers::requires_pointer_argument(ty))
+        {
             return Err(Diagnostic::coded_at(
                 "AU2002",
                 span,
@@ -1066,6 +1268,9 @@ fn validate_ffi_return(
             span,
             "a C text result must be exactly `cstr` or `cstr | None`",
         ));
+    }
+    if ty.as_raw_pointer().is_some() {
+        return Ok(());
     }
     if *ty == Type::Unit
         || ffi_scalar_type(ty)
@@ -1637,6 +1842,9 @@ struct FunctionChecker<'a> {
     /// Collection places a `for ... in mut` loop holds exclusively while its
     /// body is checked, with the iterable's span.
     mutable_iteration_places: Rc<RefCell<Vec<(PlacePath, crate::diag::Span)>>>,
+    /// The states at each `break` and `continue` of the loops whose bodies
+    /// are being checked, innermost last.
+    loop_exits: Rc<RefCell<Vec<LoopExits>>>,
     /// Set while an argument bound to a `mut` union parameter is typed: the
     /// declared union is exposed whole, so refinements do not apply.
     suppress_narrowing: Rc<std::cell::Cell<bool>>,
@@ -1694,6 +1902,16 @@ enum BlockFlow {
     /// Every path leaves through `break` or `continue` (or a return), so the
     /// block never joins the statement that follows it.
     Diverges,
+}
+
+/// The local states a loop body leaves with, one per `break` or `continue`.
+#[derive(Clone, Default)]
+struct LoopExits {
+    /// The loop statement's span. A loan made before it is used again on
+    /// the next iteration.
+    start: Option<crate::diag::Span>,
+    breaks: Vec<HashMap<String, LocalBinding>>,
+    continues: Vec<HashMap<String, LocalBinding>>,
 }
 
 impl<'a> FunctionChecker<'a> {
@@ -2377,6 +2595,22 @@ impl<'a> FunctionChecker<'a> {
         ty: &Type,
         span: crate::diag::Span,
     ) -> Result<()> {
+        if self.reject_noncloneable_parts(operation, ty, span)? {
+            return Ok(());
+        }
+        self.reject_rng_state_duplication(operation, ty, span)
+    }
+
+    /// Rejects duplicating a value that holds a closure, a non-repeatable
+    /// task result, an opaque handle, a resource, or a trait object. Returns
+    /// `true` when the value is known safe to duplicate without the
+    /// `random.Rng` check.
+    pub(super) fn reject_noncloneable_parts(
+        &self,
+        operation: &str,
+        ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<bool> {
         // These observers transfer a non-repeatable result out of their
         // unique Task right. Their lowering must move rather than clone; the
         // duplication check still applies to random.Rng, which is not
@@ -2447,7 +2681,7 @@ impl<'a> FunctionChecker<'a> {
             // that crossed the task boundary comes back without a copy. A
             // Transfer type holds no `random.Rng` either.
             if transfers_unique_task_result && self.transfer_failure(ty).is_none() {
-                return Ok(());
+                return Ok(true);
             }
             return Err(Diagnostic::coded_at(
                 "AU3007",
@@ -2461,6 +2695,20 @@ impl<'a> FunctionChecker<'a> {
                 "borrow it with `view`, or take it out of a collection with `pop` or `remove`; to copy on purpose, add a method to the trait that returns a new value",
             ));
         }
+        Ok(false)
+    }
+
+    fn reject_rng_state_duplication(
+        &self,
+        operation: &str,
+        ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        let operation = if operation.contains('`') {
+            operation.to_string()
+        } else {
+            format!("`{operation}`")
+        };
         let qualifier = match self.rng_clone_safety(ty) {
             RngCloneSafety::Safe => return Ok(()),
             RngCloneSafety::ContainsRng => "contains",
@@ -2875,6 +3123,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: BTreeMap::new(),
             active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
             mutable_iteration_places: Rc::new(RefCell::new(Vec::new())),
+            loop_exits: Rc::new(RefCell::new(Vec::new())),
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
             in_spec: Rc::new(std::cell::Cell::new(false)),
             recursion_measure: Rc::new(RefCell::new(None)),
@@ -2931,6 +3180,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             mutable_iteration_places: self.mutable_iteration_places.clone(),
+            loop_exits: self.loop_exits.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -2981,6 +3231,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             mutable_iteration_places: self.mutable_iteration_places.clone(),
+            loop_exits: self.loop_exits.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -3027,6 +3278,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             mutable_iteration_places: self.mutable_iteration_places.clone(),
+            loop_exits: self.loop_exits.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -3073,6 +3325,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             mutable_iteration_places: self.mutable_iteration_places.clone(),
+            loop_exits: self.loop_exits.clone(),
             rng_clone_obligations: sink,
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -3564,6 +3817,13 @@ impl<'a> FunctionChecker<'a> {
             let Some(binding) = locals.get_mut(&path.root) else {
                 continue;
             };
+            if binding
+                .borrow_origin
+                .as_deref()
+                .is_some_and(|origin| origin.starts_with("module state `"))
+            {
+                continue;
+            }
             binding.stale_narrowing.remove(&path.projections);
             binding.narrowed.insert(
                 path.projections.clone(),
@@ -3580,6 +3840,22 @@ impl<'a> FunctionChecker<'a> {
     /// ancestor survives: a place below a narrowed union is reached through
     /// its proven payload, so writing it cannot change the member.
     fn invalidate_narrowing(
+        &self,
+        place: &PlacePath,
+        invalidated_at: crate::diag::Span,
+        operation: &'static str,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) {
+        // A write through a view changes the place the view borrows, so the
+        // facts recorded on that source place go stale too.
+        let canonical = self.canonicalize_view_place(place.clone(), locals);
+        if canonical != *place {
+            self.invalidate_narrowing_at(&canonical, invalidated_at, operation, locals);
+        }
+        self.invalidate_narrowing_at(place, invalidated_at, operation, locals);
+    }
+
+    fn invalidate_narrowing_at(
         &self,
         place: &PlacePath,
         invalidated_at: crate::diag::Span,
@@ -3783,6 +4059,50 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    /// Checks a loop body and returns the states at its `break` and
+    /// `continue` statements next to the body's own flow.
+    fn check_loop_body(
+        &self,
+        loop_span: crate::diag::Span,
+        body: &[Stmt],
+        locals: &mut HashMap<String, LocalBinding>,
+        return_type: &Type,
+        loop_depth: usize,
+        allow_return: bool,
+    ) -> Result<(BlockFlow, LoopExits)> {
+        self.loop_exits.borrow_mut().push(LoopExits {
+            start: Some(loop_span),
+            ..LoopExits::default()
+        });
+        let checked = self.check_block(body, locals, return_type, loop_depth, allow_return);
+        let exits = self.loop_exits.borrow_mut().pop().unwrap_or_default();
+        Ok((checked?, exits))
+    }
+
+    /// A `continue` starts the next iteration, so a move before it is
+    /// loop-carried. A `break` reaches the statement after the loop, so its
+    /// moves join the state there.
+    fn apply_loop_exits(
+        &self,
+        entry: &HashMap<String, LocalBinding>,
+        exits: &LoopExits,
+        loop_kind: &str,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        for state in &exits.continues {
+            self.reject_loop_carried_moves(entry, state, loop_kind, span)?;
+        }
+        if !exits.breaks.is_empty() {
+            let baseline = locals.clone();
+            let states = std::iter::once(&baseline)
+                .chain(exits.breaks.iter())
+                .collect::<Vec<_>>();
+            self.merge_control_flow_moves(locals, &states);
+        }
+        Ok(())
+    }
+
     fn reject_loop_carried_moves(
         &self,
         locals: &HashMap<String, LocalBinding>,
@@ -3837,6 +4157,7 @@ impl<'a> FunctionChecker<'a> {
         function_info: &FunctionInfo,
         contracts_only: bool,
     ) -> Result<()> {
+        crate::machine_attributes::check_function(function_info)?;
         let function = &function_info.decl;
         self.validate_view_return_contract(function)?;
         let type_param_scope = type_param_scope(&function.type_params);
@@ -3923,6 +4244,13 @@ impl<'a> FunctionChecker<'a> {
             return Ok(());
         }
         let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
+        if function
+            .machine
+            .as_ref()
+            .is_some_and(|attrs| attrs.naked.is_some())
+        {
+            return Ok(());
+        }
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(
                 function.span,
@@ -4300,7 +4628,8 @@ impl<'a> FunctionChecker<'a> {
             "loop",
         )?;
         self.check_loop_clauses(&for_stmt.contracts, ALL_LOOP_CLAUSES, &body_locals, true)?;
-        self.check_block(
+        let (_, loop_exits) = self.check_loop_body(
+            for_stmt.span,
             &for_stmt.body,
             &mut body_locals,
             return_type,
@@ -4308,8 +4637,9 @@ impl<'a> FunctionChecker<'a> {
             allow_return,
         )?;
         self.reject_loop_carried_moves(locals, &body_locals, "for", for_stmt.span)?;
-        let baseline_locals = locals.clone();
-        self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
+        let entry_locals = locals.clone();
+        self.merge_control_flow_moves(locals, &[&entry_locals, &body_locals]);
+        self.apply_loop_exits(&entry_locals, &loop_exits, "for", for_stmt.span, locals)?;
         Ok(())
     }
 
@@ -4978,6 +5308,7 @@ impl<'a> FunctionChecker<'a> {
                     let view_source = range_endpoints
                         .map(|(object, _, _)| object)
                         .unwrap_or(&view.source);
+                    self.reject_state_loan(view_source, locals)?;
                     self.reject_property_place(view_source, "viewed", locals)?;
                     let syntactic_place = self.borrow_call_place(view_source);
                     let direct_parent = syntactic_place.as_ref().and_then(|place| {
@@ -5209,6 +5540,11 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                    }
+                }
+                Stmt::Expr(stmt) if crate::inline_asm::is_asm(&stmt.expr) => {
+                    if self.check_inline_asm(&stmt.expr, locals)? {
+                        flow = BlockFlow::AlwaysReturns;
                     }
                 }
                 Stmt::Expr(expr_stmt) => {
@@ -5602,6 +5938,9 @@ impl<'a> FunctionChecker<'a> {
                     }
                     let (binding_ty, binding_passing, binding_mutable_place) =
                         match (&iterable_ty, for_stmt.borrow_mode) {
+                        (ty, None) if ty.as_fixed_array().is_some() => {
+                            (ty.as_fixed_array().unwrap().0.clone(), ReceiverKind::Borrow, false)
+                        }
                         (Type::Named(name, _), _) if name == "Range" => {
                             (Type::named("int64"), ReceiverKind::Value, false)
                         }
@@ -5732,7 +6071,7 @@ impl<'a> FunctionChecker<'a> {
                     // fixed point over the entry and every backedge
                     // (ADR-0052 A4): an entry fact that some iteration
                     // invalidates does not hold on the next one.
-                    let body_locals = loop {
+                    let (body_locals, loop_exits) = loop {
                         let mut body_locals = locals.clone();
                         if let Some(borrow_mode) = effective_borrow_mode {
                             if let Some(place) =
@@ -5782,7 +6121,8 @@ impl<'a> FunctionChecker<'a> {
                                 true,
                             )
                             .and_then(|()| {
-                                self.check_block(
+                                self.check_loop_body(
+                                    for_stmt.span,
                                     &for_stmt.body,
                                     &mut body_locals,
                                     return_type,
@@ -5793,16 +6133,23 @@ impl<'a> FunctionChecker<'a> {
                         if mutable_iteration.is_some() {
                             self.mutable_iteration_places.borrow_mut().pop();
                         }
-                        checked?;
+                        let (_, loop_exits) = checked?;
                         let killed = Self::narrowing_killed_by_body(locals, &body_locals);
                         if killed.is_empty() {
-                            break body_locals;
+                            break (body_locals, loop_exits);
                         }
                         Self::forget_narrowing(&killed, locals);
                     };
                     self.reject_loop_carried_moves(locals, &body_locals, "for", for_stmt.span)?;
-                    let baseline_locals = locals.clone();
-                    self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
+                    let entry_locals = locals.clone();
+                    self.merge_control_flow_moves(locals, &[&entry_locals, &body_locals]);
+                    self.apply_loop_exits(
+                        &entry_locals,
+                        &loop_exits,
+                        "for",
+                        for_stmt.span,
+                        locals,
+                    )?;
                 }
                 Stmt::With(with_stmt) => {
                     let with_flow =
@@ -5821,7 +6168,10 @@ impl<'a> FunctionChecker<'a> {
                     // header, and the guard is evaluated before every
                     // iteration, so its own true-successor facts are
                     // re-established for the body on each pass.
-                    let (when_false, body_locals) = loop {
+                    // The condition runs before every iteration, so a move
+                    // in it is loop-carried like a move in the body.
+                    let entry_locals = locals.clone();
+                    let (when_false, body_locals, loop_exits) = loop {
                         self.check_loop_clauses(
                             &while_stmt.contracts,
                             &[ContractKind::Invariant],
@@ -5848,7 +6198,8 @@ impl<'a> FunctionChecker<'a> {
                             &body_locals,
                             false,
                         )?;
-                        self.check_block(
+                        let (_, loop_exits) = self.check_loop_body(
+                            while_stmt.span,
                             &while_stmt.body,
                             &mut body_locals,
                             return_type,
@@ -5857,13 +6208,13 @@ impl<'a> FunctionChecker<'a> {
                         )?;
                         let killed = Self::narrowing_killed_by_body(locals, &body_locals);
                         if killed.is_empty() {
-                            break (when_false, body_locals);
+                            break (when_false, body_locals, loop_exits);
                         }
                         Self::forget_narrowing(&killed, locals);
                     };
                     if self.const_bool_value(&while_stmt.condition) != Some(false) {
                         self.reject_loop_carried_moves(
-                            locals,
+                            &entry_locals,
                             &body_locals,
                             "while",
                             while_stmt.span,
@@ -5873,6 +6224,13 @@ impl<'a> FunctionChecker<'a> {
                             self.apply_narrowing(&when_false, &mut baseline_locals);
                         }
                         self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
+                        self.apply_loop_exits(
+                            &entry_locals,
+                            &loop_exits,
+                            "while",
+                            while_stmt.span,
+                            locals,
+                        )?;
                     }
                     // `while true:` with no `break` of its own never reaches
                     // the next statement: it only leaves by returning or
@@ -5894,6 +6252,9 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     diverges = true;
+                    if let Some(exits) = self.loop_exits.borrow_mut().last_mut() {
+                        exits.breaks.push(locals.clone());
+                    }
                 }
                 Stmt::Continue(continue_stmt) => {
                     if loop_depth == 0 {
@@ -5903,6 +6264,9 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     diverges = true;
+                    if let Some(exits) = self.loop_exits.borrow_mut().last_mut() {
+                        exits.continues.push(locals.clone());
+                    }
                 }
             }
         }
@@ -6039,7 +6403,12 @@ impl<'a> FunctionChecker<'a> {
         assign: &AssignStmt,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
-        self.reject_property_assignment(assign, locals)?;
+        if self.check_state_union_assignment(assign, locals)? {
+            return Ok(());
+        }
+        if self.discover_property_assignment(assign, locals)? {
+            return Ok(());
+        }
         if let AssignTarget::Index { object, index } = &assign.target {
             if assign.mutable {
                 return Err(Diagnostic::at(
@@ -6116,7 +6485,10 @@ impl<'a> FunctionChecker<'a> {
             // `values[1:3] = ...` assigns an Array of the target's type, or
             // one element that fills the selection.
             let mut selection_element = None;
-            let target_ty = if let Some(target_ty) = array_element_type(&object_ty).cloned() {
+            let target_ty = if let Some((element, _)) = object_ty.as_fixed_array() {
+                self.check_vec_index_type(index, index.span, locals)?;
+                element.clone()
+            } else if let Some(target_ty) = array_element_type(&object_ty).cloned() {
                 if self.check_array_index_type(index, locals)? {
                     selection_element = Some(target_ty);
                     object_ty.clone()
@@ -6349,7 +6721,9 @@ impl<'a> FunctionChecker<'a> {
                 }
                 self.invalidate_narrowing(&path, assign.span, "assignment", locals);
             }
-            if !self.is_mutable_place(object, locals)? {
+            if self.imported_state(object, field).is_none()
+                && !self.is_mutable_place(object, locals)?
+            {
                 if self.is_shared_self_place(object, locals) {
                     return Err(self.shared_self_mutation_diagnostic(assign.span, locals));
                 }
@@ -6985,6 +7359,9 @@ impl<'a> FunctionChecker<'a> {
         expected: Option<&Type>,
     ) -> Result<Type> {
         self.reject_owned_view_value(expr, locals, "an owned aggregate")?;
+        if let Some(array) = self.fixed_literal_type(expr, locals, expected)? {
+            return Ok(array);
+        }
         match &expr.kind {
             ExprKind::Group(inner) => self.type_expr_consuming_result(inner, locals, expected),
             ExprKind::Cast { expr: inner, .. } => {
@@ -7041,6 +7418,16 @@ impl<'a> FunctionChecker<'a> {
                 for element in elements {
                     let actual =
                         self.type_expr_consuming_result(element, locals, element_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            element.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        )
+                        .with_help(
+                            "keep the loan closure in its matching inferred local and call it directly",
+                        ));
+                    }
                     element_ty.get_or_insert(actual);
                 }
                 Ok(Type::Named(
@@ -7053,6 +7440,13 @@ impl<'a> FunctionChecker<'a> {
                 for element in elements {
                     let actual =
                         self.type_expr_consuming_result(element, locals, element_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            element.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        ));
+                    }
                     element_ty.get_or_insert(actual);
                 }
                 Ok(Type::Named(
@@ -7077,9 +7471,23 @@ impl<'a> FunctionChecker<'a> {
                 for entry in entries {
                     let actual_key =
                         self.type_expr_consuming_result(&entry.key, locals, key_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual_key) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            entry.key.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        ));
+                    }
                     key_ty.get_or_insert(actual_key);
                     let actual_value =
                         self.type_expr_consuming_result(&entry.value, locals, value_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual_value) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            entry.value.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        ));
+                    }
                     value_ty.get_or_insert(actual_value);
                 }
                 Ok(Type::Named(
@@ -8524,6 +8932,22 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if expected.and_then(Type::as_fixed_array).is_some()
+            && fixed_arrays::initializer(expr).is_some()
+        {
+            if Self::result_consumption_needs_replay(expr) {
+                self.expr_result_entries.borrow_mut().insert(
+                    expr as *const Expr as usize,
+                    ExprResultEntry {
+                        locals: locals.clone(),
+                        expected: expected.cloned(),
+                    },
+                );
+            }
+            if let Some(array) = self.fixed_literal_type(expr, locals, expected)? {
+                return Ok(array);
+            }
+        }
         if let Some(Type::Union(union)) = expected {
             if !matches!(
                 expr.kind,
@@ -8798,11 +9222,25 @@ impl<'a> FunctionChecker<'a> {
                             locals,
                             expected_elements.and_then(|types| types.get(index)),
                         )?;
+                        if type_contains_loan_closure(&ty) {
+                            return Err(Diagnostic::coded_at(
+                                "AU3010",
+                                element.span,
+                                "a closure containing a live view cannot be stored in an aggregate",
+                            )
+                            .with_help(
+                                "keep the loan closure in its matching inferred local and call it directly",
+                            ));
+                        }
                         self.consume_aggregate_literal_element(element, locals)?;
                         Ok(ty)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(Type::Tuple(element_types))
+                let ty = Type::Tuple(element_types);
+                self.type_names
+                    .expansion_budget()
+                    .check_inferred(&ty, expr.span)?;
+                Ok(ty)
             }
             ExprKind::List(elements) => {
                 let mut element_ty = expected.and_then(vec_element_type).cloned();
@@ -9265,6 +9703,11 @@ impl<'a> FunctionChecker<'a> {
                     self.canonical_type_names,
                     &self.type_params,
                 )?;
+                if target_ty.as_raw_pointer().is_some() {
+                    let address = Type::named("uint64");
+                    let source = self.type_of_expr_hint(value, locals, Some(&address))?;
+                    return raw_pointers::cast(&source, target_ty, expr.span);
+                }
                 if target_ty.is_trait_object() {
                     return self.type_trait_object_cast(expr, value, locals, &target_ty);
                 }
@@ -9280,6 +9723,10 @@ impl<'a> FunctionChecker<'a> {
                     // conditional keeps its own type and the cast converts it.
                     self.type_of_expr(value, locals)?
                 };
+                if source_ty.as_raw_pointer().is_some() {
+                    self.type_names.uses_raw_pointer.set(true);
+                    return raw_pointers::cast(&source_ty, target_ty, expr.span);
+                }
                 if let (Some(source_dtype), Some(target_dtype)) = (
                     array_element_type(&source_ty),
                     array_element_type(&target_ty),
@@ -10261,7 +10708,10 @@ impl<'a> FunctionChecker<'a> {
                     // an Array that shares the source's elements.
                     return Ok(if selects { object_ty } else { element_ty });
                 }
-                if let Some(element_ty) = vec_element_type(&object_ty).cloned() {
+                if let Some(element_ty) = vec_element_type(&object_ty)
+                    .or_else(|| object_ty.as_fixed_array().map(|(element, _)| element))
+                    .cloned()
+                {
                     self.check_vec_index_type(index, index.span, locals)?;
                     let retained_base = self
                         .retained_place_access(
@@ -10723,6 +11173,18 @@ impl<'a> FunctionChecker<'a> {
                     span,
                 )?;
             }
+        }
+        if left_ty.as_raw_pointer().is_some() || right_ty.as_raw_pointer().is_some() {
+            self.type_names.uses_raw_pointer.set(true);
+            return if left_ty == right_ty && matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                Ok(Type::named("bool"))
+            } else {
+                Err(Diagnostic::coded_at(
+                    "AU2083",
+                    span,
+                    "pointers support equality between matching pointer types",
+                ))
+            };
         }
         if let Some(result) = builtin_duration_binary_result(op, &left_ty, &right_ty) {
             return Ok(result);
@@ -11718,6 +12180,12 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if let Some(result) = self.c_layout_query(callee, args, locals) {
+            return result.map(|_| Type::named("uint64"));
+        }
+        if let Some(ty) = self.check_delegated_call(callee, args, span, locals, expected)? {
+            return Ok(ty);
+        }
         let indexed = callee.indexed_collection_callee(|object| {
             self.type_of_expr_without_move_state(object, locals, None)
                 .is_ok_and(|ty| {
@@ -11927,6 +12395,9 @@ impl<'a> FunctionChecker<'a> {
                     format!("{display_name} does not take type arguments"),
                 ));
             }
+            let function = function.with_raw_arguments(args, span, |arg| {
+                self.type_of_expr_without_move_state(arg, locals, None).ok()
+            })?;
             // C gets the address of code, so a callback argument is a
             // named function, which has no captured environment.
             for (index, param) in function.decl.params.iter().enumerate() {
@@ -12754,7 +13225,9 @@ impl<'a> FunctionChecker<'a> {
                                 format!("`len(...)` expects a value with a `len()` member, found `{value_ty}`"),
                             ));
                         };
-                        if BuiltinMember::resolve(receiver_name, "len").is_none() {
+                        if value_ty.as_fixed_array().is_none()
+                            && BuiltinMember::resolve(receiver_name, "len").is_none()
+                        {
                             return Err(Diagnostic::coded_at(
                                 "AU2002",
                                 value_arg.span,
@@ -13126,7 +13599,10 @@ impl<'a> FunctionChecker<'a> {
                 )
             }
             ExprKind::Member { object, field } => {
-                if let Some(type_param) = self.names_type_param(object, locals) {
+                if let Some(type_param) = self
+                    .names_type_param(object, locals)
+                    .or_else(|| self.associated_delegate_param(object, field, locals))
+                {
                     return self.type_of_type_param_associated_call(
                         &type_param,
                         field,
@@ -13519,6 +13995,10 @@ impl<'a> FunctionChecker<'a> {
                 } else {
                     self.type_of_expr(object, locals)?
                 };
+                if let Some(element) = receiver_ty.as_raw_pointer() {
+                    self.type_names.uses_raw_pointer.set(true);
+                    return self.check_raw_pointer_call(element, field, args, span, locals);
+                }
                 let receiver_ty = match types::span_element_type(&receiver_ty).cloned() {
                     Some(element) => {
                         if let Some(result) = self
@@ -13582,9 +14062,19 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 if let Type::Module(module_path) = &receiver_ty {
-                    let namespace = self.module_namespace(module_path).ok_or_else(|| {
+                    let namespace = match &grouped_expr(object).kind {
+                        ExprKind::Name(binding) if binding.contains('#') => self
+                            .imported_modules
+                            .get(binding)
+                            .or_else(|| self.module_namespace(module_path)),
+                        _ => self.module_namespace(module_path),
+                    }
+                    .ok_or_else(|| {
                         Diagnostic::at(span, format!("unknown module namespace `{}`", module_path))
                     })?;
+                    if namespace.path == "mem" && field == "address_of" {
+                        return self.check_raw_address(args, span, locals);
+                    }
                     if namespace.path == recover::MODULE && field == recover::RECOVER {
                         if explicit_type_args.is_some() {
                             return Err(Diagnostic::coded_at(
@@ -13617,6 +14107,8 @@ impl<'a> FunctionChecker<'a> {
                         return Ok(recover::raw_result_type(child_return));
                     }
                     if let Some(function) = namespace.functions.get(field) {
+                        crate::machine_attributes::check_callable(function, span)?;
+                        atomic_order::check(function, args, span)?;
                         let closure_argument_policy =
                             if namespace.path == "control" && field == "retry" {
                                 ClosureArgumentPolicy::RepeatableParameter("worker")
@@ -13753,6 +14245,7 @@ impl<'a> FunctionChecker<'a> {
                             "mark `{field}` as `public` in `{module_path}` to call it from another module"
                         )));
                     }
+                    crate::hardware::check_missing_member(&namespace.path, field, span)?;
                     return Err(Diagnostic::coded_at(
                         "AU2001",
                         span,
@@ -17323,13 +17816,26 @@ impl<'a> FunctionChecker<'a> {
                             "function values have a concrete signature and do not take explicit type arguments",
                         ));
                     }
-                    return self.type_check_function_value_args(
+                    let receiver = self
+                        .retained_call_place_access(
+                            base_callee,
+                            &Type::Function {
+                                params: params.clone(),
+                                return_type: return_type.clone(),
+                            },
+                            ReceiverKind::Borrow,
+                            "callable field",
+                        )
+                        .into_iter()
+                        .collect();
+                    return self.type_check_function_value_args_with_receiver(
                         &params,
                         &return_type,
                         args,
                         span,
                         locals,
                         expected,
+                        receiver,
                     );
                 }
                 if let Ok(Type::Callable(callable)) =
@@ -17357,17 +17863,38 @@ impl<'a> FunctionChecker<'a> {
                                     "hold the owner in a `mut` local, or take it as a `mut` parameter",
                                 ));
                             }
+                            self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                         }
                         ClosureCallKind::Repeatable => {}
                     }
-                    return self.type_check_function_value_args(
+                    let passing = match callable.call_kind {
+                        ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                        ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                        ClosureCallKind::Consuming => ReceiverKind::Value,
+                    };
+                    let receiver = self
+                        .retained_call_place_access(
+                            base_callee,
+                            &Type::Callable(callable.clone()),
+                            passing,
+                            "callable field",
+                        )
+                        .into_iter()
+                        .collect();
+                    return self.type_check_function_value_args_with_receiver(
                         &callable.params,
                         &callable.return_type,
                         args,
                         span,
                         locals,
                         expected,
+                        receiver,
                     );
+                }
+                if is_integer_type(&receiver_ty) {
+                    if let Some(method) = aura_core::integer_bits::BitMethod::of(field) {
+                        return self.check_bit_method(method, args, span, locals, receiver_ty);
+                    }
                 }
                 match (&receiver_ty, field.as_str()) {
                     (Type::Named(name, type_args), method_name)
@@ -17519,6 +18046,7 @@ impl<'a> FunctionChecker<'a> {
                                     )
                                     .with_help("hold the collection in a `mut` local"));
                                 }
+                                self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                             }
                             ClosureCallKind::Repeatable => {}
                         }
@@ -17552,14 +18080,29 @@ impl<'a> FunctionChecker<'a> {
                     Type::Function {
                         params,
                         return_type,
-                    } => self.type_check_function_value_args(
-                        &params,
-                        &return_type,
-                        args,
-                        span,
-                        locals,
-                        expected,
-                    ),
+                    } => {
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Function {
+                                    params: params.clone(),
+                                    return_type: return_type.clone(),
+                                },
+                                ReceiverKind::Borrow,
+                                "callable value",
+                            )
+                            .into_iter()
+                            .collect();
+                        self.type_check_function_value_args_with_receiver(
+                            &params,
+                            &return_type,
+                            args,
+                            span,
+                            locals,
+                            expected,
+                            receiver,
+                        )
+                    }
                     Type::Callable(callable) => {
                         if explicit_type_args.is_some() {
                             return Err(Diagnostic::coded_at(
@@ -17583,25 +18126,41 @@ impl<'a> FunctionChecker<'a> {
                                         "store the callable in a `mut` local, or take it as a `mut` parameter",
                                     ));
                                 }
+                                self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                             }
                             ClosureCallKind::Repeatable => {}
                         }
+                        let passing = match callable.call_kind {
+                            ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                            ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                            ClosureCallKind::Consuming => ReceiverKind::Value,
+                        };
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Callable(callable.clone()),
+                                passing,
+                                "callable value",
+                            )
+                            .into_iter()
+                            .collect();
                         let params = callable.params.clone();
                         let return_type = callable.return_type.clone();
-                        self.type_check_function_value_args(
+                        self.type_check_function_value_args_with_receiver(
                             &params,
                             &return_type,
                             args,
                             span,
                             locals,
                             expected,
+                            receiver,
                         )
                     }
                     Type::Closure {
                         params,
                         return_type,
+                        captures,
                         call_kind,
-                        ..
                     } => {
                         if explicit_type_args.is_some() {
                             return Err(Diagnostic::coded_at(
@@ -17612,38 +18171,82 @@ impl<'a> FunctionChecker<'a> {
                         }
                         if call_kind == ClosureCallKind::Consuming {
                             self.consume_value_expr(base_callee, locals)?;
-                        } else if call_kind == ClosureCallKind::MutableRepeatable
-                            && !grouped_name(base_callee)
+                        } else if call_kind == ClosureCallKind::MutableRepeatable {
+                            if !grouped_name(base_callee)
                                 .and_then(|name| locals.get(name))
                                 .is_some_and(|binding| {
                                     binding.local_function
                                         == Some(LocalFunctionBinding::Declaration)
                                 })
-                            && !self.is_mutable_place(base_callee, locals)?
-                        {
-                            return Err(Diagnostic::coded_at(
-                                "AU3003",
-                                base_callee.span,
-                                "a mutable-repeatable closure must be called through a mutable closure place",
-                            )
-                            .with_help("store the closure in a `mut` local before calling it"));
+                                && !self.is_mutable_place(base_callee, locals)?
+                            {
+                                return Err(Diagnostic::coded_at(
+                                    "AU3003",
+                                    base_callee.span,
+                                    "a mutable-repeatable closure must be called through a mutable closure place",
+                                )
+                                .with_help("store the closure in a `mut` local before calling it"));
+                            }
+                            self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                         }
-                        self.type_check_function_value_args(
+                        let passing = match call_kind {
+                            ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                            ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                            ClosureCallKind::Consuming => ReceiverKind::Value,
+                        };
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Closure {
+                                    params: params.clone(),
+                                    return_type: return_type.clone(),
+                                    captures,
+                                    call_kind,
+                                },
+                                passing,
+                                "closure value",
+                            )
+                            .into_iter()
+                            .collect();
+                        self.type_check_function_value_args_with_receiver(
                             &params,
                             &return_type,
                             args,
                             span,
                             locals,
                             expected,
+                            receiver,
                         )
                     }
-                    _ if matches!(&base_callee.kind, ExprKind::Name(name) if locals.contains_key(name)) => {
+                    _ if matches!(&base_callee.kind, ExprKind::Name(name) if locals.contains_key(name)) =>
+                    {
+                        if matches!(callee_ty, Type::Union(_)) {
+                            if let Some(path) = self.member_access_path(base_callee) {
+                                self.reject_stale_narrowing(&path, span, locals)?;
+                            }
+                        }
                         Err(Diagnostic::at(span, "unsupported call target"))
                     }
                     _ => Err(self.unsupported_call_target_diagnostic(callee, span)),
                 }
             }
         }
+    }
+
+    fn ensure_mutable_callable_place_unlocked(
+        &self,
+        callee: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if let Some(place) = self.borrow_call_place(callee) {
+            self.ensure_place_mutation_allowed(&place, callee.span, locals)?;
+            let through_view = locals
+                .get(&place.root)
+                .and_then(|binding| binding.view.as_ref())
+                .map(|_| place.root.as_str());
+            self.ensure_place_not_locked_by_view(&place, through_view, callee.span, locals)?;
+        }
+        Ok(())
     }
 
     /// Types the callee of `factory(...)(args)`. When the factory is generic
@@ -17823,6 +18426,7 @@ impl<'a> FunctionChecker<'a> {
                         Vec::new(),
                     ));
                 }
+                crate::hardware::check_missing_member(&namespace.path, field, span)?;
                 return Err(Diagnostic::at(
                     span,
                     format!("module `{}` has no member `{}`", path, field),
@@ -17952,6 +18556,9 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
+        if let Some(cell) = self.imported_state(object, field) {
+            return Ok(cell.ty.clone());
+        }
         let object_ty = self.type_of_member_object_expr(object, locals)?;
         self.resolve_member_type(&object_ty, field, span)
     }

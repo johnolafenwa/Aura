@@ -1,0 +1,41 @@
+import control
+
+class Ticket:
+    label: str
+
+    def __drop__(mut self):
+        print("drop " + self.label)
+
+class Envelope:
+    item: Ticket
+
+    def __drop__(mut self):
+        print("open " + self.item.label)
+
+def receive(ticket: own Ticket):
+    print("received " + ticket.label)
+
+def owners():
+    first = Ticket("first")
+    mut second = Ticket("second")
+    second = Ticket("replacement")
+    receive(second)
+    mut items = [Ticket("retained"), Ticket("removed")]
+    items.pop()
+    envelope = Envelope(Ticket("nested"))
+    print("leaving")
+
+def failing():
+    ticket = Ticket("unwound")
+    assert false, "failed"
+
+def main():
+    owners()
+    match control.recover(failing):
+        case Err(trap):
+            print(trap.message)
+        case _:
+            print("unexpected success")
+    with TaskGroup() as group:
+        task = group.start(receive, Ticket("task"))
+    print("joined")

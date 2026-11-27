@@ -1,4 +1,4 @@
-# Five routines over machine words, built with `aura build --freestanding`.
+# Six routines over machine words, built with `aura build --freestanding`.
 # `kernels.c` and `kernels.rs` hold the same routines.
 
 copy class Body:
@@ -77,3 +77,14 @@ export "C" def aura_orbit(steps: int64) -> float64:
         body = step(body, 0.001)
         i = i + 1
     return body.x * body.x + body.y * body.y
+
+export "C" def aura_ring_mix(rounds: uint32) -> uint32:
+    mut ring: fixed[uint32, 16] = [0] * 16
+    mut value: uint32 = 324508639
+    mut i: uint32 = 0
+    while i < rounds:
+        slot = (i & 15) as int64
+        value = (value ^ ring[slot] ^ i).rotate_left(7)
+        ring[slot] = value
+        i = i + 1
+    return value

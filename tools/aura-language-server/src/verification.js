@@ -5,16 +5,85 @@
 // diagnostic, and each line whose checks are all proved with a hint.
 
 const { spawn } = require("node:child_process");
+const path = require("node:path");
 const { createPositionMapper } = require("./positions");
 
 // A proof may take a while; a run past this is stopped and shows nothing.
 const VERIFY_TIMEOUT_MS = 60_000;
 const MAX_VERIFY_STDOUT_BYTES = 16 * 1024 * 1024;
+const MAX_CONCURRENT_VERIFIERS = 2;
+
+// Limits how many verifier subprocesses run at once across open documents.
+function createConcurrencyLimiter(limit = MAX_CONCURRENT_VERIFIERS) {
+  let active = 0;
+  const queue = [];
+  const release = () => {
+    active -= 1;
+    const next = queue.shift();
+    if (next) {
+      active += 1;
+      next();
+    }
+  };
+  return {
+    acquire(signal) {
+      if (signal && signal.aborted) {
+        return Promise.resolve(null);
+      }
+      if (active < limit) {
+        active += 1;
+        return Promise.resolve(release);
+      }
+      return new Promise((resolve) => {
+        const grant = () => {
+          if (signal) {
+            signal.removeEventListener("abort", onAbort);
+          }
+          resolve(release);
+        };
+        const onAbort = () => {
+          queue.splice(queue.indexOf(grant), 1);
+          resolve(null);
+        };
+        if (signal) {
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
+        queue.push(grant);
+      });
+    }
+  };
+}
+
+const defaultVerifierLimiter = createConcurrencyLimiter(MAX_CONCURRENT_VERIFIERS);
+
+function terminateVerifierProcess(child, platform, killProcess, spawnImpl, env) {
+  if (typeof child.pid === "number" && child.pid > 0) {
+    if (platform === "win32") {
+      const taskkill = path.win32.join(env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe");
+      try {
+        spawnImpl(taskkill, ["/T", "/F", "/PID", String(child.pid)], {
+          stdio: "ignore",
+          windowsHide: true
+        });
+      } catch {
+        // Fall through to direct termination when taskkill is unavailable.
+      }
+    } else {
+      try {
+        killProcess(-child.pid, "SIGTERM");
+        return;
+      } catch {
+        // Fall through to direct termination when the process group is gone.
+      }
+    }
+  }
+  child.kill();
+}
 
 // What the editor shows for each status other than `proved`: the
 // diagnostic severity (2 warning, 3 information), the code `aura verify`
 // reports, and the message.
-const OPEN_STATUSES = {
+const OPEN_STATUSES = Object.assign(Object.create(null), {
   failed: { severity: 2, code: "AU5101", text: (message) => `cannot prove ${message}` },
   unknown: {
     severity: 3,
@@ -22,71 +91,112 @@ const OPEN_STATUSES = {
     text: (message) => `the solver could not decide ${message}`
   },
   unsupported: { severity: 3, code: "AU5104", text: (message) => `cannot check ${message}` }
-};
+});
 
 // Runs the verifier on `source`, the text of the file at `filePath`. It
 // resolves the report, or null when there is none: no solver, a program
 // that does not check, a crash, a cancelled run, or a run that took too long.
-function runVerifier(
+async function runVerifier(
   command,
   filePath,
   source,
   spawnImpl = spawn,
   timeoutMs = VERIFY_TIMEOUT_MS,
-  { signal = null, maxStdoutBytes = MAX_VERIFY_STDOUT_BYTES } = {}
+  {
+    signal = null,
+    maxStdoutBytes = MAX_VERIFY_STDOUT_BYTES,
+    limiter = defaultVerifierLimiter,
+    platform = process.platform,
+    killProcess = process.kill,
+    env = process.env,
+    freestandingTarget = env.AURA_LSP_FREESTANDING_TARGET
+  } = {}
 ) {
-  if (signal && signal.aborted) {
-    return Promise.resolve(null);
+  const release = await limiter.acquire(signal);
+  if (!release) {
+    return null;
   }
-  return new Promise((resolve) => {
-    let child;
-    try {
-      child = spawnImpl(
-        command.cmd,
-        [...command.args, "verify", "--format", "json", "--stdin", filePath],
-        {
-          cwd: command.cwd,
-          env: { AURA_OFFLINE: "1", ...process.env },
-          stdio: ["pipe", "pipe", "pipe"]
+  try {
+    return await new Promise((resolve) => {
+      let child;
+      try {
+        const targetArgs = [];
+        if (freestandingTarget || env.AURA_LSP_FREESTANDING === "1") {
+          targetArgs.push("--freestanding");
         }
-      );
-    } catch {
-      resolve(null);
-      return;
-    }
-    let stdout = "";
-    let aborted = false;
-    const abortChild = () => {
-      aborted = true;
-      child.kill();
-    };
-    const timer = setTimeout(abortChild, timeoutMs);
-    if (signal) {
-      signal.addEventListener("abort", abortChild, { once: true });
-    }
-    const cleanup = () => {
-      clearTimeout(timer);
+        if (freestandingTarget) {
+          targetArgs.push("--target", freestandingTarget);
+        }
+        child = spawnImpl(
+          command.cmd,
+          [
+            ...command.args,
+            "verify",
+            "--offline",
+            ...targetArgs,
+            "--format",
+            "json",
+            "--stdin",
+            filePath
+          ],
+          {
+            cwd: command.cwd,
+            env: { ...env, AURA_OFFLINE: "1" },
+            detached: platform !== "win32",
+            stdio: ["pipe", "pipe", "ignore"]
+          }
+        );
+      } catch {
+        resolve(null);
+        return;
+      }
+      const chunks = [];
+      let stdoutBytes = 0;
+      let aborted = false;
+      const abortChild = () => {
+        if (aborted) {
+          return;
+        }
+        aborted = true;
+        chunks.length = 0;
+        terminateVerifierProcess(child, platform, killProcess, spawnImpl, env);
+      };
+      const timer = setTimeout(abortChild, timeoutMs);
       if (signal) {
-        signal.removeEventListener("abort", abortChild);
+        signal.addEventListener("abort", abortChild, { once: true });
       }
-    };
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-      if (Buffer.byteLength(stdout, "utf8") > maxStdoutBytes) {
-        abortChild();
-      }
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (signal) {
+          signal.removeEventListener("abort", abortChild);
+        }
+      };
+      child.stdout.on("data", (chunk) => {
+        if (aborted) {
+          return;
+        }
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8");
+        stdoutBytes += bytes.length;
+        if (stdoutBytes > maxStdoutBytes) {
+          abortChild();
+          return;
+        }
+        chunks.push(bytes);
+      });
+      child.on("error", () => {
+        cleanup();
+        resolve(null);
+      });
+      child.on("close", () => {
+        cleanup();
+        resolve(aborted ? null : parseReport(Buffer.concat(chunks).toString("utf8")));
+      });
+      child.stdin.on("error", () => {});
+      child.stdin.end(source);
     });
-    child.on("error", () => {
-      cleanup();
-      resolve(null);
-    });
-    child.on("close", () => {
-      cleanup();
-      resolve(aborted ? null : parseReport(stdout));
-    });
-    child.stdin.on("error", () => {});
-    child.stdin.end(source);
-  });
+  } finally {
+    release();
+  }
 }
 
 // The report `aura verify --format json` prints as its last line.
@@ -237,6 +347,7 @@ function verifyOnSave(env = process.env) {
 }
 
 module.exports = {
+  createConcurrencyLimiter,
   createVerificationState,
   parseReport,
   runVerifier,

@@ -104,3 +104,37 @@ ran clean under valgrind.
 - Entry loops call the runtime twice per entry, and copy each `str` key.
 - Entry loops over values that are lists, classes or tuples still make
   the list.
+
+## Follow-up on 2026-11-26: `int64` keys
+
+A profile of `lzw_compress` on `main` showed each `int64` lookup at about
+205 instructions: about 90 in SipHash-1-3 and the rest in the table. Rust's
+`HashMap` uses the same hash, and its whole lookup is about 190, so the
+lookup itself is close to Rust. A large dict now finds and stores an
+`int64` key in one storage dispatch, with no matcher closure, and an
+insert probes and writes its table once. `lzw_compress` ran 1,697 million
+instructions before and 1,651 million after (2.7% fewer).
+
+A faster keyed hash for integer keys would take about 80 more
+instructions off each lookup, about 10% of `lzw_compress`. John chose on
+2026-11-26 to keep SipHash for every key, as Rust does, because a faster
+hash is easier to flood with colliding keys.
+
+## Follow-up on 2026-11-26: `str` keys in small dicts
+
+On `main` after the `Result` slot work, the `interpreter` benchmark spent
+26% of its instructions in `IndexedEntries::position`: its environment is a
+`dict[str, int64]` of eight names, so each variable read scans a small
+dict, and each entry went through the general `key_equals`. A `str` key
+now scans a small dict with an inlined compare of bytes, and only a union
+entry takes the general equality. A first try that passed a new matcher
+to `lookup` was 4% slower, because the matcher was not inlined into the
+scan.
+
+Instructions (callgrind, cloud box), `main` then this change:
+`interpreter` 8,718 million to 8,404 million (3.6% fewer); `word_freq`,
+`lru_cache` and `docdb` within 0.5%. Outputs match.
+
+The rest of the `interpreter` lookup cost is the boundary around it:
+`map_index_scalar` is about 68 instructions a call and
+`aura_direct_map_probe_slot` about 72, before the scan.

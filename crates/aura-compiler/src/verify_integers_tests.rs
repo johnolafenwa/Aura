@@ -1363,7 +1363,8 @@ def main():
 fn a_cast_in_a_contract_has_the_run_time_checks() {
     // The caller must show each cast in a `requires` is one the run time
     // accepts: 128 is not an `int8`, a float outside `int64` has no
-    // integer value, and 2^53 + 1 is not a `float64`.
+    // integer value, 2^53 + 1 is not a `float64`, and an `int128` past
+    // the `int64` range has no `int64` value.
     assert_open(
         r#"
 def narrow(x: int64) -> int8:
@@ -1409,8 +1410,22 @@ def main():
             "8 requires failed",
             "16 requires failed",
             "27 requires failed",
-            "30 overflow unsupported",
         ],
+    );
+    assert_open(
+        r#"
+def wide(x: int128) -> int64:
+    requires x as int64 > 0
+    return 1
+
+def use_wide(x: int128) -> int64:
+    requires x > 9223372036854775807 or x == 5
+    return wide(x)
+
+def main():
+    print(use_wide(5 as int128))
+"#,
+        &["8 requires failed"],
     );
 }
 
@@ -1851,7 +1866,13 @@ fn bounds_of_math_functions_allow_the_interpreter_results() {
     for x in [
         0.0_f64, -0.0, 0.5, -0.5, 1.0, 1.5, 3.0, -3.0, 100.0, 700.0, -750.0,
     ] {
-        let results = [("sin", x.sin()), ("cos", x.cos()), ("exp", x.exp())];
+        // The run time computes these with `libm`, whose last bit can
+        // differ from the host's.
+        let results = [
+            ("sin", libm::sin(x)),
+            ("cos", libm::cos(x)),
+            ("exp", libm::exp(x)),
+        ];
         for (name, value) in results {
             let value = if value < 0.0 {
                 format!("({value:?})")

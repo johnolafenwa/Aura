@@ -67,6 +67,8 @@ use crate::runtime_reactor::{
 };
 use aura_core::types::Type;
 
+#[path = "class_drop.rs"]
+pub mod class_drop;
 #[path = "generator.rs"]
 mod generator;
 #[path = "host_builtins.rs"]
@@ -88,10 +90,11 @@ pub mod time_host;
 
 pub use crate::array_members::{ArrayCompareOp, ArrayMaskOp, ArrayPairOp, ArrayUnaryOp};
 pub use generator::{
-    generator_yield, run_isolated, running_generator_depth, without_generator_drop_close,
-    GeneratorHooks, GeneratorValue, IsolatedFailure, DIRECT_GENERATOR_STACK_BYTES,
-    DIRECT_RECOVER_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
+    capture_generator_drop_trap, generator_yield, run_isolated, running_generator_depth,
+    without_generator_drop_close, GeneratorHooks, GeneratorValue, IsolatedFailure,
+    DIRECT_GENERATOR_STACK_BYTES, DIRECT_RECOVER_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
 };
+pub(crate) use generator::{PendingGeneratorDropExit, WeakGeneratorValue};
 pub use http_client::HttpResponseValue;
 #[cfg(any(test, feature = "test-support"))]
 pub use http_client::HttpSnapshot;
@@ -718,11 +721,17 @@ impl FfiHandleValue {
         })
     }
 
+    /// Ends the program's ownership of the foreign object and returns its
+    /// previous address, or null if ownership had already ended.
+    pub fn take_ptr(&self) -> *mut c_void {
+        self.core.address.swap(0, Ordering::AcqRel) as *mut c_void
+    }
+
     /// Ends the program's ownership of the foreign object: a foreign
     /// function took it, or stored another one over it. The `drop`
     /// function does not run for it.
     pub fn give_up(&self) {
-        self.core.address.store(0, Ordering::Relaxed);
+        let _ = self.take_ptr();
     }
 
     pub fn type_name(&self) -> &str {
@@ -730,7 +739,7 @@ impl FfiHandleValue {
     }
 
     pub fn as_ptr(&self) -> *mut c_void {
-        self.core.address.load(Ordering::Relaxed) as *mut c_void
+        self.core.address.load(Ordering::Acquire) as *mut c_void
     }
 }
 
@@ -740,7 +749,7 @@ impl FfiHandleValue {
 /// additionally carries the uniform boxed-argument thunk address used for
 /// indirect calls and task starts. The source metadata keeps task ancestry
 /// diagnostics as precise for calls through stored values as for direct names.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FunctionValue {
     pub name: String,
     pub signature: Type,
@@ -755,6 +764,35 @@ pub struct FunctionValue {
     /// The inline callable that compiled code boxed into this value.
     /// Compiled code that reads the value back calls through it directly.
     pub direct_callable: Option<Arc<DirectCallable>>,
+}
+
+impl Clone for FunctionValue {
+    fn clone(&self) -> Self {
+        let direct_callable = match self.direct_callable.as_ref() {
+            Some(callable) if callable.is_mutable() => {
+                // Mutable inline words are updated without locking, so clones
+                // settle the state into the synchronized closure environment
+                // and drop the shared DirectCallable handle.
+                if let Some(env) = &self.closure_environment {
+                    env.settle();
+                } else {
+                    callable.release();
+                }
+                None
+            }
+            other => other.cloned(),
+        };
+        Self {
+            name: self.name.clone(),
+            signature: self.signature.clone(),
+            source_path: self.source_path.clone(),
+            entry_span: self.entry_span,
+            direct_thunk: self.direct_thunk,
+            direct_default_binder: self.direct_default_binder,
+            closure_environment: self.closure_environment.clone(),
+            direct_callable,
+        }
+    }
 }
 
 /// An inline callable of compiled code kept inside a boxed function value:
@@ -837,7 +875,7 @@ impl DirectCallable {
     /// the key `abi_key`, or `None` when the words were released or belong
     /// to another contract.
     pub fn words_for(&self, abi_key: i64) -> Option<*mut i64> {
-        (self.abi_key == abi_key && !self.released.load(Ordering::Relaxed))
+        (self.abi_key == abi_key && !self.released.load(Ordering::Acquire))
             .then(|| self.words.get().cast::<i64>())
     }
 
@@ -874,7 +912,7 @@ impl DirectCallable {
 
     /// The address of the words while they are live.
     pub fn live_words(&self) -> Option<*mut i64> {
-        (!self.released.load(Ordering::Relaxed)).then(|| self.words.get().cast::<i64>())
+        (!self.released.load(Ordering::Acquire)).then(|| self.words.get().cast::<i64>())
     }
 
     pub fn capture_count(&self) -> usize {
@@ -944,6 +982,28 @@ impl ClosureEnvironment {
             .map_or(0, Vec::len)
     }
 
+    /// Whether any captured value satisfies `predicate`.
+    pub fn any_capture(&self, predicate: impl Fn(&Value) -> bool) -> bool {
+        self.captures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|captures| captures.iter().any(|capture| predicate(&capture.value)))
+    }
+
+    /// Consumes this environment when uniquely owned and returns its captured values.
+    pub fn into_captured_values(self: Arc<Self>) -> Vec<Value> {
+        let Ok(env) = Arc::try_unwrap(self) else {
+            return Vec::new();
+        };
+        env.captures
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .map_or_else(Vec::new, |captures| {
+                captures.into_iter().map(|capture| capture.value).collect()
+            })
+    }
+
     pub fn new(captures: Vec<ClosureCaptureValue>, consuming: bool) -> Self {
         representation_stats::note_closure_environment();
         Self {
@@ -970,12 +1030,11 @@ impl ClosureEnvironment {
     /// Boxes the captures of a deferred environment. A Mutable closure's
     /// state moves to the boxed captures, so its inline words are released.
     fn settle(&self) {
-        let pending = self
+        let mut pending = self
             .pending
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        let Some(callable) = pending else {
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(callable) = pending.take() else {
             return;
         };
         let captures = (callable.boxed_captures)(&callable);
@@ -986,6 +1045,7 @@ impl ClosureEnvironment {
         if callable.is_mutable() {
             callable.release();
         }
+        drop(pending);
     }
 
     /// Takes the captures out, leaving the environment consumed.
@@ -1112,6 +1172,7 @@ pub use crate::native_runtime::TypedFields;
 /// inline, and [`Self::iter`] visits the fields in name order.
 #[derive(Clone)]
 pub enum InstanceFields {
+    Hooked(class_drop::HookFields),
     Map(BTreeMap<String, Value>),
     Typed(TypedFields),
     /// Recovered failure details are formatted when Aura first reads a field.
@@ -1196,6 +1257,7 @@ impl DoubleEndedIterator for InstanceFieldIter<'_> {
 impl InstanceFields {
     pub fn typed(&self) -> Option<&TypedFields> {
         match self {
+            Self::Hooked(fields) => fields.fields.typed(),
             Self::Typed(typed) => Some(typed),
             Self::Map(_) | Self::Recovered(_) => None,
         }
@@ -1206,6 +1268,7 @@ impl InstanceFields {
     /// instances this way.
     pub fn map(&self) -> &BTreeMap<String, Value> {
         match self {
+            Self::Hooked(fields) => fields.fields.map(),
             Self::Map(fields) => fields,
             Self::Recovered(details) => details.map(),
             Self::Typed(typed) => panic!(
@@ -1227,6 +1290,7 @@ impl InstanceFields {
             *self = Self::Map(typed.into_map());
         }
         match self {
+            Self::Hooked(fields) => fields.fields.map_mut(),
             Self::Map(fields) => fields,
             Self::Typed(_) | Self::Recovered(_) => unreachable!("the layout was turned into a map"),
         }
@@ -1234,6 +1298,7 @@ impl InstanceFields {
 
     pub fn len(&self) -> usize {
         match self {
+            Self::Hooked(fields) => fields.fields.len(),
             Self::Map(fields) => fields.len(),
             Self::Recovered(details) => details.map().len(),
             Self::Typed(typed) => typed.len(),
@@ -1246,6 +1311,7 @@ impl InstanceFields {
 
     pub fn contains_key(&self, name: &str) -> bool {
         match self {
+            Self::Hooked(fields) => fields.fields.contains_key(name),
             Self::Map(fields) => fields.contains_key(name),
             Self::Recovered(details) => details.map().contains_key(name),
             Self::Typed(typed) => typed.contains_key(name),
@@ -1254,6 +1320,7 @@ impl InstanceFields {
 
     pub fn get(&self, name: &str) -> Option<Cow<'_, Value>> {
         match self {
+            Self::Hooked(fields) => fields.fields.get(name),
             Self::Map(fields) => fields.get(name).map(Cow::Borrowed),
             Self::Recovered(details) => details.map().get(name).map(Cow::Borrowed),
             Self::Typed(typed) => typed.get(name),
@@ -1262,6 +1329,7 @@ impl InstanceFields {
 
     pub fn iter(&self) -> InstanceFieldIter<'_> {
         match self {
+            Self::Hooked(fields) => fields.fields.iter(),
             Self::Map(fields) => InstanceFieldIter::Map(fields.iter()),
             Self::Recovered(details) => InstanceFieldIter::Map(details.map().iter()),
             Self::Typed(typed) => InstanceFieldIter::Typed(Box::new(typed.iter())),
@@ -1271,6 +1339,7 @@ impl InstanceFields {
     /// The names of the fields that are not moved out, in name order.
     pub fn keys(&self) -> Box<dyn DoubleEndedIterator<Item = &str> + '_> {
         match self {
+            Self::Hooked(fields) => fields.fields.keys(),
             Self::Map(fields) => Box::new(fields.keys().map(String::as_str)),
             Self::Recovered(details) => Box::new(details.map().keys().map(String::as_str)),
             Self::Typed(typed) => Box::new(typed.keys()),
@@ -1285,6 +1354,7 @@ impl InstanceFields {
     /// class has no field for, and a value that does not fit the field.
     pub fn insert(&mut self, name: &str, value: Value) -> std::result::Result<(), String> {
         match self {
+            Self::Hooked(fields) => fields.fields.insert(name, value),
             Self::Map(fields) => {
                 match fields.get_mut(name) {
                     Some(slot) => *slot = value,
@@ -1304,6 +1374,7 @@ impl InstanceFields {
 
     pub fn remove(&mut self, name: &str) -> Option<Value> {
         match self {
+            Self::Hooked(fields) => fields.fields.remove(name),
             Self::Map(fields) => fields.remove(name),
             Self::Typed(typed) => typed.remove(name),
             Self::Recovered(_) => self.map_mut().remove(name),
@@ -1311,11 +1382,88 @@ impl InstanceFields {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct EnumVariantValue {
     pub enum_name: RuntimeName,
     pub variant_name: RuntimeName,
     pub payloads: VariantPayloads,
+}
+
+/// A variant whose payloads are kept as values and include another such
+/// variant: copying, comparing, and dropping it walk a chain that can be as
+/// long as the program made it, so they walk it with a list of their own
+/// instead of the call stack.
+fn nested_value_variant(value: &Value) -> Option<&EnumVariantValue> {
+    match value {
+        Value::EnumVariant(variant) if matches!(variant.payloads, VariantPayloads::Values(_)) => {
+            Some(variant)
+        }
+        _ => None,
+    }
+}
+
+impl Clone for EnumVariantValue {
+    fn clone(&self) -> Self {
+        let VariantPayloads::Values(payloads) = &self.payloads else {
+            return Self {
+                enum_name: self.enum_name.clone(),
+                variant_name: self.variant_name.clone(),
+                payloads: self.payloads.clone(),
+            };
+        };
+        if !payloads
+            .iter()
+            .any(|payload| nested_value_variant(payload).is_some())
+        {
+            return Self {
+                enum_name: self.enum_name.clone(),
+                variant_name: self.variant_name.clone(),
+                payloads: VariantPayloads::Values(payloads.clone()),
+            };
+        }
+        // Each frame is a variant being copied: its source payloads, and
+        // the copies made of the ones before `copied.len()`.
+        struct Frame<'a> {
+            source: &'a EnumVariantValue,
+            payloads: &'a [Value],
+            copied: Vec<Value>,
+        }
+        fn frame(source: &EnumVariantValue) -> Frame<'_> {
+            let payloads = match &source.payloads {
+                VariantPayloads::Values(payloads) => payloads.as_slice(),
+                _ => unreachable!("only value payloads are walked"),
+            };
+            Frame {
+                source,
+                payloads,
+                copied: Vec::with_capacity(payloads.len()),
+            }
+        }
+        let mut frames = vec![frame(self)];
+        loop {
+            let top = frames.last_mut().expect("a frame is being copied");
+            if let Some(next) = top.payloads.get(top.copied.len()) {
+                match nested_value_variant(next) {
+                    Some(variant) => frames.push(frame(variant)),
+                    None => {
+                        let copy = next.clone();
+                        top.copied.push(copy);
+                    }
+                }
+                continue;
+            }
+            let done = frames.pop().expect("a frame is being copied");
+            let copy = Self {
+                enum_name: done.source.enum_name.clone(),
+                variant_name: done.source.variant_name.clone(),
+                payloads: VariantPayloads::Values(done.copied),
+            };
+            match frames.last_mut() {
+                Some(parent) => parent.copied.push(Value::EnumVariant(copy)),
+                None => return copy,
+            }
+        }
+    }
 }
 
 pub use crate::native_runtime::TypedPayloads;
@@ -1339,6 +1487,88 @@ pub enum VariantPayloads {
 impl Default for VariantPayloads {
     fn default() -> Self {
         Self::Values(Vec::new())
+    }
+}
+
+/// What [`VariantPayloads::into_parts`] moves out: the payloads where the
+/// variant kept them.
+pub enum PayloadParts {
+    Values(Vec<Value>),
+    Typed(TypedPayloads),
+    Json(crate::json_tape::JsonNode),
+}
+
+/// Dropping a variant drops the variants nested in its payloads one after
+/// another, from a list, so a long chain such as a linked list built of
+/// `indirect` variants does not drop by recursion.
+impl Drop for VariantPayloads {
+    fn drop(&mut self) {
+        if !self.holds_nested_variant() {
+            return;
+        }
+        let mut pending = Vec::new();
+        self.move_nested_variants(&mut pending);
+        while let Some(mut value) = pending.pop() {
+            if let Value::EnumVariant(variant) = &mut value {
+                variant.payloads.move_nested_variants(&mut pending);
+            }
+            // `value` now holds no variant of its own to walk.
+            drop(value);
+        }
+    }
+}
+
+impl VariantPayloads {
+    /// Whether a payload is a variant that holds a variant in turn. A
+    /// shallower variant drops by recursion of a single step.
+    fn holds_nested_variant(&self) -> bool {
+        self.any_variant_payload(|variant| {
+            variant
+                .payloads
+                .any_variant_payload(|inner| !inner.payloads.is_empty())
+        })
+    }
+
+    /// Whether `test` holds for a payload that is a variant, kept as a value
+    /// or in a box.
+    fn any_variant_payload(&self, test: impl Fn(&EnumVariantValue) -> bool) -> bool {
+        let check = |value: &Value| matches!(value, Value::EnumVariant(variant) if test(variant));
+        match self {
+            Self::Values(payloads) => payloads.iter().any(check),
+            Self::Typed(typed) => (0..typed.len()).any(|index| {
+                typed
+                    .payload_box(index)
+                    .is_some_and(|boxed| check(boxed.value()))
+            }),
+            Self::Json(_) => false,
+        }
+    }
+
+    /// Moves each payload that is a variant into `pending`, leaving the
+    /// unit value or an empty box in its place.
+    fn move_nested_variants(&mut self, pending: &mut Vec<Value>) {
+        match self {
+            Self::Values(payloads) => {
+                for payload in payloads.iter_mut() {
+                    if matches!(payload, Value::EnumVariant(_)) {
+                        pending.push(std::mem::replace(payload, Value::Unit));
+                    }
+                }
+            }
+            Self::Typed(typed) => {
+                for index in 0..typed.len() {
+                    let nested = typed
+                        .payload_box(index)
+                        .is_some_and(|boxed| matches!(boxed.value(), Value::EnumVariant(_)));
+                    if nested {
+                        if let Some(boxed) = typed.take_box(index) {
+                            pending.push(boxed.into_value());
+                        }
+                    }
+                }
+            }
+            Self::Json(_) => {}
+        }
     }
 }
 
@@ -1508,10 +1738,24 @@ impl VariantPayloads {
     }
 
     pub fn into_vec(self) -> Vec<Value> {
-        match self {
-            Self::Values(payloads) => payloads,
-            Self::Typed(typed) => typed.into_vec(),
-            Self::Json(node) => node.payload().into_iter().collect(),
+        match self.into_parts() {
+            PayloadParts::Values(payloads) => payloads,
+            PayloadParts::Typed(typed) => typed.into_vec(),
+            PayloadParts::Json(node) => node.payload().into_iter().collect(),
+        }
+    }
+
+    /// The payloads as what they are kept in, moved out of the variant.
+    pub fn into_parts(self) -> PayloadParts {
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: `this` is never dropped or used again, so each field is
+        // read out exactly once and owned by the result.
+        unsafe {
+            match &*this {
+                Self::Values(payloads) => PayloadParts::Values(std::ptr::read(payloads)),
+                Self::Typed(typed) => PayloadParts::Typed(std::ptr::read(typed)),
+                Self::Json(node) => PayloadParts::Json(std::ptr::read(node)),
+            }
         }
     }
 }
@@ -1841,9 +2085,27 @@ impl PartialEq for InstanceValue {
 
 impl PartialEq for EnumVariantValue {
     fn eq(&self, other: &Self) -> bool {
-        nominal_runtime_base_name(&self.enum_name) == nominal_runtime_base_name(&other.enum_name)
-            && self.variant_name == other.variant_name
-            && self.payloads == other.payloads
+        let mut pending = vec![(self, other)];
+        while let Some((left, right)) = pending.pop() {
+            if nominal_runtime_base_name(&left.enum_name)
+                != nominal_runtime_base_name(&right.enum_name)
+                || left.variant_name != right.variant_name
+                || left.payloads.len() != right.payloads.len()
+            {
+                return false;
+            }
+            for index in 0..left.payloads.len() {
+                match (left.payloads.get(index), right.payloads.get(index)) {
+                    (
+                        Some(Cow::Borrowed(Value::EnumVariant(a))),
+                        Some(Cow::Borrowed(Value::EnumVariant(b))),
+                    ) => pending.push((a, b)),
+                    (a, b) if a != b => return false,
+                    _ => {}
+                }
+            }
+        }
+        true
     }
 }
 
@@ -2557,6 +2819,7 @@ impl ArrayValue {
     pub fn len(&self) -> usize {
         match &self.strided {
             None => self.base.len(),
+            Some(_) if self.shape.contains(&0) => 0,
             // A live shape's product was checked when the view was made.
             Some(_) => self.shape.iter().product(),
         }
@@ -2785,6 +3048,7 @@ impl ArrayValue {
         }
         let shape =
             array_layout::broadcast_shape(&self.shape, &other.shape).ok_or_else(mismatch)?;
+        checked_array_element_count(&shape)?;
         let left = array_layout::broadcast_layout(&self.shape, &self.layout(), &shape);
         let right = array_layout::broadcast_layout(&other.shape, &other.layout(), &shape);
         let storage = array_simd::widest(
@@ -3075,34 +3339,41 @@ impl ArrayValue {
     }
 
     pub fn render(&self) -> String {
-        // Rendering has no way to report a failed allocation, and a view
-        // too large to pack is too large to print.
-        let elements = self.elements().unwrap_or_else(|_| {
-            Cow::Owned(array_storage_map!(&self.base, |values| values.window(0, 0)))
-        });
-        let values = match &*elements {
-            ArrayStorage::Int32(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
-            }
-            ArrayStorage::Int64(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
-            }
-            ArrayStorage::Float32(values) => {
-                values.iter().map(|value| render_float32(*value)).collect()
-            }
-            ArrayStorage::Float64(values) => {
-                values.iter().map(|value| render_float(*value)).collect()
-            }
-            ArrayStorage::Bool(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
+        use std::fmt::Write;
+
+        let mut text = format!(
+            "Array[{}](shape={:?}, values=[",
+            self.dtype().runtime_type_name(),
+            self.shape
+        );
+        let mut separator = "";
+        let mut append = |position: usize| {
+            text.push_str(separator);
+            separator = ", ";
+            match &self.base {
+                ArrayStorage::Int32(values) => write!(text, "{}", values[position]).unwrap(),
+                ArrayStorage::Int64(values) => write!(text, "{}", values[position]).unwrap(),
+                ArrayStorage::Float32(values) => text.push_str(&render_float32(values[position])),
+                ArrayStorage::Float64(values) => text.push_str(&render_float(values[position])),
+                ArrayStorage::Bool(values) => {
+                    text.push_str(if values[position] { "true" } else { "false" })
+                }
             }
         };
-        format!(
-            "Array[{}](shape={:?}, values=[{}])",
-            self.dtype().runtime_type_name(),
-            self.shape,
-            values.join(", ")
-        )
+        if let Some(layout) = &self.strided {
+            array_layout::walk_runs(&self.shape, [layout], |[start], [step], count| {
+                for index in 0..count as isize {
+                    append((start as isize + index * step) as usize);
+                }
+                true
+            });
+        } else {
+            for position in 0..self.base.len() {
+                append(position);
+            }
+        }
+        text.push_str("])");
+        text
     }
 
     /// Where the element at `coordinates` lies in the storage window.
@@ -3222,27 +3493,30 @@ fn checked_array_shape(shape: &[usize]) -> Result<usize> {
 }
 
 pub(crate) fn checked_array_element_count(shape: &[usize]) -> Result<usize> {
-    for dimension in shape {
-        if *dimension > i64::MAX as usize {
+    let mut has_zero = false;
+    let mut nonzero_product = 1_usize;
+    for &dimension in shape {
+        if dimension > i64::MAX as usize {
             return Err(Diagnostic::coded(
                 "AU4005",
                 format!("array dimension {dimension} exceeds the Aura int64 shape limit"),
             ));
         }
+        if dimension == 0 {
+            has_zero = true;
+        } else {
+            nonzero_product = nonzero_product
+                .checked_mul(dimension)
+                .filter(|&product| product <= isize::MAX as usize)
+                .ok_or_else(|| {
+                    Diagnostic::coded(
+                        "AU4005",
+                        format!("array shape product overflows host allocation bounds: {shape:?}"),
+                    )
+                })?;
+        }
     }
-    if shape.contains(&0) {
-        return Ok(0);
-    }
-    let mut count = 1_usize;
-    for dimension in shape {
-        count = count.checked_mul(*dimension).ok_or_else(|| {
-            Diagnostic::coded(
-                "AU4005",
-                format!("array shape product overflows host allocation bounds: {shape:?}"),
-            )
-        })?;
-    }
-    Ok(count)
+    Ok(if has_zero { 0 } else { nonzero_product })
 }
 
 fn array_allocation_error(label: &str, len: usize) -> Diagnostic {
@@ -3279,6 +3553,7 @@ pub fn with_array_allocation_budget<T>(
 }
 
 pub fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
+    crate::builtin_limit::check((len as u64).saturating_mul(std::mem::size_of::<T>() as u64))?;
     #[cfg(any(test, feature = "test-support"))]
     {
         let injected_failure = ARRAY_ALLOCATION_BUDGET.with(|budget| match budget.get() {
@@ -3300,7 +3575,11 @@ pub fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
     Ok(values)
 }
 
-fn try_filled_array_storage<T: Clone>(len: usize, value: T, label: &str) -> Result<Box<[T]>> {
+pub(crate) fn try_filled_array_storage<T: Clone>(
+    len: usize,
+    value: T,
+    label: &str,
+) -> Result<Box<[T]>> {
     let mut values = try_array_buffer(len, label)?;
     values.resize(len, value);
     Ok(values.into_boxed_slice())
@@ -4652,7 +4931,7 @@ pub(crate) fn is_clone_leaf(value: &Value) -> bool {
             | Value::String(_)
             | Value::Duration(_)
             | Value::Instance(InstanceValue {
-                fields: InstanceFields::Recovered(_),
+                fields: InstanceFields::Recovered(_) | InstanceFields::Hooked(_),
                 ..
             })
     )
@@ -4989,7 +5268,10 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 Value::Instance(instance)
-                    if matches!(instance.fields, InstanceFields::Recovered(_)) =>
+                    if matches!(
+                        instance.fields,
+                        InstanceFields::Recovered(_) | InstanceFields::Hooked(_)
+                    ) =>
                 {
                     Some(Value::Instance(instance.clone()))
                 }
@@ -7035,6 +7317,14 @@ const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 << 20;
 const MAX_WEBSOCKET_FRAME_BYTES: usize = 16 << 20;
 const MAX_WEBSOCKET_WRITE_BUFFER_BYTES: usize = 16 << 20;
 const DEFAULT_TLS_HANDSHAKE_TIMEOUT: StdDuration = StdDuration::from_secs(10);
+/// The longest a WebSocket listener waits for one client's handshake.
+const WEBSOCKET_HANDSHAKE_TIMEOUT: StdDuration = StdDuration::from_secs(10);
+/// The longest an HTTP listener waits for one client to send its request,
+/// and an exchange waits for its response to be written.
+const HTTP_SERVER_CLIENT_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+/// How long `close` waits for an operation in progress on the same stream
+/// to hand the stream back before it shuts the socket down under it.
+const PROTOCOL_CLOSE_WAIT: StdDuration = StdDuration::from_secs(5);
 const MIN_SUPERVISOR_RESTART_BACKOFF: StdDuration = StdDuration::from_millis(10);
 const TASK_GROUP_CLEANUP_PROBE_TIMEOUT: StdDuration = StdDuration::from_millis(1);
 /// While every worker is busy, a worker checks its own stealable inbox this
@@ -7339,13 +7629,15 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
                     ));
                 }
                 let truncated = value.trunc();
+                // The first excluded integer is a power of two, exactly representable
+                // as a float even when the inclusive maximum rounds up to it.
                 let coerced = match bounds {
                     IntegerBounds::Signed { min, max } => {
-                        if truncated < min as f64 || truncated > max as f64 {
+                        if truncated < min as f64 || truncated >= max as f64 + 1.0 {
                             return Err(render_target_error(
                                 span,
                                 format!(
-                                    "integer value `{}` does not fit in `{}`",
+                                    "integer value `{:.0}` does not fit in `{}`",
                                     truncated, target
                                 ),
                             ));
@@ -7353,11 +7645,11 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
                         IntegerValue::from_signed(truncated as i128)
                     }
                     IntegerBounds::Unsigned { max } => {
-                        if truncated < 0.0 || truncated > max as f64 {
+                        if truncated < 0.0 || truncated >= max as f64 + 1.0 {
                             return Err(render_target_error(
                                 span,
                                 format!(
-                                    "integer value `{}` does not fit in `{}`",
+                                    "integer value `{:.0}` does not fit in `{}`",
                                     truncated, target
                                 ),
                             ));
@@ -9379,6 +9671,16 @@ impl PendingTaskExit {
             .map(Self)
     }
 
+    /// Records a trap diagnostic as a pending task exit.
+    pub fn from_trap(diagnostic: Diagnostic) -> Self {
+        Self(TaskExecutionResult::Ready(Err(diagnostic)))
+    }
+
+    /// Whether the pending task exit represents task cancellation.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self.0, TaskExecutionResult::Cancelled)
+    }
+
     /// The trap, when the task was exiting because it failed. Any other
     /// exit, such as cancellation, comes back unchanged.
     pub fn into_trap(self) -> std::result::Result<Diagnostic, Self> {
@@ -9595,6 +9897,11 @@ fn prepare_lightweight_task(
     ))
 }
 
+/// The most task workers `AURA_WORKERS` may ask for. Each worker is an OS
+/// thread with its own queues, so a count past this is refused before any
+/// is made.
+pub const MAX_LIGHTWEIGHT_WORKERS: usize = 4096;
+
 pub fn decode_lightweight_worker_count(
     override_value: Option<&OsStr>,
     available_workers: usize,
@@ -9613,6 +9920,14 @@ pub fn decode_lightweight_worker_count(
     let valid_digits = !rendered.is_empty() && rendered.bytes().all(|byte| byte.is_ascii_digit());
     if valid_digits {
         if let Ok(workers) = rendered.parse::<usize>() {
+            if workers > MAX_LIGHTWEIGHT_WORKERS {
+                return Err(Diagnostic::coded(
+                    "AU4006",
+                    format!(
+                        "invalid AURA_WORKERS value `{rendered}`: expected at most {MAX_LIGHTWEIGHT_WORKERS} workers"
+                    ),
+                ));
+            }
             if workers > 0 {
                 return Ok(workers);
             }
@@ -11838,6 +12153,7 @@ fn append_string_with_limit(output: &mut String, text: &str, limit: usize) -> Re
         .len()
         .checked_add(text.len())
         .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    crate::builtin_limit::check(required as u64)?;
     if required > limit {
         return Err(Diagnostic::coded(
             "AU4005",
@@ -11867,6 +12183,7 @@ pub fn append_text_checked_with(output: &mut Text, text: &str, ascii: bool) -> R
         .len()
         .checked_add(text.len())
         .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    crate::builtin_limit::check(required as u64)?;
     if required > MAX_STRING_BYTES {
         return Err(Diagnostic::coded(
             "AU4005",
@@ -12464,6 +12781,33 @@ fn format_numeric_integer(integer: IntegerValue, code: char, spec: &ParsedFormat
     rendered
 }
 
+/// The most places Rust's formatter writes; it panics past them.
+const MAX_FORMATTER_PRECISION: usize = u16::MAX as usize;
+
+/// `magnitude` with `precision` places, in scientific form with
+/// `scientific`. A finite `float64` has at most 1074 places after the
+/// point and 767 significant digits, so the places past the formatter's
+/// limit are all zeros and are appended as zeros.
+fn fixed_precision_float(magnitude: f64, precision: usize, scientific: bool) -> String {
+    // Scientific form writes one digit more than its places.
+    let written = precision.min(MAX_FORMATTER_PRECISION - usize::from(scientific));
+    let mut rendered = if scientific {
+        format!("{magnitude:.written$e}")
+    } else {
+        format!("{magnitude:.written$}")
+    };
+    let zeros = precision - written;
+    if zeros > 0 {
+        let at = if scientific {
+            rendered.find('e').unwrap_or(rendered.len())
+        } else {
+            rendered.len()
+        };
+        rendered.insert_str(at, &"0".repeat(zeros));
+    }
+    rendered
+}
+
 fn format_numeric_float(number: f64, code: char, spec: &ParsedFormatSpec) -> String {
     let negative = number.is_sign_negative();
     let magnitude = number.abs();
@@ -12473,9 +12817,9 @@ fn format_numeric_float(number: f64, code: char, spec: &ParsedFormatSpec) -> Str
     } else if magnitude.is_infinite() {
         "inf".to_string()
     } else if code == 'e' {
-        normalize_scientific_exponent(format!("{magnitude:.precision$e}"))
+        normalize_scientific_exponent(fixed_precision_float(magnitude, precision, true))
     } else {
-        format!("{magnitude:.precision$}")
+        fixed_precision_float(magnitude, precision, false)
     };
     if spec.grouping && magnitude.is_finite() {
         rendered = group_decimal_digits(&rendered);
@@ -12537,8 +12881,8 @@ pub fn float_power(left: f64, right: f64, width: FloatPowerWidth) -> Result<f64>
     }
 
     let result = match width {
-        FloatPowerWidth::Float32 => (left as f32).powf(right as f32) as f64,
-        FloatPowerWidth::Float64 => left.powf(right),
+        FloatPowerWidth::Float32 => libm::powf(left as f32, right as f32) as f64,
+        FloatPowerWidth::Float64 => libm::pow(left, right),
     };
     if left.is_finite() && right.is_finite() && result.is_infinite() {
         return Err(Diagnostic::coded("AU4002", "floating power overflow"));
@@ -13298,6 +13642,68 @@ fn acquire_protocol_operation<'a>(
     }
 }
 
+/// The earlier of `deadline` and `limit` from now.
+fn deadline_capped(deadline: Option<Instant>, limit: StdDuration) -> Option<Instant> {
+    match Instant::now().checked_add(limit) {
+        Some(cap) => Some(deadline.map_or(cap, |deadline| deadline.min(cap))),
+        None => deadline,
+    }
+}
+
+/// Takes a protocol stream for `close`. When no other operation holds it,
+/// this returns the stream with the operation guard, for an orderly close.
+/// When one does, the stream is marked closed and its socket is shut down
+/// as soon as it is back in its slot, which wakes the operation's wait so
+/// that it ends; `close` then returns `None` and never waits unbounded.
+fn take_protocol_stream_for_close<'a, T>(
+    busy: &'a AtomicBool,
+    closed: &AtomicBool,
+    slot: &Mutex<Option<T>>,
+    shutdown: impl Fn(&T),
+) -> Option<(ProtocolOperationGuard<'a>, T)> {
+    let limit = Instant::now().checked_add(PROTOCOL_CLOSE_WAIT);
+    loop {
+        if busy
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            let operation = ProtocolOperationGuard { busy };
+            let stream = lock_mutex(slot).take();
+            closed.store(true, Ordering::Release);
+            return stream.map(|stream| (operation, stream));
+        }
+        closed.store(true, Ordering::Release);
+        if let Some(stream) = lock_mutex(slot).as_ref() {
+            shutdown(stream);
+            return None;
+        }
+        if limit.is_some_and(|limit| Instant::now() >= limit) {
+            return None;
+        }
+        if yield_now_current_lightweight_task().is_none() {
+            thread::yield_now();
+        }
+    }
+}
+
+fn shutdown_tls_stream(stream: &TlsStreamKind) {
+    let _ = match stream {
+        TlsStreamKind::Client(stream) => stream.sock.shutdown(Shutdown::Both),
+        TlsStreamKind::Server(stream) => stream.sock.shutdown(Shutdown::Both),
+    };
+}
+
+fn shutdown_websocket(socket: &WebSocketStateKind) {
+    let _ = match socket {
+        WebSocketStateKind::Plain(socket) => socket.get_ref().shutdown(Shutdown::Both),
+        WebSocketStateKind::MaybeTls(socket) => match socket.get_ref() {
+            MaybeTlsStream::Plain(stream) => stream.shutdown(Shutdown::Both),
+            MaybeTlsStream::Rustls(stream) => stream.get_ref().shutdown(Shutdown::Both),
+            _ => Ok(()),
+        },
+    };
+}
+
 fn tls_handshake_deadline_with<F>(
     deadline: Option<Instant>,
     now: Instant,
@@ -13356,6 +13762,45 @@ fn next_wait_slice(
         }
         None if cancellation.is_some() => Ok(Some(poll_slice)),
         None => Ok(None),
+    }
+}
+
+/// Whether an accept failed for the one connection it took, which the
+/// peer gave up on before it was accepted, so the listener goes on.
+fn is_transient_accept_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::Interrupted
+    )
+}
+
+fn is_would_block_or_timed_out(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+    )
+}
+
+/// A duplicate of a socket handle for a wait with its lock released. While
+/// the task waits, another task on the same worker may use or close the
+/// socket; the duplicate keeps the descriptor the wait polls open, so it
+/// is never closed and reused under the wait. A Windows duplicate starts
+/// in blocking mode, and a wait only polls it.
+trait WaitHandle: Sized {
+    fn wait_handle(&self) -> io::Result<Self>;
+}
+
+impl WaitHandle for StdTcpListener {
+    fn wait_handle(&self) -> io::Result<Self> {
+        self.try_clone()
+    }
+}
+
+impl WaitHandle for StdUdpSocket {
+    fn wait_handle(&self) -> io::Result<Self> {
+        self.try_clone()
     }
 }
 
@@ -14047,15 +14492,26 @@ fn load_tls_root_store(ca_pem_path: Option<&str>) -> io::Result<RootCertStore> {
     build_tls_root_store(pem)
 }
 
+/// The roots a TLS client trusts: the certificates of `ca_pem` alone when
+/// the caller names a CA file, and the built-in roots otherwise. A CA file
+/// that holds no certificate is an error, not a fall back to the built-in
+/// roots.
 fn build_tls_root_store(ca_pem: Option<Vec<u8>>) -> io::Result<RootCertStore> {
     ensure_rustls_crypto_provider();
     let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    if let Some(pem) = ca_pem {
-        for certificate in CertificateDer::pem_slice_iter(&pem) {
-            let certificate = certificate.map_err(io::Error::other)?;
-            roots.add(certificate).map_err(io::Error::other)?;
-        }
+    let Some(pem) = ca_pem else {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        return Ok(roots);
+    };
+    for certificate in CertificateDer::pem_slice_iter(&pem) {
+        let certificate = certificate.map_err(io::Error::other)?;
+        roots.add(certificate).map_err(io::Error::other)?;
+    }
+    if roots.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TLS CA PEM did not contain a certificate",
+        ));
     }
     Ok(roots)
 }
@@ -14229,6 +14685,17 @@ fn parse_http_body_framing(
                 None => Ok(Some(parsed)),
             }
         })?;
+    let has_transfer_encoding = headers
+        .iter()
+        .any(|(name, _)| http_header_name_eq(name, "Transfer-Encoding"));
+    if has_transfer_encoding && content_length.is_some() {
+        // A reader that honours one header and one that honours the other
+        // would split the stream differently.
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "HTTP message cannot combine transfer-encoding with content-length",
+        ));
+    }
     let transfer_codings = headers
         .iter()
         .filter(|(name, _)| http_header_name_eq(name, "Transfer-Encoding"))
@@ -14242,12 +14709,6 @@ fn parse_http_body_framing(
             .unwrap_or(default));
     }
     if transfer_codings.as_slice() == ["chunked"] {
-        if content_length.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "HTTP message cannot combine transfer-encoding chunked with content-length",
-            ));
-        }
         return Ok(HttpBodyFraming::Chunked);
     }
     Err(io::Error::new(
@@ -14275,65 +14736,148 @@ fn find_http_crlf(bytes: &[u8], start: usize) -> Option<usize> {
         .map(|offset| start + offset)
 }
 
+/// The longest chunk-size line, extensions included, a chunked body may
+/// have.
+const MAX_HTTP_CHUNK_LINE_BYTES: usize = 4096;
+
+/// The most bytes of trailer fields a chunked body may end with.
+const MAX_HTTP_TRAILER_BYTES: usize = 16 * 1024;
+
+fn invalid_chunked_body(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+/// Decodes a chunked body as its bytes arrive. Each step resumes where the
+/// last complete chunk ended, so a body that arrives in many reads is read
+/// once, not again from its start after every read.
+#[derive(Default)]
+struct ChunkedBodyDecoder {
+    /// Where the next chunk-size line starts, once a step has run.
+    cursor: Option<usize>,
+    body: Vec<u8>,
+    /// Inside the trailer: where the next trailer line starts.
+    trailer: Option<usize>,
+}
+
+impl ChunkedBodyDecoder {
+    /// The whole body once `buffer`, whose chunked body starts at `start`,
+    /// holds all of it, or `None` while more is to come.
+    fn step(&mut self, buffer: &[u8], start: usize, limit: usize) -> io::Result<Option<Vec<u8>>> {
+        let mut cursor = *self.cursor.get_or_insert(start);
+        loop {
+            if let Some(trailer_start) = self.trailer {
+                return self.trailer_step(buffer, trailer_start, limit);
+            }
+            let Some(line_end) = find_http_crlf(buffer, cursor) else {
+                if buffer.len().saturating_sub(cursor) > MAX_HTTP_CHUNK_LINE_BYTES {
+                    return Err(invalid_chunked_body("HTTP chunk-size line is too long"));
+                }
+                return Ok(None);
+            };
+            let line = &buffer[cursor..line_end];
+            if line.len() > MAX_HTTP_CHUNK_LINE_BYTES {
+                return Err(invalid_chunked_body("HTTP chunk-size line is too long"));
+            }
+            let (size_bytes, extension) = match line.iter().position(|byte| *byte == b';') {
+                Some(at) => (&line[..at], Some(&line[at + 1..])),
+                None => (line, None),
+            };
+            // The size is bare hex digits: no sign, no space and no bare CR
+            // or LF that another reader might take differently.
+            let size_text = std::str::from_utf8(size_bytes).map_err(|error| {
+                invalid_chunked_body(format!("invalid chunk-size line: {error}"))
+            })?;
+            let size = parse_http_chunk_size(size_text).map_err(|error| {
+                invalid_chunked_body(format!(
+                    "invalid HTTP chunk size `{}`: {error}",
+                    size_text.escape_debug()
+                ))
+            })?;
+            if extension.is_some_and(|extension| {
+                extension
+                    .iter()
+                    .any(|byte| *byte != b'\t' && !(0x20..0x7f).contains(byte))
+            }) {
+                return Err(invalid_chunked_body(
+                    "invalid HTTP chunk extension: control bytes are not allowed",
+                ));
+            }
+            let data_start = line_end + 2;
+            if size == 0 {
+                self.trailer = Some(data_start);
+                self.cursor = Some(data_start);
+                continue;
+            }
+            if self.body.len().saturating_add(size) > limit {
+                return Err(http_message_too_large_error_with_limit(limit));
+            }
+            let Some(chunk_end) = data_start.checked_add(size) else {
+                return Err(http_message_too_large_error_with_limit(limit));
+            };
+            if buffer.len() < chunk_end.saturating_add(2) {
+                return Ok(None);
+            }
+            if buffer.get(chunk_end..chunk_end + 2) != Some(b"\r\n") {
+                return Err(invalid_chunked_body(
+                    "HTTP chunk data was not followed by CRLF",
+                ));
+            }
+            self.body.extend_from_slice(&buffer[data_start..chunk_end]);
+            cursor = chunk_end + 2;
+            self.cursor = Some(cursor);
+        }
+    }
+
+    /// Reads trailer lines from `at`: each is a field line ending in CRLF,
+    /// and an empty line ends the body.
+    fn trailer_step(
+        &mut self,
+        buffer: &[u8],
+        mut at: usize,
+        limit: usize,
+    ) -> io::Result<Option<Vec<u8>>> {
+        let trailer_start = self.cursor.unwrap_or(at);
+        let cap = limit.min(MAX_HTTP_TRAILER_BYTES);
+        loop {
+            let Some(line_end) = find_http_crlf(buffer, at) else {
+                if buffer.len().saturating_sub(trailer_start) > cap {
+                    return Err(http_message_too_large_error_with_limit(limit));
+                }
+                self.trailer = Some(at);
+                return Ok(None);
+            };
+            if line_end - trailer_start > cap {
+                return Err(http_message_too_large_error_with_limit(limit));
+            }
+            let line = &buffer[at..line_end];
+            if line.is_empty() {
+                return Ok(Some(std::mem::take(&mut self.body)));
+            }
+            let valid = match line.iter().position(|byte| *byte == b':') {
+                Some(colon) => {
+                    colon > 0
+                        && line[..colon].iter().all(|byte| is_http_tchar(*byte))
+                        && line[colon + 1..].iter().all(|byte| {
+                            *byte == b'\t' || (0x20..0x7f).contains(byte) || *byte >= 0x80
+                        })
+                }
+                None => false,
+            };
+            if !valid {
+                return Err(invalid_chunked_body("invalid HTTP trailer field"));
+            }
+            at = line_end + 2;
+        }
+    }
+}
+
+#[cfg(test)]
 fn try_decode_chunked_http_body_with_limit(
     buffer: &[u8],
     start: usize,
     limit: usize,
 ) -> io::Result<Option<Vec<u8>>> {
-    let mut cursor = start;
-    let mut body = Vec::new();
-    loop {
-        let Some(line_end) = find_http_crlf(buffer, cursor) else {
-            return Ok(None);
-        };
-        let line = std::str::from_utf8(&buffer[cursor..line_end]).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid chunk-size line: {error}"),
-            )
-        })?;
-        let size_text = line.split_once(';').map_or(line, |(size, _)| size).trim();
-        let size = parse_http_chunk_size(size_text).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid HTTP chunk size `{size_text}`: {error}"),
-            )
-        })?;
-        cursor = line_end + 2;
-        if size == 0 {
-            if buffer.get(cursor..cursor + 2) == Some(b"\r\n") {
-                return Ok(Some(body));
-            }
-            let Some(trailer_end) = buffer
-                .get(cursor..)
-                .and_then(|tail| tail.windows(4).position(|window| window == b"\r\n\r\n"))
-            else {
-                return Ok(None);
-            };
-            let trailer_bytes = &buffer[cursor..cursor + trailer_end];
-            if trailer_bytes.len() > limit {
-                return Err(http_message_too_large_error_with_limit(limit));
-            }
-            return Ok(Some(body));
-        }
-        if body.len().saturating_add(size) > limit {
-            return Err(http_message_too_large_error_with_limit(limit));
-        }
-        let Some(chunk_end) = cursor.checked_add(size) else {
-            return Err(http_message_too_large_error_with_limit(limit));
-        };
-        if buffer.len() < chunk_end.saturating_add(2) {
-            return Ok(None);
-        }
-        if buffer.get(chunk_end..chunk_end + 2) != Some(b"\r\n") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "HTTP chunk data was not followed by CRLF",
-            ));
-        }
-        body.extend_from_slice(&buffer[cursor..chunk_end]);
-        cursor = chunk_end + 2;
-    }
+    ChunkedBodyDecoder::default().step(buffer, start, limit)
 }
 
 #[cfg(test)]
@@ -14352,6 +14896,15 @@ fn parse_http_request_head(buffer: &[u8]) -> io::Result<Option<HttpRequestHead>>
         ),
     })? {
         HttpParseStatus::Complete(header_len) => {
+            // Every line of the head ends in CRLF: a bare LF, which some
+            // readers take as a line end and others do not, is refused.
+            let head = &buffer[..header_len];
+            if memchr::memchr_iter(b'\n', head).any(|at| at == 0 || head[at - 1] != b'\r') {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid HTTP request: a line of the head does not end with CRLF",
+                ));
+            }
             let method = request
                 .method
                 .ok_or(io::Error::new(
@@ -14399,6 +14952,7 @@ fn parse_http_request_head_step(
 }
 
 fn decode_chunked_http_body_step(
+    decoder: &mut ChunkedBodyDecoder,
     buffer: &[u8],
     start: usize,
     limit: usize,
@@ -14406,11 +14960,14 @@ fn decode_chunked_http_body_step(
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<Option<Vec<u8>>> {
     run_http_step_before(
-        || try_decode_chunked_http_body_with_limit(buffer, start, limit),
+        || decoder.step(buffer, start, limit),
         deadline,
         cancellation,
     )
 }
+
+/// The longest request head the server reads.
+const MAX_HTTP_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 
 fn read_http_request_from_stream_with_limit(
     stream: &mut StdTcpStream,
@@ -14419,11 +14976,28 @@ fn read_http_request_from_stream_with_limit(
     message_limit: usize,
 ) -> io::Result<HttpRequestParts> {
     let mut buffer = Vec::new();
+    // Where the search for the blank line that ends the head resumes. The
+    // head is parsed once it is whole, not again after every read.
+    let mut head_scanned = 0;
     let (header_len, method, path, headers, framing) = loop {
-        let parsed = parse_http_request_head_step(&buffer, deadline, cancellation)?;
-        check_deadline_and_cancellation(deadline, cancellation)?;
-        if let Some(parsed) = parsed {
-            break parsed;
+        // A blank line, ended by CRLF or a bare LF that the parser then
+        // refuses.
+        let whole = buffer.get(head_scanned..).is_some_and(|tail| {
+            memchr::memmem::find(tail, b"\n\r\n").is_some()
+                || memchr::memmem::find(tail, b"\n\n").is_some()
+        });
+        head_scanned = buffer.len().saturating_sub(3);
+        if whole || buffer.len() > MAX_HTTP_REQUEST_HEAD_BYTES {
+            let parsed = parse_http_request_head_step(&buffer, deadline, cancellation)?;
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            if let Some(parsed) = parsed {
+                break parsed;
+            }
+            if buffer.len() > MAX_HTTP_REQUEST_HEAD_BYTES {
+                return Err(http_message_too_large_error_with_limit(
+                    MAX_HTTP_REQUEST_HEAD_BYTES,
+                ));
+            }
         }
         let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
             return Err(io::Error::new(
@@ -14434,6 +15008,7 @@ fn read_http_request_from_stream_with_limit(
         push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
     };
 
+    let mut chunked = ChunkedBodyDecoder::default();
     let body = match framing {
         HttpBodyFraming::ContentLength(content_length) => {
             if header_len.saturating_add(content_length) > message_limit {
@@ -14453,6 +15028,7 @@ fn read_http_request_from_stream_with_limit(
         }
         HttpBodyFraming::Chunked => loop {
             let decoded = decode_chunked_http_body_step(
+                &mut chunked,
                 &buffer,
                 header_len,
                 message_limit,
@@ -14527,11 +15103,36 @@ fn build_http_request_bytes(
     let mut saw_host = false;
     let mut saw_content_length = false;
     let mut saw_connection = false;
+    let framing_error = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
     for (name, value) in headers {
+        // The request carries its whole body with one `Content-Length`, so
+        // a caller's framing headers must agree with it: a second length,
+        // a second host, or a transfer coding would let the server read
+        // the message differently than it was meant.
         if http_header_name_eq(&name, "Host") {
+            if saw_host {
+                return Err(framing_error(
+                    "an HTTP request cannot carry two `Host` headers".to_string(),
+                ));
+            }
             saw_host = true;
         } else if http_header_name_eq(&name, "Content-Length") {
+            if saw_content_length {
+                return Err(framing_error(
+                    "an HTTP request cannot carry two `Content-Length` headers".to_string(),
+                ));
+            }
+            if parse_http_content_length_value(&value).ok() != Some(body.len()) {
+                return Err(framing_error(format!(
+                    "the `Content-Length` header `{value}` does not match the {}-byte body",
+                    body.len()
+                )));
+            }
             saw_content_length = true;
+        } else if http_header_name_eq(&name, "Transfer-Encoding") {
+            return Err(framing_error(
+                "the HTTP client sends the whole body with `Content-Length`; a `Transfer-Encoding` header is not supported".to_string(),
+            ));
         } else if http_header_name_eq(&name, "Connection") {
             saw_connection = true;
         }
@@ -16122,29 +16723,22 @@ impl TcpListenerValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<TcpStreamValue> {
-        let mut listener = lock_mutex(&self.inner.listener);
-        let Some(listener) = listener.as_mut() else {
-            return Err(closed_resource_error());
-        };
         let deadline = deadline_from_timeout(timeout)?;
         loop {
-            match listener.accept() {
-                Ok((stream, _)) => return TcpStreamValue::from_std(stream),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    wait_for_fd_event(
-                        listener.as_raw_fd(),
-                        host_io::POLLIN,
-                        deadline,
-                        cancellation,
-                    )?;
+            // The lock is not held across the wait (see `WaitHandle`).
+            let waiter = {
+                let mut listener = lock_mutex(&self.inner.listener);
+                let Some(listener) = listener.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                match listener.accept() {
+                    Ok((stream, _)) => return TcpStreamValue::from_std(stream),
+                    Err(error) if is_would_block_or_timed_out(&error) => listener.wait_handle()?,
+                    Err(error) if is_transient_accept_error(&error) => continue,
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
-            }
+            };
+            wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLIN, deadline, cancellation)?;
         }
     }
 
@@ -16652,25 +17246,19 @@ impl UdpSocketValue {
                 format!("`{address}` did not resolve to any socket addresses"),
             )
         })?;
-        let mut socket = lock_mutex(&self.inner.socket);
-        let Some(socket) = socket.as_mut() else {
-            return Err(closed_resource_error());
-        };
-        {
-            loop {
+        loop {
+            let waiter = {
+                let mut socket = lock_mutex(&self.inner.socket);
+                let Some(socket) = socket.as_mut() else {
+                    return Err(closed_resource_error());
+                };
                 match socket.send_to(bytes, target) {
                     Ok(_) => return Ok(()),
-                    Err(error) if is_retryable_network_error(&error) => {
-                        wait_for_fd_event(
-                            socket.as_raw_fd(),
-                            host_io::POLLOUT,
-                            deadline,
-                            cancellation,
-                        )?;
-                    }
+                    Err(error) if is_retryable_network_error(&error) => socket.wait_handle()?,
                     Err(error) => return Err(normalize_udp_send_error(error)),
                 }
-            }
+            };
+            wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLOUT, deadline, cancellation)?;
         }
     }
 
@@ -16680,36 +17268,31 @@ impl UdpSocketValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<Vec<u8>>> {
-        let mut socket = lock_mutex(&self.inner.socket);
-        let Some(socket) = socket.as_mut() else {
+        if lock_mutex(&self.inner.socket).is_none() {
             return Err(closed_resource_error());
-        };
-        {
-            let deadline = deadline_from_timeout(timeout)?;
-            let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
-            loop {
+        }
+        let deadline = deadline_from_timeout(timeout)?;
+        let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
+        loop {
+            let waiter = {
+                let mut socket = lock_mutex(&self.inner.socket);
+                let Some(socket) = socket.as_mut() else {
+                    return Err(closed_resource_error());
+                };
                 match socket.recv(&mut buffer) {
                     Ok(0) => return Ok(None),
                     Ok(bytes) => {
                         buffer.truncate(bytes);
                         return Ok(Some(buffer));
                     }
-                    Err(error) if is_retryable_network_error(&error) => {
-                        match wait_for_fd_event(
-                            socket.as_raw_fd(),
-                            host_io::POLLIN,
-                            deadline,
-                            cancellation,
-                        ) {
-                            Ok(()) => {}
-                            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
-                                return Ok(None);
-                            }
-                            Err(error) => return Err(error),
-                        }
-                    }
+                    Err(error) if is_retryable_network_error(&error) => socket.wait_handle()?,
                     Err(error) => return Err(error),
                 }
+            };
+            match wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLIN, deadline, cancellation) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => return Ok(None),
+                Err(error) => return Err(error),
             }
         }
     }
@@ -16720,14 +17303,17 @@ impl UdpSocketValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<UdpDatagramValue>> {
-        let mut socket = lock_mutex(&self.inner.socket);
-        let Some(socket) = socket.as_mut() else {
+        if lock_mutex(&self.inner.socket).is_none() {
             return Err(closed_resource_error());
-        };
-        {
-            let deadline = deadline_from_timeout(timeout)?;
-            let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
-            loop {
+        }
+        let deadline = deadline_from_timeout(timeout)?;
+        let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
+        loop {
+            let waiter = {
+                let mut socket = lock_mutex(&self.inner.socket);
+                let Some(socket) = socket.as_mut() else {
+                    return Err(closed_resource_error());
+                };
                 match socket.recv_from(&mut buffer) {
                     Ok((bytes, address)) => {
                         buffer.truncate(bytes);
@@ -16736,22 +17322,14 @@ impl UdpSocketValue {
                             data: buffer,
                         }));
                     }
-                    Err(error) if is_retryable_network_error(&error) => {
-                        match wait_for_fd_event(
-                            socket.as_raw_fd(),
-                            host_io::POLLIN,
-                            deadline,
-                            cancellation,
-                        ) {
-                            Ok(()) => {}
-                            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
-                                return Ok(None);
-                            }
-                            Err(error) => return Err(error),
-                        }
-                    }
+                    Err(error) if is_retryable_network_error(&error) => socket.wait_handle()?,
                     Err(error) => return Err(error),
                 }
+            };
+            match wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLIN, deadline, cancellation) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => return Ok(None),
+                Err(error) => return Err(error),
             }
         }
     }
@@ -16815,29 +17393,22 @@ impl UnixListenerValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<UnixStreamValue> {
-        let mut listener = lock_mutex(&self.inner.listener);
-        let Some(listener) = listener.as_mut() else {
-            return Err(closed_resource_error());
-        };
         let deadline = deadline_from_timeout(timeout)?;
         loop {
-            match listener.accept() {
-                Ok((stream, _)) => return UnixStreamValue::from_std(stream),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    wait_for_fd_event(
-                        listener.as_raw_fd(),
-                        host_io::POLLIN,
-                        deadline,
-                        cancellation,
-                    )?;
+            // The lock is not held across the wait (see `WaitHandle`).
+            let waiter = {
+                let mut listener = lock_mutex(&self.inner.listener);
+                let Some(listener) = listener.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                match listener.accept() {
+                    Ok((stream, _)) => return UnixStreamValue::from_std(stream),
+                    Err(error) if is_would_block_or_timed_out(&error) => listener.try_clone()?,
+                    Err(error) if is_transient_accept_error(&error) => continue,
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
-            }
+            };
+            wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLIN, deadline, cancellation)?;
         }
     }
 
@@ -17009,28 +17580,23 @@ impl TlsListenerValue {
         let deadline = deadline_from_timeout(timeout)?;
         let mut pending = VecDeque::new();
         loop {
-            let (listener_fd, accepted) = {
+            // The wait below polls a duplicate, so a `close` from another
+            // task cannot close the descriptor under it.
+            let (waiter, accepted) = {
                 let mut listener = lock_mutex(&self.inner.listener);
                 let Some(listener) = listener.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                let listener_fd = listener.as_raw_fd();
                 let mut accepted = Vec::new();
                 loop {
                     match listener.accept() {
                         Ok((stream, _)) => accepted.push(stream),
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                            ) =>
-                        {
-                            break;
-                        }
+                        Err(error) if is_would_block_or_timed_out(&error) => break,
+                        Err(error) if is_transient_accept_error(&error) => {}
                         Err(error) => return Err(error),
                     }
                 }
-                (listener_fd, accepted)
+                (listener.wait_handle()?, accepted)
             };
             for stream in accepted {
                 let config = self.inner.config.clone();
@@ -17082,7 +17648,7 @@ impl TlsListenerValue {
             }
 
             wait_for_tls_listener_progress(
-                listener_fd,
+                waiter.as_raw_fd(),
                 pending.is_empty(),
                 deadline,
                 cancellation,
@@ -17522,13 +18088,17 @@ impl TlsStreamValue {
     }
 
     pub fn close(&self) {
-        let Ok(_operation) = acquire_protocol_operation(&self.inner.busy, None, None) else {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return;
+        }
+        let Some((_operation, stream)) = take_protocol_stream_for_close(
+            &self.inner.busy,
+            &self.inner.closed,
+            &self.inner.stream,
+            shutdown_tls_stream,
+        ) else {
             return;
         };
-        let Ok(stream) = self.take_stream_for_step() else {
-            return;
-        };
-        self.inner.closed.store(true, Ordering::Release);
         let _ = run_protocol_step(move || {
             match stream {
                 TlsStreamKind::Client(mut stream) => {
@@ -17570,79 +18140,68 @@ impl HttpListenerValue {
     ) -> io::Result<HttpExchangeValue> {
         let deadline = deadline_from_timeout(timeout)?;
         loop {
-            let stream = {
-                let mut listener = lock_mutex(&self.inner.listener);
-                let Some(listener) = listener.as_mut() else {
-                    return Err(closed_resource_error());
-                };
-                loop {
+            let stream = loop {
+                // The lock is not held across the wait (see `WaitHandle`).
+                let waiter = {
+                    let mut listener = lock_mutex(&self.inner.listener);
+                    let Some(listener) = listener.as_mut() else {
+                        return Err(closed_resource_error());
+                    };
                     match listener.accept() {
                         Ok((stream, _)) => break TcpStreamValue::from_std(stream)?,
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                            ) =>
-                        {
-                            wait_for_fd_event(
-                                listener.as_raw_fd(),
-                                host_io::POLLIN,
-                                deadline,
-                                cancellation,
-                            )?;
+                        Err(error) if is_would_block_or_timed_out(&error) => {
+                            listener.wait_handle()?
                         }
+                        Err(error) if is_transient_accept_error(&error) => continue,
                         Err(error) => return Err(error),
                     }
-                }
+                };
+                wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLIN, deadline, cancellation)?;
             };
+            // One client has a bounded time to send its request, so a slow
+            // client delays the next one by at most that long. What goes
+            // wrong with one client closes that client only: the accept
+            // fails for its own timeout or cancellation alone.
+            let client_deadline = deadline_capped(deadline, HTTP_SERVER_CLIENT_TIMEOUT);
             let mut raw_stream_guard = lock_mutex(&stream.inner.stream);
             let Some(mut raw_stream) = raw_stream_guard.take() else {
                 return Err(closed_resource_error());
             };
             drop(raw_stream_guard);
-            let request = read_http_request_from_stream(&mut raw_stream, deadline, cancellation);
+            let request =
+                read_http_request_from_stream(&mut raw_stream, client_deadline, cancellation);
             *lock_mutex(&stream.inner.stream) = Some(raw_stream);
             let (method, path, headers, body) = match request {
                 Ok(request) => request,
-                Err(error)
-                    if is_http_message_too_large_error(&error)
-                        || is_http_headers_too_large_error(&error) =>
-                {
+                Err(error) => {
                     let status = if is_http_message_too_large_error(&error) {
-                        413
+                        Some(413)
+                    } else if is_http_headers_too_large_error(&error) {
+                        Some(431)
+                    } else if is_http_bad_request_error(&error) {
+                        Some(400)
+                    } else if error.kind() == io::ErrorKind::InvalidInput {
+                        // A framing this server does not read, such as a
+                        // transfer coding other than chunked.
+                        Some(501)
                     } else {
-                        431
+                        None
                     };
                     let raw_stream = lock_mutex(&stream.inner.stream).take();
-                    if let Some(mut raw_stream) = raw_stream {
+                    if let (Some(status), Some(mut raw_stream)) = (status, raw_stream) {
                         let _ = write_http_response_to_stream(
                             &mut raw_stream,
                             status,
                             Vec::new(),
                             b"",
-                            deadline,
+                            client_deadline,
                             cancellation,
                         );
                     }
                     stream.close();
+                    check_deadline_and_cancellation(deadline, cancellation)?;
                     continue;
                 }
-                Err(error) if is_http_bad_request_error(&error) => {
-                    let raw_stream = lock_mutex(&stream.inner.stream).take();
-                    if let Some(mut raw_stream) = raw_stream {
-                        let _ = write_http_response_to_stream(
-                            &mut raw_stream,
-                            400,
-                            Vec::new(),
-                            b"",
-                            deadline,
-                            cancellation,
-                        );
-                    }
-                    stream.close();
-                    continue;
-                }
-                Err(error) => return Err(error),
             };
             return Ok(HttpExchangeValue {
                 inner: Arc::new(HttpExchangeState {
@@ -17716,8 +18275,17 @@ impl HttpExchangeValue {
             return Err(closed_resource_error());
         };
         drop(raw_stream_guard);
-        let result =
-            write_http_response_to_stream(&mut raw_stream, status, headers, body, None, None);
+        // A client that stops reading cannot hold the writer forever.
+        let deadline = deadline_capped(None, HTTP_SERVER_CLIENT_TIMEOUT);
+        let cancellation = current_lightweight_task_cancellation();
+        let result = write_http_response_to_stream(
+            &mut raw_stream,
+            status,
+            headers,
+            body,
+            deadline,
+            cancellation.as_ref(),
+        );
         stream.close();
         result
     }
@@ -17754,8 +18322,20 @@ impl WebSocketListenerValue {
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    let mut state =
-                        accept_websocket_stream(stream, deadline, cancellation.as_ref())?;
+                    // A client whose handshake fails or stalls is dropped,
+                    // and the listener goes on to the next one.
+                    let handshake_deadline = deadline_capped(deadline, WEBSOCKET_HANDSHAKE_TIMEOUT);
+                    let mut state = match accept_websocket_stream(
+                        stream,
+                        handshake_deadline,
+                        cancellation.as_ref(),
+                    ) {
+                        Ok(state) => state,
+                        Err(_) => {
+                            check_deadline_and_cancellation(deadline, cancellation.as_ref())?;
+                            continue;
+                        }
+                    };
                     websocket_set_nonblocking(&mut state, true)?;
                     return Ok(WebSocketValue {
                         inner: Arc::new(WebSocketState {
@@ -17778,6 +18358,7 @@ impl WebSocketListenerValue {
                         cancellation.as_ref(),
                     )?;
                 }
+                Err(error) if is_transient_accept_error(&error) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -17814,6 +18395,17 @@ impl WebSocketValue {
             let (request, address) = run_protocol_step_before(
                 move || {
                     let parsed = url::Url::parse(&url).map_err(io::Error::other)?;
+                    // Checked before dialing, so no other scheme opens a
+                    // connection.
+                    if !matches!(parsed.scheme(), "ws" | "wss") {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!(
+                                "websocket URL scheme must be `ws` or `wss`, not `{}`",
+                                parsed.scheme()
+                            ),
+                        ));
+                    }
                     let request = websocket_client_request(&parsed)?;
                     let host = parsed.host_str().ok_or_else(|| {
                         io::Error::new(
@@ -17865,19 +18457,25 @@ impl WebSocketValue {
     }
 
     #[allow(clippy::result_large_err)]
-    fn send_message(&self, mut message: Message, timeout: Option<StdDuration>) -> io::Result<()> {
+    fn send_message(&self, message: Message, timeout: Option<StdDuration>) -> io::Result<()> {
         let deadline = deadline_from_timeout(timeout)?;
         let cancellation = current_lightweight_task_cancellation();
         let _operation =
             acquire_protocol_operation(&self.inner.busy, deadline, cancellation.as_ref())?;
+        // The message until it is queued in the socket's write buffer. A
+        // write that would block has queued it already, so the next step
+        // only flushes; sending it again would send it twice.
+        let mut message = Some(message);
         loop {
             check_deadline_and_cancellation(deadline, cancellation.as_ref())?;
             let socket = self.take_socket_for_step()?;
             let ((returned_socket, returned_message), result) = run_protocol_state_step(
                 (socket, message),
-                |(socket, message)| match socket {
-                    WebSocketStateKind::Plain(socket) => socket.send(message.clone()),
-                    WebSocketStateKind::MaybeTls(socket) => socket.send(message.clone()),
+                |(socket, message)| match (socket, message.take()) {
+                    (WebSocketStateKind::Plain(socket), Some(message)) => socket.send(message),
+                    (WebSocketStateKind::Plain(socket), None) => socket.flush(),
+                    (WebSocketStateKind::MaybeTls(socket), Some(message)) => socket.send(message),
+                    (WebSocketStateKind::MaybeTls(socket), None) => socket.flush(),
                 },
                 deadline,
                 cancellation.as_ref(),
@@ -17891,7 +18489,7 @@ impl WebSocketValue {
             match result {
                 Ok(()) => return Ok(()),
                 Err(tungstenite::Error::WriteBufferFull(returned)) => {
-                    message = returned;
+                    message = Some(returned);
                     wait_for_fd_event(fd, host_io::POLLOUT, deadline, cancellation.as_ref())?;
                 }
                 Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
@@ -17953,6 +18551,9 @@ impl WebSocketValue {
             let result = result?;
             match result {
                 Ok(Message::Close(_)) => return Ok(None),
+                // A control frame is not a message to hand out: the socket
+                // answers a ping itself, and the read goes on.
+                Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => {}
                 Ok(message) => return Ok(Some(message)),
                 Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
                     return Ok(None);
@@ -17971,9 +18572,17 @@ impl WebSocketValue {
     }
 
     pub fn close(&self) -> io::Result<()> {
-        let _operation = acquire_protocol_operation(&self.inner.busy, None, None)?;
-        let socket = self.take_socket_for_step()?;
-        self.inner.closed.store(true, Ordering::Release);
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Err(closed_resource_error());
+        }
+        let Some((_operation, socket)) = take_protocol_stream_for_close(
+            &self.inner.busy,
+            &self.inner.closed,
+            &self.inner.socket,
+            shutdown_websocket,
+        ) else {
+            return Ok(());
+        };
         let (_socket, result) = run_protocol_state_step(
             socket,
             |socket| match socket {
@@ -20111,6 +20720,14 @@ fn json_parse_failure_value(error: JsonCodecError) -> Result<Value> {
     json_runtime_enum_value("Result", "Err", json_runtime_single_payload(error)?)
 }
 
+/// Parses on the caller's stack, preserving its resource budget. The compiler
+/// provides a dedicated bounded-evaluation stack for this entry point.
+pub fn json_parse_on_caller(source: &str) -> Result<Value> {
+    json_parse_outcome_to_runtime(
+        json_parse_runtime(source, false).map_err(JsonCodecServiceError::Codec),
+    )
+}
+
 pub fn json_parse_owned_to_runtime(
     source: String,
     reservation: JsonCodecReservation,
@@ -21133,6 +21750,23 @@ pub fn evaluate_host_builtin_with_program_args(
     evaluate_host_builtin_with_args(name, args, Some(program_args))
 }
 
+/// Evaluates a host builtin that may access raw memory (`mem::*`).
+///
+/// # Safety
+///
+/// Any raw-memory address passed to a `mem::*` builtin must satisfy the
+/// operation's validity contract.
+pub unsafe fn evaluate_unsafe_host_builtin_with_program_args(
+    name: &str,
+    args: Vec<Value>,
+    program_args: &[String],
+) -> Result<Value> {
+    if let Some(function) = host_builtins::unsafe_mem_builtin_function(name) {
+        return unsafe { function(args, Some(program_args)) };
+    }
+    evaluate_host_builtin_with_args(name, args, Some(program_args))
+}
+
 pub fn send_error_closed(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SendError"),
@@ -21617,3 +22251,7 @@ pub fn io_error(error: io::Error) -> Value {
 #[cfg(test)]
 #[path = "runtime_value_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_value_deep_tests.rs"]
+mod deep_tests;
