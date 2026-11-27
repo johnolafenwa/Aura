@@ -9925,11 +9925,10 @@ impl<'a> FunctionCompiler<'a> {
         // keeps what it found for the loan to read, so the loan compiles
         // as usual and takes it.
         if let Some(Instruction::BeginElementLoan { loan, .. }) = instructions.first() {
-            if self.entry_copy_loans.contains_key(loan)
-                || self
-                    .fused_entry_probes
-                    .values()
-                    .any(|probe| probe.loan == *loan)
+            if self
+                .fused_entry_probes
+                .values()
+                .any(|probe| probe.loan == *loan)
             {
                 return Ok(false);
             }
