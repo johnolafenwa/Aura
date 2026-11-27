@@ -34061,3 +34061,146 @@ fn a_new_task_runtime_state_table_holds_no_task() {
     assert!(states.get_mut(7).is_none());
     assert!(states.cached.is_none());
 }
+
+/// The words generated code reads from a `str` box's view, after checking
+/// its access code, or `None` when the box has no text view.
+fn text_view_words(text: *mut OpaqueValue) -> Option<String> {
+    let layout = super::direct_list_layout();
+    if list_view_access(text) != super::TEXT_VIEW_ACCESS {
+        return None;
+    }
+    unsafe {
+        let base = text as *const u8;
+        let ptr = *(base.add(layout.elements_offset as usize) as *const usize) as *const u8;
+        let len = *(base.add(layout.len_offset as usize) as *const usize);
+        let bytes = std::slice::from_raw_parts(ptr, len);
+        Some(std::str::from_utf8(bytes).expect("UTF-8 words").to_owned())
+    }
+}
+
+#[test]
+fn a_str_box_keeps_its_words_in_its_view_through_writes_in_place() {
+    // A short text lies inside the box and a long one on the heap: both
+    // views point where the text lies once it is in its box.
+    let long = "a text too long to be kept inside its value";
+    for text in ["short", long, ""] {
+        let boxed = string_value(text);
+        assert_eq!(text_view_words(boxed).as_deref(), Some(text));
+        let mut len = 0_i64;
+        let ptr = super::aura_direct_string_words(boxed, &mut len);
+        let words = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+        assert_eq!(words, text.as_bytes());
+        unsafe { release_value(boxed) };
+    }
+
+    // An f-string builder: parts that fit in its room go in place, and one
+    // that makes it grow goes through an access. Both keep the view.
+    let builder = super::aura_direct_format_begin("ab".as_ptr(), 2);
+    assert_eq!(text_view_words(builder).as_deref(), Some("ab"));
+    super::aura_direct_format_push_str(builder, "c".as_ptr(), 1);
+    assert_eq!(text_view_words(builder).as_deref(), Some("abc"));
+    super::aura_direct_format_push_i64(builder, -42);
+    assert_eq!(text_view_words(builder).as_deref(), Some("abc-42"));
+    super::aura_direct_format_push_str(builder, long.as_ptr(), long.len());
+    let grown = format!("abc-42{long}");
+    assert_eq!(text_view_words(builder).as_deref(), Some(grown.as_str()));
+
+    // `x = x + y` on the only reference appends in place.
+    let appended = super::aura_direct_str_append_words(builder, "!".as_ptr(), 1, 1, 1);
+    let expected = format!("{grown}!");
+    assert_eq!(
+        text_view_words(appended).as_deref(),
+        Some(expected.as_str())
+    );
+    unsafe { release_value(appended) };
+
+    // An owned `replace` rewrites the only reference's text in place.
+    let text = string_value("a-b-c");
+    let replaced = unsafe {
+        super::aura_direct_string_replace_literal_owned(text, "-".as_ptr(), 1, "+".as_ptr(), 1)
+    };
+    assert_eq!(replaced, text, "the only reference is rewritten in place");
+    assert_eq!(text_view_words(replaced).as_deref(), Some("a+b+c"));
+    unsafe { release_value(replaced) };
+
+    // A write through an access refreshes the view on the way out.
+    let text = string_value("old");
+    unsafe {
+        super::value_mut(text, |value| {
+            *value = Value::string("a new and longer text value")
+        });
+    }
+    assert_eq!(
+        text_view_words(text).as_deref(),
+        Some("a new and longer text value")
+    );
+    unsafe { release_value(text) };
+
+    // A box another thread may reach drops the view, and its words come
+    // from the runtime under the lock.
+    let shared = string_value("shared");
+    unsafe { super::share_direct_value(shared) };
+    assert_eq!(text_view_words(shared), None);
+    let mut len = 0_i64;
+    let ptr = super::aura_direct_string_words(shared, &mut len);
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(ptr, len as usize) },
+        b"shared"
+    );
+    unsafe { release_value(shared) };
+
+    // A literal's one frozen box keeps the words it was made with.
+    // The program frees its frozen boxes when it ends, so the cell is a
+    // word that outlives the test, as a word of the program's data does.
+    let cell: &'static std::sync::atomic::AtomicUsize =
+        Box::leak(Box::new(std::sync::atomic::AtomicUsize::new(0)));
+    let literal = unsafe { super::aura_direct_string_literal_cell(cell, "lit".as_ptr(), 3) };
+    assert_eq!(text_view_words(literal).as_deref(), Some("lit"));
+    let again = unsafe { super::aura_direct_string_literal_cell(cell, "lit".as_ptr(), 3) };
+    assert_eq!(again, literal);
+}
+
+#[test]
+fn a_str_element_box_has_its_words_where_it_lies() {
+    let element = super::element_boxed_value(Value::string("in a box of its own"));
+    assert_eq!(
+        text_view_words(element).as_deref(),
+        Some("in a box of its own")
+    );
+    let short = super::element_boxed_value(Value::string("tiny"));
+    assert_eq!(text_view_words(short).as_deref(), Some("tiny"));
+    for value in [element, short] {
+        unsafe { super::release_untracked_value(value) };
+    }
+}
+
+#[test]
+fn a_split_list_has_its_str_view_from_the_start() {
+    use super::DirectListAccess;
+    let long = "a field long enough to live on the heap";
+    let line = format!("a,bb,,{long}");
+    let expected: Vec<String> = line.split(',').map(str::to_owned).collect();
+    // A literal separator, on a box and on words, and a boxed separator.
+    let text = string_value(&line);
+    let split = super::aura_direct_string_split_literal(text, ",".as_ptr(), 1);
+    let words =
+        super::aura_direct_string_split_literal_words(line.as_ptr(), line.len(), ",".as_ptr(), 1);
+    let separator = string_value(",");
+    let boxed = super::aura_direct_string_split(text, separator);
+    let multi = super::aura_direct_string_split_literal(text, ",,".as_ptr(), 2);
+    for list in [split, words, boxed] {
+        assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
+        assert_eq!(str_view_texts(list), expected);
+    }
+    assert_eq!(list_view_access(multi), DirectListAccess::Str as u32);
+    assert_eq!(
+        str_view_texts(multi),
+        vec!["a,bb".to_owned(), long.to_owned()]
+    );
+    // A write to the list switches the view back until it is rebuilt.
+    super::aura_direct_vec_push_in_place(split, string_value("tail"));
+    assert_ne!(list_view_access(split), DirectListAccess::Str as u32);
+    for value in [split, words, boxed, multi, separator, text] {
+        unsafe { release_value(value) };
+    }
+}

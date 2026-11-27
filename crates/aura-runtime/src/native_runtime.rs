@@ -2457,15 +2457,28 @@ fn allocate_box(value: OpaqueValue) -> *mut OpaqueValue {
 #[inline(always)]
 unsafe fn follow_inline_block(header: &OpaqueValue) {
     // SAFETY: the caller's contract.
-    if let Value::EnumVariant(EnumVariantValue {
-        payloads: VariantPayloads::Typed(typed),
-        ..
-    }) = unsafe { &*header.value.get() }
-    {
-        if typed.is_inline() {
-            header.list_elements.set(typed.data());
-        }
+    match unsafe { &*header.value.get() } {
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Typed(typed),
+            ..
+        }) if typed.is_inline() => header.list_elements.set(typed.data()),
+        // A short text moved with the value, so its words follow it.
+        Value::String(text) => header.list_elements.set(text.as_str().as_ptr() as usize),
+        _ => {}
     }
+}
+
+/// Points the view of the `str` box `header` at `text`, its value, after a
+/// write in place that took no access. A box another thread may reach
+/// keeps its view as it was, as [`OpaqueValue::refresh_list_view`] leaves it.
+///
+/// # Safety
+///
+/// `header` is confined to this thread and `text` is its value.
+#[inline(always)]
+unsafe fn refresh_text_view(header: &OpaqueValue, text: &crate::text::Text) {
+    header.list_elements.set(text.as_str().as_ptr() as usize);
+    header.list_len.set(text.len());
 }
 
 /// The thread a box of a list element records in debug builds: none. Such
@@ -3532,6 +3545,16 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
             VariantPayloads::Json(node) => (JSON_TAPE_ACCESS, node.address(), 0, 0, 0),
             VariantPayloads::Values(_) => EMPTY_VALUE_VIEW,
         },
+        // The words of a `str`. A short text lies inside the value, so a
+        // view made before the value reached its box points at the old
+        // place until [`follow_inline_block`] moves it.
+        Value::String(text) => (
+            TEXT_VIEW_ACCESS,
+            text.as_str().as_ptr() as usize,
+            text.len(),
+            0,
+            0,
+        ),
         _ => EMPTY_VALUE_VIEW,
     }
 }
@@ -3547,6 +3570,23 @@ pub const JSON_TAPE_ACCESS: u32 = 0xF0;
 pub const FUNCTION_VIEW_ACCESS: u32 = 0xF2;
 const _: () =
     assert!(JSON_TAPE_ACCESS < FUNCTION_VIEW_ACCESS && FUNCTION_VIEW_ACCESS < FIRST_PLAIN_ACCESS);
+
+/// The access code of a box that holds a `str` confined to its thread or
+/// frozen. The view's elements are the address of the text's UTF-8 bytes
+/// and its length is their count, so generated code reads a `str`'s words
+/// with two loads instead of a call to [`aura_direct_string_words`].
+///
+/// The words stay valid while the box lives and nothing writes it. Every
+/// write the runtime makes to such a box refreshes them, as it does a
+/// list's view: the writes through an access do so on the way out, and the
+/// few that write a confined box in place (an f-string part that fits, an
+/// owned `replace`) refresh it themselves. A box gets the code only where
+/// it lives (see [`follow_inline_block`]), since a short text lies inside
+/// the box. Sharing a box with another thread drops the code, and a frozen
+/// box, which nothing writes, keeps the words it had.
+pub const TEXT_VIEW_ACCESS: u32 = 0xF3;
+const _: () =
+    assert!(FUNCTION_VIEW_ACCESS < TEXT_VIEW_ACCESS && TEXT_VIEW_ACCESS < FIRST_PLAIN_ACCESS);
 
 const _: () = assert!(
     JSON_TAPE_ACCESS > direct_array_access(DirectListAccess::ArrayFloat64, DIRECT_ARRAY_MAX_RANK)
@@ -3831,6 +3871,7 @@ impl DirectListLayout {
             DirectListAccess::Boxes as i64,
             i64::from(DirectListAccess::LIST_FORMS),
             i64::from(FUNCTION_VIEW_ACCESS),
+            i64::from(TEXT_VIEW_ACCESS),
             i64::from(DirectCallable::WORDS_OFFSET),
             i64::from(DirectCallable::ABI_KEY_OFFSET),
             i64::from(DirectCallable::RELEASED_OFFSET),
@@ -8460,21 +8501,24 @@ fn push_format_text(builder: *mut OpaqueValue, text: &str) {
 #[inline]
 fn push_format_text_with(builder: *mut OpaqueValue, text: &str, ascii: bool) {
     // SAFETY: the builder is a live box. Only a `list` keeps elements apart
-    // from its value or a view of them, so a `str` needs neither, and no
-    // other access to a confined box is in progress while this one runs.
+    // from its value, so a `str` has none to take in, and no other access
+    // to a confined box is in progress while this one runs. The text's
+    // view is refreshed below.
     let confined = unsafe { builder.as_ref() }.and_then(|header| {
         if header.shared_lock().is_some() {
             return None;
         }
         match unsafe { &mut *header.value.get() } {
-            Value::String(output) => Some(output),
+            Value::String(output) => Some((header, output)),
             _ => None,
         }
     });
-    if let Some(output) = confined {
+    if let Some((header, output)) = confined {
         if output.len() + text.len() <= crate::runtime_value::MAX_STRING_BYTES
             && output.push_within_capacity(text, ascii)
         {
+            // SAFETY: the box is confined and `output` is its value.
+            unsafe { refresh_text_view(header, output) };
             return;
         }
     }
@@ -9036,12 +9080,33 @@ pub extern "C-unwind" fn aura_direct_string_split_literal_words(
             }
             _ => text.split(separator).map(part).collect(),
         };
-        boxed_value(Value::Vec(VecValue {
-            element_type: SharedType::named("str"),
-            elements: parts.into(),
-            str_view: Default::default(),
-        }))
+        boxed_str_list(parts)
     })
+}
+
+/// A new `list[str]` box of `parts`, every one a `str`, with its `Str` view
+/// made: a split list is read soon after it is made, often only a few
+/// times, so its first reads find the words in place instead of paying
+/// for misses before the view is built.
+fn boxed_str_list(parts: Vec<Value>) -> *mut OpaqueValue {
+    let list = boxed_value(Value::Vec(VecValue {
+        element_type: SharedType::named("str"),
+        elements: parts.into(),
+        str_view: Default::default(),
+    }));
+    // SAFETY: the list was just made, so it is confined and nothing else
+    // reads it or its view yet.
+    unsafe {
+        let header = &*list;
+        if let Value::Vec(vector) = &*header.value.get() {
+            if let ListElements::Values(values) = &vector.elements {
+                if !values.is_empty() {
+                    header.fill_str_view(values, vector.str_view.get_or_create());
+                }
+            }
+        }
+    }
+    list
 }
 
 /// A new `list[str]` box of the parts of the `str` box `value` between
@@ -9049,11 +9114,7 @@ pub extern "C-unwind" fn aura_direct_string_split_literal_words(
 fn split_value(value: *mut OpaqueValue, separator: &str) -> *mut OpaqueValue {
     unsafe {
         with_value(value, |value| match value {
-            Value::String(text) => boxed_value(Value::Vec(VecValue {
-                element_type: SharedType::named("str"),
-                elements: split_text(text, separator).into(),
-                str_view: Default::default(),
-            })),
+            Value::String(text) => boxed_str_list(split_text(text, separator)),
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
                 value_type_name(other)
@@ -9219,13 +9280,13 @@ pub unsafe extern "C-unwind" fn aura_direct_string_replace_literal_owned(
                 return None;
             }
             // SAFETY: no other access to a confined box with one reference
-            // is in progress, and a `str` keeps no view of its value.
+            // is in progress. A `str`'s view is refreshed below where it changes.
             match unsafe { &mut *header.value.get() } {
-                Value::String(text) => Some(text),
+                Value::String(text) => Some((header, text)),
                 _ => None,
             }
         });
-        let Some(text) = confined else {
+        let Some((header, text)) = confined else {
             let replaced =
                 aura_direct_string_replace_literal(value, from_ptr, from_len, to_ptr, to_len);
             // SAFETY: the caller's contract.
@@ -9236,6 +9297,8 @@ pub unsafe extern "C-unwind" fn aura_direct_string_replace_literal_owned(
         let to = literal_str(to_ptr, to_len);
         if let Some(replaced) = replaced_text(text, from, to) {
             *text = replaced;
+            // SAFETY: the box is confined and `text` is its value.
+            unsafe { refresh_text_view(header, text) };
         }
         value
     })
@@ -10582,7 +10645,8 @@ unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> b
         return false;
     }
     // SAFETY: no other access to a confined box with one reference is in
-    // progress, and a `str` keeps no view of its value.
+    // progress. The caller frees the box once its text moved out, so its
+    // view need not follow.
     let (cell, named) = unsafe { (&mut *header.value.get(), &*header.runtime_type_name.get()) };
     if !matches!(cell, Value::String(_)) || named.is_some() {
         return false;
@@ -11817,15 +11881,41 @@ pub extern "C-unwind" fn aura_direct_string_words(
     value: *mut OpaqueValue,
     len: *mut i64,
 ) -> *const u8 {
-    // A `str` box confined to this thread, or frozen, is read where it
-    // lies: it is no list, so it has no appended elements to take in, and
-    // no other thread can be writing it.
+    // A `str` box confined to this thread, or frozen, has its words in its
+    // view (see [`TEXT_VIEW_ACCESS`]).
     // SAFETY: generated code passes a live box and a slot for one word.
+    if let Some(header) = unsafe { value.as_ref() } {
+        if header.list_access.load(Ordering::Relaxed) == TEXT_VIEW_ACCESS {
+            #[cfg(debug_assertions)]
+            check_text_view(header);
+            unsafe { len.write(header.list_len.get() as i64) };
+            return header.list_elements.get() as *const u8;
+        }
+    }
+    // Any other such box is read where it lies: it is no list, so it has
+    // no appended elements to take in, and no other thread can be writing
+    // it.
+    // SAFETY: as above.
     if let Some(text) = unsafe { unlocked_str(value) } {
         unsafe { len.write(text.len() as i64) };
         return text.as_ptr();
     }
     string_words_locked(value, len)
+}
+
+/// Stops a debug build whose `str` box's view is not its text's words.
+#[cfg(debug_assertions)]
+fn check_text_view(header: &OpaqueValue) {
+    // SAFETY: the box has the text view, so it is confined or frozen and
+    // nothing writes it meanwhile.
+    let Value::String(text) = (unsafe { &*header.value.get() }) else {
+        panic!("a box with the text view holds no `str`");
+    };
+    assert_eq!(
+        (header.list_elements.get(), header.list_len.get()),
+        (text.as_str().as_ptr() as usize, text.len()),
+        "a `str` box's view is not its text's words"
+    );
 }
 
 /// The text of `value` when it is a `str` box that needs no lock to read:
