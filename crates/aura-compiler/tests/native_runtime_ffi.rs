@@ -650,11 +650,11 @@ fn direct_runtime_exported_ffi_symbols_execute_through_the_library_copy() {
         let vec_slice = aura_direct_vec_slice(vec, 0, 0, -1, 1, 1, 1);
         assert_eq!(cloned_value(vec_slice).render(), "[4, 2]");
         release(vec_slice);
-        release(aura_direct_vec_reverse_in_place(vec));
+        assert_eq!(aura_direct_vec_reverse_in_place(vec), 1);
         let other_vec = aura_direct_vec_empty();
         aura_direct_vec_push_in_place(other_vec, int_value(9));
-        release(aura_direct_vec_extend_in_place(vec, other_vec));
-        release(aura_direct_vec_clear_in_place(vec));
+        assert_eq!(aura_direct_vec_extend_in_place(vec, other_vec), 1);
+        assert_eq!(aura_direct_vec_clear_in_place(vec), 1);
         assert_eq!(aura_direct_vec_is_empty(vec), 1);
         release(vec);
 
