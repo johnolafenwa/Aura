@@ -33060,6 +33060,44 @@ fn extending_a_byte_list_with_a_text_appends_its_bytes() {
 }
 
 #[test]
+fn direct_case_changes_and_joins_check_the_string_limit_before_building() {
+    // A text that is not ASCII takes the checked Unicode case mapping.
+    assert_eq!(
+        expect_string(super::aura_direct_string_to_lower(string_value("ÄuRa"))),
+        "äura"
+    );
+    assert_eq!(
+        expect_string(super::aura_direct_string_to_upper(string_value("äuRa"))),
+        "ÄURA"
+    );
+    // `İ` lowers to two characters and `ŉ` uppers to two, each one byte
+    // longer than the character, so half the limit of them maps past it.
+    let count = crate::runtime_value::MAX_STRING_BYTES / 2;
+    let lower = "İ".repeat(count);
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_string_to_lower(string_value(&lower));
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    let upper = "ŉ".repeat(count);
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_string_to_upper(string_value(&upper));
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    // 1000 parts joined by a 70000-byte separator is about 70 MB.
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        let separator = "s".repeat(70_000);
+        let parts = vec!["x"; 1000];
+        super::aura_direct_string_join(string_value(&separator), string_vec(&parts));
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert!(
+        diagnostic.message.contains("allocation limit"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
 fn dynamic_host_abi_parameters_name_how_each_argument_is_passed() {
     use aura_core::ops::ReceiverKind;
 

@@ -1513,8 +1513,18 @@ impl Parser {
         }
         // Each generated token takes the place of the `union` word, at a
         // column of its own.
-        let mut tokens = lex(&format!("{class_text}{items_text}"))
-            .expect("the generated declarations of a union lex");
+        // A name that is reserved where the generated code puts it, such
+        // as `view` or `__invariant__`, is reported at the union.
+        let generated_error = |error: Diagnostic| {
+            parse_error(
+                keyword,
+                format!(
+                    "`extern \"C\"` union `{name}` cannot use these union or member names: {}",
+                    error.message
+                ),
+            )
+        };
+        let mut tokens = lex(&format!("{class_text}{items_text}")).map_err(generated_error)?;
         for (index, token) in tokens.iter_mut().enumerate() {
             token.span = Span::new(
                 keyword.line,
@@ -1523,7 +1533,7 @@ impl Parser {
         }
         let generated = Parser::new(tokens)
             .parse_module()
-            .expect("the generated declarations of a union parse");
+            .map_err(generated_error)?;
         let mut union = None;
         for mut item in generated.items {
             match &mut item {
@@ -2771,20 +2781,12 @@ impl Parser {
     /// statement of the previous item's body and keeps its own span.
     fn parse_with_stmt(&mut self) -> Result<Stmt> {
         let span = self.expect_keyword(TokenKind::KwWith)?.span;
-        let mut items = vec![self.parse_with_item(span)?];
-        while !self.at_simple(&TokenKind::Colon) {
-            if self.eat_simple(&TokenKind::Comma).is_none() {
-                return Err(self.error_here("expected ',' or ':' after with item"));
-            }
-            if self.at_simple(&TokenKind::Colon) {
-                return Err(self.error_here("expected a with item after ','"));
-            }
-            let item_span = self.current_span();
-            items.push(self.parse_with_item(item_span)?);
-        }
-        self.expect_simple(TokenKind::Colon)?;
-        self.expect_newline()?;
-        let mut body = self.parse_block()?;
+        // Each further item nests the rest in one more `with` statement, so
+        // it counts against the recursion limit like a nested block.
+        let depth = self.recursion_depth;
+        let parsed = self.parse_with_items_and_body(span);
+        self.recursion_depth = depth;
+        let (mut items, mut body) = parsed?;
         while let Some((binding, value, span)) = items.pop() {
             body = vec![Stmt::With(WithStmt {
                 binding,
@@ -2794,6 +2796,29 @@ impl Parser {
             })];
         }
         Ok(body.pop().expect("a with header has at least one item"))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn parse_with_items_and_body(
+        &mut self,
+        span: Span,
+    ) -> Result<(Vec<(String, Expr, Span)>, Vec<Stmt>)> {
+        let mut items = vec![self.parse_with_item(span)?];
+        while !self.at_simple(&TokenKind::Colon) {
+            if self.eat_simple(&TokenKind::Comma).is_none() {
+                return Err(self.error_here("expected ',' or ':' after with item"));
+            }
+            if self.at_simple(&TokenKind::Colon) {
+                return Err(self.error_here("expected a with item after ','"));
+            }
+            self.enter_recursion("with item")?;
+            let item_span = self.current_span();
+            items.push(self.parse_with_item(item_span)?);
+        }
+        self.expect_simple(TokenKind::Colon)?;
+        self.expect_newline()?;
+        let body = self.parse_block()?;
+        Ok((items, body))
     }
 
     fn parse_with_item(&mut self, span: Span) -> Result<(String, Expr, Span)> {

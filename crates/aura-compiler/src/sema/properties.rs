@@ -1120,6 +1120,11 @@ impl<'a> FunctionChecker<'a> {
                         self.collect_transfer_nominals(element, nominals);
                     }
                 }
+                Type::Union(union) => {
+                    for member in &union.members {
+                        self.collect_transfer_nominals(member, nominals);
+                    }
+                }
                 Type::Closure { captures, .. } => {
                     for capture in captures.iter() {
                         self.collect_transfer_nominals(&capture.ty, nominals);

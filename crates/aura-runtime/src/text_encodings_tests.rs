@@ -1,4 +1,4 @@
-use super::{decode, encode, Encoding, EncodingError};
+use super::{decode, encode, reserved, within_limit, Encoding, EncodingError, MAX_DECODED_BYTES};
 
 #[test]
 fn names_ignore_case_and_separators() {
@@ -239,4 +239,37 @@ fn utf16_offsets_count_bytes_across_surrogate_pairs_and_the_order_mark() {
             Err(EncodingError::Invalid { index: valid.len() })
         );
     }
+}
+
+#[test]
+fn results_over_the_size_limits_are_refused() {
+    // Each high Latin-1 byte decodes to two bytes of UTF-8, so half the
+    // string limit plus one such bytes is over it.
+    let high = vec![0xE9_u8; MAX_DECODED_BYTES / 2 + 1];
+    assert_eq!(
+        decode(&high, Encoding::Latin1),
+        Err(EncodingError::TooLarge)
+    );
+    assert_eq!(
+        decode(&high[..MAX_DECODED_BYTES / 2], Encoding::Latin1).map(|text| text.len()),
+        Ok(MAX_DECODED_BYTES)
+    );
+    // Windows-1252 bytes 0x80 decode to three bytes.
+    let euros = vec![0x80_u8; MAX_DECODED_BYTES / 3 + 1];
+    assert_eq!(
+        decode(&euros, Encoding::Windows1252),
+        Err(EncodingError::TooLarge)
+    );
+    // An invalid byte is still reported first.
+    assert_eq!(
+        decode(&[0x81], Encoding::Windows1252),
+        Err(EncodingError::Invalid { index: 0 })
+    );
+    assert_eq!(reserved(5, 4), Err(EncodingError::TooLarge));
+    assert_eq!(reserved(4, 4).map(|bytes| bytes.capacity() >= 4), Ok(true));
+    assert_eq!(
+        within_limit("a".repeat(MAX_DECODED_BYTES + 1)),
+        Err(EncodingError::TooLarge)
+    );
+    assert_eq!(within_limit("abc".to_string()).as_deref(), Ok("abc"));
 }

@@ -412,7 +412,9 @@ again. Set `aura.verifyOnSave` to `false` to turn this off.
 The verifier reasons about values exactly, as mathematical integers and
 booleans, with each integer type's range as a check:
 
-- integers of every width, `bool`, and `None`
+- integers up to 64 bits wide, `bool`, and `None`. The overflow,
+  zero-divisor, and conversion checks of `int128`, `uint128`, `intsize`,
+  and `uintsize` are reported as not modeled (`AU5104`)
 - lists, with their lengths, and their elements when those are integers,
   `bool`, `str`, or tuples and classes of modeled values; the length of any
   other list
@@ -518,7 +520,11 @@ booleans, with each integer type's range as a check:
   over a `range`, a modeled list, a `set`, the `keys()` of a `dict`, or
   `enumerate` or `zip` of modeled lists,
   with tuple targets and `if` filters, nested, in any contract, `assert`, or
-  loop `invariant`
+  loop `invariant`. Each position `enumerate(xs, start)` counts must fit an
+  `int64`
+- the error path of `try`: the function returns there, so its `ensures`,
+  the invariants of its `mut` parameters, and the invariant of `self` are
+  proved on that path too
 
 Anything else is a value the verifier knows nothing about: a `dict` or
 `set` of other keys, the result of float `//`, `%`, and `**`, the result of most library calls, such as

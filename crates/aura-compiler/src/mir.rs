@@ -8060,6 +8060,9 @@ fn validate_loan_rvalue(
                         state,
                         None,
                     )?;
+                    // The callee may store any member in a `mut` argument,
+                    // so a tag proof over that place no longer holds.
+                    invalidate_union_facts_for_place(place, state);
                 }
             }
             let _ = context.pending_call(function, callee, args)?;
@@ -29877,6 +29880,11 @@ impl<'a> Lowerer<'a> {
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
+        let lowerer = self as *const Self as usize;
+        infer_cache::memoized(lowerer, expr, || self.infer_expr_type_uncached(expr))
+    }
+
+    fn infer_expr_type_uncached(&self, expr: &Expr) -> Option<Type> {
         if let Some(indexed) = expr.indexed_collection_callee(|object| {
             self.infer_expr_type(object).is_some_and(
                 |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
@@ -32650,6 +32658,8 @@ mod spans;
 
 #[path = "mir_c_bit_fields.rs"]
 mod c_bit_fields;
+#[path = "mir_infer_cache.rs"]
+mod infer_cache;
 
 #[path = "mir_simd.rs"]
 mod simd;

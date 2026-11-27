@@ -4302,12 +4302,22 @@ impl MirRuntime {
             for instruction in &block.instructions {
                 let instruction_result = panic::catch_unwind(AssertUnwindSafe(|| {
                     env.refresh_raw_cells()?;
-                    self.execute_instruction(
-                        instruction,
-                        env,
-                        &mut cleanup_stack,
-                        &mut safepoint_fuel,
-                    )
+                    // A generator the instruction drops, such as an element
+                    // of a cleared list, closes there. A trap from its exits
+                    // traps this instruction unless it already failed.
+                    let (result, drop_trap) =
+                        crate::runtime_value::capture_generator_drop_trap(|| {
+                            self.execute_instruction(
+                                instruction,
+                                env,
+                                &mut cleanup_stack,
+                                &mut safepoint_fuel,
+                            )
+                        });
+                    match (result, drop_trap) {
+                        (Ok(_), Some(trap)) => Err(trap),
+                        (result, _) => result,
+                    }
                 }));
                 let instruction_result = match instruction_result {
                     Ok(result) => result,
@@ -8981,7 +8991,12 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`extend` requires another `list[T]` value"));
                 };
                 let mut updated = vector;
-                updated.elements.append(other.elements);
+                if updated.elements.try_append(other.elements).is_err() {
+                    return Err(Diagnostic::coded(
+                        "AU4005",
+                        "list capacity allocation failed",
+                    ));
+                }
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`extend` requires a mutable list place"));
                 };
@@ -9329,20 +9344,29 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`replace` requires `str` for `to`"));
                 };
                 Ok(Value::String(
-                    text.replace(from.as_str(), to.as_str()).into(),
+                    aura_runtime::text_methods::replace_checked(
+                        text.as_str(),
+                        from.as_str(),
+                        to.as_str(),
+                    )?
+                    .into(),
                 ))
             }
             "to_lower" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`to_lower` does not take arguments"));
                 }
-                Ok(Value::String(text.to_lowercase().into()))
+                Ok(Value::String(
+                    aura_runtime::text_methods::change_case_checked(text.as_str(), false)?.into(),
+                ))
             }
             "to_upper" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`to_upper` does not take arguments"));
                 }
-                Ok(Value::String(text.to_uppercase().into()))
+                Ok(Value::String(
+                    aura_runtime::text_methods::change_case_checked(text.as_str(), true)?.into(),
+                ))
             }
             "join" => {
                 let values = evaluate_named_args(args, env)?;
@@ -9357,7 +9381,10 @@ impl MirRuntime {
                     };
                     rendered_parts.push(part);
                 }
-                Ok(Value::String(rendered_parts.join(text.as_str()).into()))
+                Ok(Value::String(
+                    aura_runtime::text_methods::join_checked(&rendered_parts, text.as_str())?
+                        .into(),
+                ))
             }
             "add" => {
                 let values = evaluate_named_args(args, env)?;
@@ -12951,112 +12978,105 @@ fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {
 }
 
 /// Whether `value` holds a generator handle or a `Generator[T]` wrapper.
+/// The walk keeps its own list, so a value nested as deep as the program
+/// built it, such as a long chain of `indirect` variants, is walked without
+/// recursion.
 fn owns_generator(value: &Value) -> bool {
-    match value {
-        Value::Generator(_) => true,
-        Value::Instance(instance)
-            if matches!(
-                instance.fields,
-                crate::runtime_value::InstanceFields::Recovered(_)
-            ) =>
-        {
-            false
+    use std::borrow::Cow;
+    let mut pending: Vec<Cow<'_, Value>> = vec![Cow::Borrowed(value)];
+    while let Some(value) = pending.pop() {
+        let value = match value {
+            Cow::Borrowed(value) => value,
+            // A value read out of a layout is a scalar or a plain record.
+            Cow::Owned(value) => {
+                if owns_generator(&value) {
+                    return true;
+                }
+                continue;
+            }
+        };
+        match value {
+            Value::Generator(_) => return true,
+            Value::Instance(instance)
+                if matches!(
+                    instance.fields,
+                    crate::runtime_value::InstanceFields::Recovered(_)
+                ) => {}
+            Value::Instance(instance) => {
+                if instance.class_name == "iter.Generator" {
+                    return true;
+                }
+                pending.extend(instance.fields.iter().map(|(_, field)| field));
+            }
+            Value::Tuple(tuple) => pending.extend(tuple.elements.iter().map(Cow::Borrowed)),
+            Value::Vec(vec) => pending.extend(vec.elements.iter()),
+            Value::EnumVariant(variant) => pending.extend(variant.payloads.iter()),
+            Value::Union(union) => pending.push(Cow::Borrowed(&union.payload)),
+            Value::Map(map) => pending.extend(map.entries.iter().map(|(_, v)| Cow::Borrowed(v))),
+            Value::TraitObject(object) => pending.push(Cow::Borrowed(&object.value)),
+            Value::Function(function)
+                if function
+                    .closure_environment
+                    .as_ref()
+                    .is_some_and(|env| env.any_capture(owns_generator)) =>
+            {
+                return true;
+            }
+            Value::CollectionStore(store) if store.any_value(owns_generator) => return true,
+            _ => {}
         }
-        Value::Instance(instance) => {
-            instance.class_name == "iter.Generator"
-                || instance.fields.iter().any(|(_, v)| owns_generator(&v))
-        }
-        Value::Tuple(tuple) => tuple.elements.iter().any(owns_generator),
-        Value::Vec(vec) => vec.elements.iter().any(|v| owns_generator(&v)),
-        Value::EnumVariant(variant) => variant.payloads.iter().any(|v| owns_generator(&v)),
-        Value::Union(union) => owns_generator(&union.payload),
-        Value::Map(map) => map.entries.iter().any(|(_, v)| owns_generator(v)),
-        Value::TraitObject(object) => owns_generator(&object.value),
-        Value::Function(function) => function
-            .closure_environment
-            .as_ref()
-            .is_some_and(|env| env.any_capture(owns_generator)),
-        Value::CollectionStore(store) => store.any_value(owns_generator),
-        _ => false,
     }
+    false
 }
 
 impl MirRuntime {
+    /// Closes each generator `value` holds whose last handle it is, in the
+    /// order the value holds them. The walk keeps its own list, as
+    /// [`owns_generator`] does.
     fn close_released_generators(&self, value: Value) -> Result<()> {
-        match value {
-            Value::Generator(generator) => {
-                if generator.should_close_on_release() {
+        let mut pending = vec![value];
+        while let Some(value) = pending.pop() {
+            let start = pending.len();
+            match value {
+                Value::Generator(generator) if generator.should_close_on_release() => {
                     self.with_generator_resumer(|| generator.close())?;
                 }
-                Ok(())
-            }
-            Value::Instance(instance) => {
-                match instance.fields {
+                Value::Instance(instance) => match instance.fields {
                     crate::runtime_value::InstanceFields::Map(fields) => {
-                        for (_, field) in fields {
-                            self.close_released_generators(field)?;
-                        }
+                        pending.extend(fields.into_values());
                     }
                     // A recovered snapshot contains only text, integers and a
                     // list of text. Mutation first converts it to an ordinary map.
                     crate::runtime_value::InstanceFields::Hooked(_)
                     | crate::runtime_value::InstanceFields::Recovered(_) => {}
                     crate::runtime_value::InstanceFields::Typed(typed) => {
-                        for (_, field) in typed.into_map() {
-                            self.close_released_generators(field)?;
+                        pending.extend(typed.into_map().into_values());
+                    }
+                },
+                Value::Tuple(tuple) => pending.extend(tuple.elements),
+                Value::Vec(vec) if !vec.elements.is_shared() => {
+                    pending.extend(vec.elements.into_vec());
+                }
+                Value::Map(map) if !map.entries.is_shared() => {
+                    pending.extend(map.entries.into_vec().into_iter().map(|(_, entry)| entry));
+                }
+                Value::EnumVariant(variant) => pending.extend(variant.payloads.into_vec()),
+                Value::Union(union) => pending.push(union.payload),
+                Value::TraitObject(object) => pending.push(object.value),
+                Value::Function(function) => {
+                    if let Ok(function) = Arc::try_unwrap(function) {
+                        if let Some(env) = function.closure_environment {
+                            pending.extend(env.into_captured_values());
                         }
                     }
                 }
-                Ok(())
+                Value::CollectionStore(store) => pending.extend(store.into_owned_values()),
+                _ => {}
             }
-            Value::Tuple(tuple) => {
-                for element in tuple.elements {
-                    self.close_released_generators(element)?;
-                }
-                Ok(())
-            }
-            Value::Vec(vec) => {
-                if !vec.elements.is_shared() {
-                    for element in vec.elements.into_vec() {
-                        self.close_released_generators(element)?;
-                    }
-                }
-                Ok(())
-            }
-            Value::Map(map) => {
-                if !map.entries.is_shared() {
-                    for (_, entry) in map.entries.into_vec() {
-                        self.close_released_generators(entry)?;
-                    }
-                }
-                Ok(())
-            }
-            Value::EnumVariant(variant) => {
-                for payload in variant.payloads.into_vec() {
-                    self.close_released_generators(payload)?;
-                }
-                Ok(())
-            }
-            Value::Union(union) => self.close_released_generators(union.payload),
-            Value::TraitObject(object) => self.close_released_generators(object.value),
-            Value::Function(function) => {
-                if let Ok(function) = Arc::try_unwrap(function) {
-                    if let Some(env) = function.closure_environment {
-                        for captured in env.into_captured_values() {
-                            self.close_released_generators(captured)?;
-                        }
-                    }
-                }
-                Ok(())
-            }
-            Value::CollectionStore(store) => {
-                for element in store.into_owned_values() {
-                    self.close_released_generators(element)?;
-                }
-                Ok(())
-            }
-            _ => Ok(()),
+            // The parts were pushed in order; the first is taken next.
+            pending[start..].reverse();
         }
+        Ok(())
     }
 }
 

@@ -1071,10 +1071,11 @@ fn a_variant_of_one_scalar_keeps_its_block_in_itself() {
     };
     assert_eq!(typed_copy.take(0), Some(Value::Float(2.5)));
     assert_eq!(typed_copy.scalar_bits(0).map(|(_, bits)| bits), Some(0));
-    let VariantPayloads::Typed(typed_copy) = std::mem::replace(
+    let crate::runtime_value::PayloadParts::Typed(typed_copy) = std::mem::replace(
         &mut variant.payloads,
         VariantPayloads::from(Vec::<Value>::new()),
-    ) else {
+    )
+    .into_parts() else {
         panic!("typed payloads");
     };
     assert_eq!(typed_copy.into_vec(), vec![Value::Float(0.0)]);

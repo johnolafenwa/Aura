@@ -2105,6 +2105,10 @@ mod tests_workflow;
 #[path = "verify_shapes_tests.rs"]
 mod tests_shapes;
 
+#[cfg(test)]
+#[path = "verify_soundness_tests.rs"]
+mod tests_soundness;
+
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.
 pub(crate) const LOOKUP: &str = "Lookup";
