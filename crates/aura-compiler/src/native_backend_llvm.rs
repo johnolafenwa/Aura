@@ -66,6 +66,10 @@ use super::{
 /// layout check, and it costs under 1% more compile work than `O2`.
 const PASS_PIPELINE: &str = "default<O3>";
 
+/// The pass that inlines the functions marked `alwaysinline`, which runs
+/// on its own before [`PASS_PIPELINE`].
+const INLINE_PIPELINE: &str = "always-inline";
+
 /// The LLVM `uwtable` kind for asynchronous unwind tables. Task failures
 /// unwind through generated frames, so every function needs one.
 const UWTABLE_ASYNC: u64 = 2;
@@ -611,9 +615,7 @@ impl LlvmModule {
         let context = Context::create();
         let module = self.lower_unit(&context, machine, partition, unit)?;
         if optimize {
-            if let Err(error) =
-                module.run_passes(PASS_PIPELINE, machine, PassBuilderOptions::create())
-            {
+            if let Err(error) = run_object_passes(&module, machine) {
                 return Err(format!("LLVM failed to optimize the module: {error}"));
             }
         }
@@ -632,6 +634,20 @@ impl LlvmModule {
             Err(error) => Err(format!("LLVM failed to write the object: {error}")),
         }
     }
+}
+
+/// Runs the passes of an optimized object on `module`. The inline retain
+/// and release are inlined first, so the pass that shares one read of the
+/// task's frame stack sees the reads they make (see
+/// [`frame_stacks::share_frame_stacks`]), and LLVM's passes then start
+/// from the shared reads.
+fn run_object_passes(
+    module: &Module<'_>,
+    machine: &TargetMachine,
+) -> Result<(), inkwell::support::LLVMString> {
+    module.run_passes(INLINE_PIPELINE, machine, PassBuilderOptions::create())?;
+    frame_stacks::share_frame_stacks(module);
+    module.run_passes(PASS_PIPELINE, machine, PassBuilderOptions::create())
 }
 
 /// Gives every defined function its own section, so the linker drops the
@@ -4447,6 +4463,9 @@ mod units;
 
 #[path = "native_backend_llvm_slow_paths.rs"]
 mod slow_paths;
+
+#[path = "native_backend_llvm_frame_stacks.rs"]
+mod frame_stacks;
 
 #[cfg(test)]
 #[path = "native_backend_llvm_tests.rs"]
