@@ -1,0 +1,127 @@
+# A `str` in its box is read through the words its box keeps: its length,
+# its bytes in a comparison or a join, and its bytes as a list. The words
+# follow the text when the box is written in place, when a short text
+# grows past what its box holds, and when the box is shared with a task.
+# The boxes are also retained and released around a recovered call and
+# inside a generator's body, which run on stacks of their own.
+import control
+from iter import Generator
+
+
+def size(text: str) -> int64:
+    return text.byte_len()
+
+
+def same(left: str, right: str) -> bool:
+    return left == right
+
+
+def grown(count: int64) -> str:
+    mut text = ""
+    for index in range(count):
+        text = text + "ab"
+        if text.byte_len() != (index + 1) * 2:
+            return "wrong length"
+    return text
+
+
+def sizes(word: str, rounds: int64) -> int64:
+    mut total = 0
+    mut line = word.clone()
+    for round in range(rounds):
+        total += line.byte_len()
+        line += "-"
+        line += word
+        if line == word:
+            total += 1000
+    return total + size(line)
+
+
+def last_byte(text: str) -> int64:
+    bytes = text.to_bytes()
+    return bytes[bytes.len() - 1] as int64
+
+
+def in_task(text: str) -> int64:
+    return text.byte_len() * 2
+
+
+def labels(prefix: own str) -> Generator[str]:
+    mut label = prefix.clone()
+    for index in range(3):
+        label = label + "!"
+        kept = label.clone()
+        yield kept
+        if label.byte_len() != prefix.byte_len() + index + 1:
+            yield "wrong"
+
+
+def checked(text: str) -> int64:
+    copy = text.clone()
+    assert copy == text, "a copy has its text"
+    assert copy.byte_len() < 40, "too long"
+    return copy.byte_len()
+
+
+def inside(prefix: own str) -> int64:
+    mut total = 0
+    for label in labels(prefix):
+        total += label.byte_len()
+    return total
+
+
+def main():
+    short = "tiny"
+    long = "a text that is too long to lie inside its own box, by far"
+    print(size(short))
+    print(size(long))
+    print(same(short, long))
+    print(same(long.clone(), long))
+    text = grown(40)
+    print(text.byte_len())
+    print(text == grown(40))
+    print(text != grown(39))
+    print(sizes("word", 12))
+    print(last_byte(short))
+    print(last_byte(text))
+
+    with TaskGroup() as group:
+        task = group.start(in_task, long.clone())
+        print(task.result_or(0, timeout=5s))
+    print(size(long))
+
+    # A box read before, inside, and after a recovered call.
+    before = long.clone()
+    match control.recover(checked, short.clone()):
+        case Ok(length):
+            print(length)
+        case Err(trap):
+            print(trap.code)
+    match control.recover(checked, long.clone()):
+        case Ok(length):
+            print(length)
+        case Err(trap):
+            print(trap.message)
+    print(before == long)
+    print(before.byte_len())
+
+    # A generator that runs inside a recovered call, and one resumed
+    # before and after a recovered call, keep their boxes right.
+    match control.recover(inside, "go"):
+        case Ok(total):
+            print(total)
+        case Err(trap):
+            print(trap.message)
+    mut outside = labels(short.clone())
+    match outside.next():
+        case Item(label):
+            print(label)
+        case _:
+            print("done early")
+    match control.recover(checked, long.clone()):
+        case Ok(length):
+            print(length)
+        case Err(trap):
+            print(trap.message)
+    for label in outside:
+        print(f"{label} {same(label, short)}")
