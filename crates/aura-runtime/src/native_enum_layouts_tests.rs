@@ -237,7 +237,12 @@ fn typed_payloads_read_take_and_convert() {
     assert!(payloads.payload_box(0).is_some());
     assert!(payloads.get(2).is_none());
     assert!(payloads.payload_box(2).is_none());
+    // A variant of bytes holds no box, and one with a boxed payload does.
+    assert!(!payloads.holds_no_box());
+    assert!(typed_payloads(&circle).holds_no_box());
+    assert!(typed_payloads(&point).holds_no_box());
     let named_payloads = typed_payloads(&named);
+    assert!(!named_payloads.holds_no_box());
     assert!(matches!(named_payloads.get(1), Some(Cow::Owned(value)) if value == int32(7)));
     assert!(named_payloads.payload_box(1).is_none());
     assert_eq!(

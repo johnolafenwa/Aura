@@ -672,6 +672,15 @@ impl TypedPayloads {
         unsafe { payload_box_ref(self.address(place)) }.as_ref()
     }
 
+    /// Whether the variant holds no box: its payloads are bytes only, or
+    /// its boxes were released with its block (see
+    /// [`Self::release_boxes`]). Such a variant has nothing to drop but
+    /// its block, so its drop looks for no nested variant.
+    #[inline]
+    pub fn holds_no_box(&self) -> bool {
+        self.layout.variants[self.variant()].bytes_only || self.block().is_none()
+    }
+
     /// Whether `leaf` holds for the value of every payload box that is not
     /// moved out. A payload held in place is a scalar or a plain record,
     /// which copies as bytes.
