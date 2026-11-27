@@ -1766,6 +1766,32 @@ fn a_released_variant_frees_its_payload_boxes_with_it() {
 }
 
 #[test]
+fn a_long_chain_of_variants_is_released_without_recursion() {
+    in_task(|| {
+        let prefix = "Chained";
+        let layout = layout(prefix, FIRST_TEST_ACCESS + 92);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor(prefix).as_bytes(), layout.access()) }
+            .expect("registered");
+        // `Pair(Point, Pair(Point, ...))`, far deeper than the task's stack
+        // holds a call for each link of.
+        let chain = || {
+            let mut chain = unsafe { aura_direct_enum_new_typed(cell, 0) };
+            for _ in 0..200_000 {
+                let point = unsafe { aura_direct_enum_new_typed(cell, 0) };
+                chain = unsafe {
+                    aura_direct_enum_new_typed_boxes(cell, 3, [point, chain].as_ptr(), 2)
+                };
+            }
+            chain
+        };
+        unsafe { aura_direct_release_last_owned_variant(chain()) };
+        // So is one whose release takes the general path.
+        unsafe { aura_direct_release_value(chain()) };
+    });
+}
+
+#[test]
 fn a_variant_that_drops_a_payload_in_place_keeps_its_boxes_to_its_drop() {
     // `Outer.Wrap` keeps an `Inner`, which holds a string, in its block.
     let inner = EnumDefinition {

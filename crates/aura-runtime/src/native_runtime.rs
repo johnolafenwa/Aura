@@ -18391,31 +18391,41 @@ pub unsafe extern "C-unwind" fn aura_direct_release_last_owned_variant(value: *m
 /// A variant that keeps its payloads in its layout first releases each
 /// payload box itself, freeing in the same way a payload whose count
 /// reaches zero, so a tree of variants is freed without dropping each
-/// variant's payloads through its value.
+/// variant's payloads through its value. The boxes to free wait in a
+/// list, each variant's in payload order, so a chain of variants as long
+/// as a program builds it is freed without a call for each link.
 ///
 /// # Safety
 ///
 /// As for [`free_direct_value`].
 unsafe fn free_typed_variant(value: *mut OpaqueValue) {
-    // SAFETY: the caller dropped the last reference, so nothing else reads
-    // the value.
-    if let Value::EnumVariant(EnumVariantValue {
-        payloads: VariantPayloads::Typed(payloads),
-        ..
-    }) = unsafe { &mut *(*value).value.get() }
-    {
-        payloads.release_boxes(|boxed| {
-            // SAFETY: the variant's block held a reference to the box.
-            let header = unsafe { &*boxed };
-            if release_ref_count(&header.ref_count).unwrap_or_else(|message| runtime_error(message))
-            {
-                // SAFETY: the count reached zero.
-                unsafe { free_typed_variant(boxed) };
-            }
-        });
+    let mut pending: Vec<*mut OpaqueValue> = Vec::new();
+    let mut next = Some(value);
+    while let Some(value) = next {
+        // SAFETY: the last reference to `value` was dropped, so nothing
+        // else reads the value.
+        if let Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Typed(payloads),
+            ..
+        }) = unsafe { &mut *(*value).value.get() }
+        {
+            let first = pending.len();
+            payloads.release_boxes(|boxed| {
+                // SAFETY: the variant's block held a reference to the box.
+                let header = unsafe { &*boxed };
+                if release_ref_count(&header.ref_count)
+                    .unwrap_or_else(|message| runtime_error(message))
+                {
+                    pending.push(boxed);
+                }
+            });
+            // The first payload's box is freed first, with all it holds.
+            pending[first..].reverse();
+        }
+        // SAFETY: the caller's contract, or the count reached zero above.
+        unsafe { free_direct_value(value) };
+        next = pending.pop();
     }
-    // SAFETY: the caller's contract.
-    unsafe { free_direct_value(value) };
 }
 
 /// The frozen box of variant `variant`, which takes no payloads, of the
