@@ -1,0 +1,37 @@
+# `out.append(texts[i].clone())` copies the element's text straight into the
+# list it is appended to, from a local list and from a field.
+class Template:
+    kinds: list[int64]
+    texts: list[str]
+
+
+def render(template: Template, out: mut list[str]):
+    mut i = 0
+    while i < template.texts.len():
+        if template.kinds[i] == 0:
+            out.append(template.texts[i].clone())
+        i += 1
+
+
+def copy_all(texts: list[str]) -> list[str]:
+    mut out: list[str] = []
+    for i in range(texts.len()):
+        out.append(texts[i].clone())
+    return out
+
+
+def main():
+    long = "a piece of text that is long enough to be kept outside the value"
+    template = Template(kinds=[0, 1, 0, 0], texts=["<p>", "skipped", long.clone(), "é ü"])
+    mut out: list[str] = []
+    render(template, out)
+    render(template, out)
+    print(f"{out.len()} {"|".join(out)}")
+    print(f"{template.texts.len()} {template.texts[2]}")
+    copied = copy_all(["a", long.clone(), ""])
+    print(f"{copied.len()} [{copied[0]}] [{copied[1]}] [{copied[2]}]")
+    words = "one two three".split(" ")
+    mut picked: list[str] = []
+    picked.append(words[2].clone())
+    picked.append(words[0].clone())
+    print(picked)

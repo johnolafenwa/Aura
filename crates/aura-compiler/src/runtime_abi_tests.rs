@@ -263,6 +263,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecStrElement,
             RuntimeFn::VecEmptyTagged,
             RuntimeFn::VecPushStrLiteral,
+            RuntimeFn::VecPushStrView,
             RuntimeFn::VecExtendStrBytes,
             RuntimeFn::VecLend,
             RuntimeFn::VecPopScalar,

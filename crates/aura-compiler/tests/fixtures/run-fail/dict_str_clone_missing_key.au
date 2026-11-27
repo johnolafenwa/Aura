@@ -1,0 +1,9 @@
+def lookup(name: str, context: dict[str, str]) -> str:
+    return context[name].clone()
+
+
+def main():
+    mut context: dict[str, str] = {}
+    context["user"] = "u"
+    print(lookup("user", context))
+    print(lookup("missing", context))

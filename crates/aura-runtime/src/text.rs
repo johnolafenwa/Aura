@@ -66,6 +66,13 @@ impl Text {
         }
     }
 
+    /// `text`, whose flag the caller already knows, kept in the `String`
+    /// it came in.
+    pub fn from_string_with(text: String, ascii: bool) -> Self {
+        debug_assert_eq!(ascii, text.is_ascii());
+        Self(Repr::Heap { ascii, text })
+    }
+
     /// `left` followed by `right`, allocated once at its final size.
     pub fn concat(left: &Text, right: &Text) -> Text {
         let ascii = left.is_ascii() && right.is_ascii();

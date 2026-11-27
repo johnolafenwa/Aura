@@ -180,7 +180,7 @@ fn string_too_long() -> Diagnostic {
 
 /// An empty string with room for `len` bytes, when `len` (which is `None`
 /// when it overflowed) fits the string limit and the memory can be had.
-fn reserved_string(len: Option<usize>) -> Result<String> {
+pub(crate) fn reserved_string(len: Option<usize>) -> Result<String> {
     let len = len
         .filter(|len| *len <= MAX_STRING_BYTES)
         .ok_or_else(string_too_long)?;
