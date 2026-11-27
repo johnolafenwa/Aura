@@ -101,6 +101,8 @@ mod managers;
 pub(crate) use managers::{
     classify_manager, hidden_manager_binding, manager_method_call, ManagerEntry, ManagerExit,
 };
+#[cfg(test)]
+mod ownership_soundness_tests;
 mod patterns;
 mod structural_patterns;
 mod unions;
@@ -1840,6 +1842,9 @@ struct FunctionChecker<'a> {
     /// Collection places a `for ... in mut` loop holds exclusively while its
     /// body is checked, with the iterable's span.
     mutable_iteration_places: Rc<RefCell<Vec<(PlacePath, crate::diag::Span)>>>,
+    /// The states at each `break` and `continue` of the loops whose bodies
+    /// are being checked, innermost last.
+    loop_exits: Rc<RefCell<Vec<LoopExits>>>,
     /// Set while an argument bound to a `mut` union parameter is typed: the
     /// declared union is exposed whole, so refinements do not apply.
     suppress_narrowing: Rc<std::cell::Cell<bool>>,
@@ -1897,6 +1902,16 @@ enum BlockFlow {
     /// Every path leaves through `break` or `continue` (or a return), so the
     /// block never joins the statement that follows it.
     Diverges,
+}
+
+/// The local states a loop body leaves with, one per `break` or `continue`.
+#[derive(Clone, Default)]
+struct LoopExits {
+    /// The loop statement's span. A loan made before it is used again on
+    /// the next iteration.
+    start: Option<crate::diag::Span>,
+    breaks: Vec<HashMap<String, LocalBinding>>,
+    continues: Vec<HashMap<String, LocalBinding>>,
 }
 
 impl<'a> FunctionChecker<'a> {
@@ -2580,6 +2595,22 @@ impl<'a> FunctionChecker<'a> {
         ty: &Type,
         span: crate::diag::Span,
     ) -> Result<()> {
+        if self.reject_noncloneable_parts(operation, ty, span)? {
+            return Ok(());
+        }
+        self.reject_rng_state_duplication(operation, ty, span)
+    }
+
+    /// Rejects duplicating a value that holds a closure, a non-repeatable
+    /// task result, an opaque handle, a resource, or a trait object. Returns
+    /// `true` when the value is known safe to duplicate without the
+    /// `random.Rng` check.
+    pub(super) fn reject_noncloneable_parts(
+        &self,
+        operation: &str,
+        ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<bool> {
         // These observers transfer a non-repeatable result out of their
         // unique Task right. Their lowering must move rather than clone; the
         // duplication check still applies to random.Rng, which is not
@@ -2650,7 +2681,7 @@ impl<'a> FunctionChecker<'a> {
             // that crossed the task boundary comes back without a copy. A
             // Transfer type holds no `random.Rng` either.
             if transfers_unique_task_result && self.transfer_failure(ty).is_none() {
-                return Ok(());
+                return Ok(true);
             }
             return Err(Diagnostic::coded_at(
                 "AU3007",
@@ -2664,6 +2695,20 @@ impl<'a> FunctionChecker<'a> {
                 "borrow it with `view`, or take it out of a collection with `pop` or `remove`; to copy on purpose, add a method to the trait that returns a new value",
             ));
         }
+        Ok(false)
+    }
+
+    fn reject_rng_state_duplication(
+        &self,
+        operation: &str,
+        ty: &Type,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        let operation = if operation.contains('`') {
+            operation.to_string()
+        } else {
+            format!("`{operation}`")
+        };
         let qualifier = match self.rng_clone_safety(ty) {
             RngCloneSafety::Safe => return Ok(()),
             RngCloneSafety::ContainsRng => "contains",
@@ -3078,6 +3123,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: BTreeMap::new(),
             active_match_borrow_places: Rc::new(RefCell::new(Vec::new())),
             mutable_iteration_places: Rc::new(RefCell::new(Vec::new())),
+            loop_exits: Rc::new(RefCell::new(Vec::new())),
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
             in_spec: Rc::new(std::cell::Cell::new(false)),
             recursion_measure: Rc::new(RefCell::new(None)),
@@ -3134,6 +3180,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             mutable_iteration_places: self.mutable_iteration_places.clone(),
+            loop_exits: self.loop_exits.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -3184,6 +3231,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             mutable_iteration_places: self.mutable_iteration_places.clone(),
+            loop_exits: self.loop_exits.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -3230,6 +3278,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             mutable_iteration_places: self.mutable_iteration_places.clone(),
+            loop_exits: self.loop_exits.clone(),
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -3276,6 +3325,7 @@ impl<'a> FunctionChecker<'a> {
             implicit_borrowed_params: self.implicit_borrowed_params.clone(),
             active_match_borrow_places: self.active_match_borrow_places.clone(),
             mutable_iteration_places: self.mutable_iteration_places.clone(),
+            loop_exits: self.loop_exits.clone(),
             rng_clone_obligations: sink,
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
@@ -3796,6 +3846,22 @@ impl<'a> FunctionChecker<'a> {
         operation: &'static str,
         locals: &mut HashMap<String, LocalBinding>,
     ) {
+        // A write through a view changes the place the view borrows, so the
+        // facts recorded on that source place go stale too.
+        let canonical = self.canonicalize_view_place(place.clone(), locals);
+        if canonical != *place {
+            self.invalidate_narrowing_at(&canonical, invalidated_at, operation, locals);
+        }
+        self.invalidate_narrowing_at(place, invalidated_at, operation, locals);
+    }
+
+    fn invalidate_narrowing_at(
+        &self,
+        place: &PlacePath,
+        invalidated_at: crate::diag::Span,
+        operation: &'static str,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) {
         let Some(binding) = locals.get_mut(&place.root) else {
             return;
         };
@@ -3991,6 +4057,50 @@ impl<'a> FunctionChecker<'a> {
             } => self.const_bool_value(inner).map(|value| !value),
             _ => None,
         }
+    }
+
+    /// Checks a loop body and returns the states at its `break` and
+    /// `continue` statements next to the body's own flow.
+    fn check_loop_body(
+        &self,
+        loop_span: crate::diag::Span,
+        body: &[Stmt],
+        locals: &mut HashMap<String, LocalBinding>,
+        return_type: &Type,
+        loop_depth: usize,
+        allow_return: bool,
+    ) -> Result<(BlockFlow, LoopExits)> {
+        self.loop_exits.borrow_mut().push(LoopExits {
+            start: Some(loop_span),
+            ..LoopExits::default()
+        });
+        let checked = self.check_block(body, locals, return_type, loop_depth, allow_return);
+        let exits = self.loop_exits.borrow_mut().pop().unwrap_or_default();
+        Ok((checked?, exits))
+    }
+
+    /// A `continue` starts the next iteration, so a move before it is
+    /// loop-carried. A `break` reaches the statement after the loop, so its
+    /// moves join the state there.
+    fn apply_loop_exits(
+        &self,
+        entry: &HashMap<String, LocalBinding>,
+        exits: &LoopExits,
+        loop_kind: &str,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        for state in &exits.continues {
+            self.reject_loop_carried_moves(entry, state, loop_kind, span)?;
+        }
+        if !exits.breaks.is_empty() {
+            let baseline = locals.clone();
+            let states = std::iter::once(&baseline)
+                .chain(exits.breaks.iter())
+                .collect::<Vec<_>>();
+            self.merge_control_flow_moves(locals, &states);
+        }
+        Ok(())
     }
 
     fn reject_loop_carried_moves(
@@ -4518,7 +4628,8 @@ impl<'a> FunctionChecker<'a> {
             "loop",
         )?;
         self.check_loop_clauses(&for_stmt.contracts, ALL_LOOP_CLAUSES, &body_locals, true)?;
-        self.check_block(
+        let (_, loop_exits) = self.check_loop_body(
+            for_stmt.span,
             &for_stmt.body,
             &mut body_locals,
             return_type,
@@ -4526,8 +4637,9 @@ impl<'a> FunctionChecker<'a> {
             allow_return,
         )?;
         self.reject_loop_carried_moves(locals, &body_locals, "for", for_stmt.span)?;
-        let baseline_locals = locals.clone();
-        self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
+        let entry_locals = locals.clone();
+        self.merge_control_flow_moves(locals, &[&entry_locals, &body_locals]);
+        self.apply_loop_exits(&entry_locals, &loop_exits, "for", for_stmt.span, locals)?;
         Ok(())
     }
 
@@ -5959,7 +6071,7 @@ impl<'a> FunctionChecker<'a> {
                     // fixed point over the entry and every backedge
                     // (ADR-0052 A4): an entry fact that some iteration
                     // invalidates does not hold on the next one.
-                    let body_locals = loop {
+                    let (body_locals, loop_exits) = loop {
                         let mut body_locals = locals.clone();
                         if let Some(borrow_mode) = effective_borrow_mode {
                             if let Some(place) =
@@ -6009,7 +6121,8 @@ impl<'a> FunctionChecker<'a> {
                                 true,
                             )
                             .and_then(|()| {
-                                self.check_block(
+                                self.check_loop_body(
+                                    for_stmt.span,
                                     &for_stmt.body,
                                     &mut body_locals,
                                     return_type,
@@ -6020,16 +6133,23 @@ impl<'a> FunctionChecker<'a> {
                         if mutable_iteration.is_some() {
                             self.mutable_iteration_places.borrow_mut().pop();
                         }
-                        checked?;
+                        let (_, loop_exits) = checked?;
                         let killed = Self::narrowing_killed_by_body(locals, &body_locals);
                         if killed.is_empty() {
-                            break body_locals;
+                            break (body_locals, loop_exits);
                         }
                         Self::forget_narrowing(&killed, locals);
                     };
                     self.reject_loop_carried_moves(locals, &body_locals, "for", for_stmt.span)?;
-                    let baseline_locals = locals.clone();
-                    self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
+                    let entry_locals = locals.clone();
+                    self.merge_control_flow_moves(locals, &[&entry_locals, &body_locals]);
+                    self.apply_loop_exits(
+                        &entry_locals,
+                        &loop_exits,
+                        "for",
+                        for_stmt.span,
+                        locals,
+                    )?;
                 }
                 Stmt::With(with_stmt) => {
                     let with_flow =
@@ -6048,7 +6168,10 @@ impl<'a> FunctionChecker<'a> {
                     // header, and the guard is evaluated before every
                     // iteration, so its own true-successor facts are
                     // re-established for the body on each pass.
-                    let (when_false, body_locals) = loop {
+                    // The condition runs before every iteration, so a move
+                    // in it is loop-carried like a move in the body.
+                    let entry_locals = locals.clone();
+                    let (when_false, body_locals, loop_exits) = loop {
                         self.check_loop_clauses(
                             &while_stmt.contracts,
                             &[ContractKind::Invariant],
@@ -6075,7 +6198,8 @@ impl<'a> FunctionChecker<'a> {
                             &body_locals,
                             false,
                         )?;
-                        self.check_block(
+                        let (_, loop_exits) = self.check_loop_body(
+                            while_stmt.span,
                             &while_stmt.body,
                             &mut body_locals,
                             return_type,
@@ -6084,13 +6208,13 @@ impl<'a> FunctionChecker<'a> {
                         )?;
                         let killed = Self::narrowing_killed_by_body(locals, &body_locals);
                         if killed.is_empty() {
-                            break (when_false, body_locals);
+                            break (when_false, body_locals, loop_exits);
                         }
                         Self::forget_narrowing(&killed, locals);
                     };
                     if self.const_bool_value(&while_stmt.condition) != Some(false) {
                         self.reject_loop_carried_moves(
-                            locals,
+                            &entry_locals,
                             &body_locals,
                             "while",
                             while_stmt.span,
@@ -6100,6 +6224,13 @@ impl<'a> FunctionChecker<'a> {
                             self.apply_narrowing(&when_false, &mut baseline_locals);
                         }
                         self.merge_control_flow_moves(locals, &[&baseline_locals, &body_locals]);
+                        self.apply_loop_exits(
+                            &entry_locals,
+                            &loop_exits,
+                            "while",
+                            while_stmt.span,
+                            locals,
+                        )?;
                     }
                     // `while true:` with no `break` of its own never reaches
                     // the next statement: it only leaves by returning or
@@ -6121,6 +6252,9 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     diverges = true;
+                    if let Some(exits) = self.loop_exits.borrow_mut().last_mut() {
+                        exits.breaks.push(locals.clone());
+                    }
                 }
                 Stmt::Continue(continue_stmt) => {
                     if loop_depth == 0 {
@@ -6130,6 +6264,9 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     diverges = true;
+                    if let Some(exits) = self.loop_exits.borrow_mut().last_mut() {
+                        exits.continues.push(locals.clone());
+                    }
                 }
             }
         }
@@ -18081,7 +18218,13 @@ impl<'a> FunctionChecker<'a> {
                             receiver,
                         )
                     }
-                    _ if matches!(&base_callee.kind, ExprKind::Name(name) if locals.contains_key(name)) => {
+                    _ if matches!(&base_callee.kind, ExprKind::Name(name) if locals.contains_key(name)) =>
+                    {
+                        if matches!(callee_ty, Type::Union(_)) {
+                            if let Some(path) = self.member_access_path(base_callee) {
+                                self.reject_stale_narrowing(&path, span, locals)?;
+                            }
+                        }
                         Err(Diagnostic::at(span, "unsupported call target"))
                     }
                     _ => Err(self.unsupported_call_target_diagnostic(callee, span)),

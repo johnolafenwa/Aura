@@ -4302,12 +4302,22 @@ impl MirRuntime {
             for instruction in &block.instructions {
                 let instruction_result = panic::catch_unwind(AssertUnwindSafe(|| {
                     env.refresh_raw_cells()?;
-                    self.execute_instruction(
-                        instruction,
-                        env,
-                        &mut cleanup_stack,
-                        &mut safepoint_fuel,
-                    )
+                    // A generator the instruction drops, such as an element
+                    // of a cleared list, closes there. A trap from its exits
+                    // traps this instruction unless it already failed.
+                    let (result, drop_trap) =
+                        crate::runtime_value::capture_generator_drop_trap(|| {
+                            self.execute_instruction(
+                                instruction,
+                                env,
+                                &mut cleanup_stack,
+                                &mut safepoint_fuel,
+                            )
+                        });
+                    match (result, drop_trap) {
+                        (Ok(_), Some(trap)) => Err(trap),
+                        (result, _) => result,
+                    }
                 }));
                 let instruction_result = match instruction_result {
                     Ok(result) => result,

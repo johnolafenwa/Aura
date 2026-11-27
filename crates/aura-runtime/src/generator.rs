@@ -205,7 +205,47 @@ thread_local! {
 /// which propagates it once the boundary's work returns. Outside any
 /// boundary the exit is dropped, as before boundaries tracked it.
 fn record_generator_drop_exit(exit: PendingGeneratorDropExit) {
-    crate::native_runtime::record_generator_drop_exit(exit);
+    if INTERPRETER_DROP_TRAP_DEPTH.with(Cell::get) == 0 {
+        crate::native_runtime::record_generator_drop_exit(exit);
+        return;
+    }
+    INTERPRETER_DROP_TRAP_EXIT.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(exit);
+        }
+    });
+}
+
+thread_local! {
+    /// Nonzero while [`capture_generator_drop_trap`] runs an interpreted
+    /// instruction. Native tasks keep their scope in their frame stack.
+    static INTERPRETER_DROP_TRAP_DEPTH: Cell<usize> = const { Cell::new(0) };
+    /// First exit recorded inside the innermost interpreter capture.
+    static INTERPRETER_DROP_TRAP_EXIT: RefCell<Option<PendingGeneratorDropExit>> =
+        const { RefCell::new(None) };
+}
+
+/// Runs `f` and returns the first trap a generator raised while `f` dropped
+/// and closed it. The interpreter calls this around each instruction, so a
+/// failing `with` exit of a dropped generator traps the caller as it does on
+/// the native backend.
+pub fn capture_generator_drop_trap<T>(f: impl FnOnce() -> T) -> (T, Option<Diagnostic>) {
+    struct Scope;
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            INTERPRETER_DROP_TRAP_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        }
+    }
+    INTERPRETER_DROP_TRAP_DEPTH.with(|depth| depth.set(depth.get() + 1));
+    let value = {
+        let _scope = Scope;
+        f()
+    };
+    match INTERPRETER_DROP_TRAP_EXIT.with(|slot| slot.borrow_mut().take()) {
+        Some(PendingGeneratorDropExit::Trap(diagnostic)) => (value, Some(diagnostic)),
+        Some(PendingGeneratorDropExit::Cancelled) | None => (value, None),
+    }
 }
 
 /// Runs `work` with dropped generators discarded instead of closed.

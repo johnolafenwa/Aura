@@ -90,9 +90,9 @@ pub mod time_host;
 
 pub use crate::array_members::{ArrayCompareOp, ArrayMaskOp, ArrayPairOp, ArrayUnaryOp};
 pub use generator::{
-    generator_yield, run_isolated, running_generator_depth, without_generator_drop_close,
-    GeneratorHooks, GeneratorValue, IsolatedFailure, DIRECT_GENERATOR_STACK_BYTES,
-    DIRECT_RECOVER_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
+    capture_generator_drop_trap, generator_yield, run_isolated, running_generator_depth,
+    without_generator_drop_close, GeneratorHooks, GeneratorValue, IsolatedFailure,
+    DIRECT_GENERATOR_STACK_BYTES, DIRECT_RECOVER_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
 };
 pub(crate) use generator::{PendingGeneratorDropExit, WeakGeneratorValue};
 pub use http_client::HttpResponseValue;

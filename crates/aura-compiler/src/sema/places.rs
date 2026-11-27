@@ -60,6 +60,10 @@ impl PlaceProjection {
             (Self::Tuple(left), Self::Tuple(right)) => left != right,
             (Self::Element(left), Self::Element(right))
             | (Self::Entry(left), Self::Entry(right)) => left.disjoint_from(right),
+            // A dynamic key is spelled as an element selection, so an
+            // element and an entry of one place may be the same slot.
+            (Self::Element(left), Self::Entry(right))
+            | (Self::Entry(left), Self::Element(right)) => left.disjoint_from(right),
             // A syntactic position spelled on a list or an integer-keyed
             // dictionary (`items.0` from the place builders) names that
             // element or entry.

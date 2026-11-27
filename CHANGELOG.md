@@ -13,6 +13,32 @@ in this file.
 - Speed: a `Result` that a function returns and its caller matches or
   unwraps with `try` no longer allocates. `bank_ledger` runs half the
   instructions it did in 0.17.0.
+- Checker: more ownership and narrowing rules hold in every position.
+  - An `is None` test no longer applies after a `[mut x]` closure capture
+    of the tested place, after a write through a `view mut` of it, or after
+    a match guard that changed it. A guard's moves and changes also hold in
+    the arm body of a `match own` and in every later arm (`AU2014`, `AU3001`).
+  - A move before `break` reaches the code after the loop, a move before
+    `continue` or in a `while` condition counts as a loop-carried move.
+  - A closure or view used in a loop body stays borrowed until the end of
+    the body, including in a sibling `if` or `match` branch, and a use in
+    a `match` expression guard keeps it borrowed (`AU3002`).
+  - A union is Transfer only when every member is, so
+    `sync.Mutex[Generator[int64] | None]` reports `AU3008`.
+  - Implementing a trait whose default method copies `T` values with a
+    closure, task, resource or handle type reports `AU3007` or `AU3009`.
+  - A view-returning call through any callee expression, such as
+    `h.fns[0](xs)` or a `dyn Trait` method, cannot be stored in an owned
+    binding (`AU3010`). A view returned from below a list element or dict
+    entry borrows the whole collection.
+  - A dynamic dict key overlaps a literal one, a returned-view receiver
+    borrows its origin for the call, and `xs[xs.pop()]` reports `AU3002`.
+- Runtime: a dropped generator whose `with` exit traps traps the caller on
+  the MIR backend too. The native backend no longer leaks a closure boxed
+  into a union inside a list, dict, tuple or class field, and runs a
+  generic function over a union such as `T | int64` when `T` sorts before
+  the other member.
+
 - Speed: `swap` on a list of a copy class, and an append to a list held
   in a field or in a list of lists, are compiled in place. `graph_paths`
   runs half the instructions it did in 0.17.0, and `order_book` two
