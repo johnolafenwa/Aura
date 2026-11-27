@@ -65,6 +65,14 @@ impl IntTy {
         value >= lo && (value < 0 || value as u128 <= hi)
     }
 
+    /// Whether `ty` is an integer type the encoding has no range for:
+    /// `int128`, `uint128`, `intsize` or `uintsize`. Arithmetic on one can
+    /// still trap, so a check on it is reported as not modeled.
+    pub(super) fn is_unmodeled(ty: &Type) -> bool {
+        matches!(ty, Type::Named(name, args) if args.is_empty()
+            && matches!(name.as_str(), "int128" | "uint128" | "intsize" | "uintsize"))
+    }
+
     pub(super) fn contains(self, term: &str) -> String {
         let (lo, hi) = self.bounds();
         format!("(and (<= {} {term}) (<= {term} {hi}))", lit(lo))
@@ -835,6 +843,39 @@ impl<'a> Exec<'a> {
         }
     }
 
+    /// The path on which `try` returns the error held in `operand`: the
+    /// function's return checks are proved there (see `prove_try_return`).
+    /// Without a `From` conversion the returned value is that error.
+    fn try_error_return(&mut self, state: &State, operand: &Val, same_error: bool) {
+        let return_type = self.function.return_type.clone();
+        let result = self.fresh(&return_type, "try_error");
+        let mut path = state.clone();
+        if let Val::Enum(name, tag, payloads) = operand {
+            let Some(err) = self.cx.variant_index(name, "Err") else {
+                return;
+            };
+            path.pc = and(&state.pc, &format!("(= {tag} {err})"));
+            if let Val::Enum(returned, returned_tag, returned_payloads) = &result {
+                if let Some(returned_err) = self.cx.variant_index(returned, "Err") {
+                    let pc = path.pc.clone();
+                    self.assume(&pc, format!("(= {returned_tag} {returned_err})"));
+                    let error = payloads.get(err).and_then(|items| items.first());
+                    let returned_error = returned_payloads
+                        .get(returned_err)
+                        .and_then(|items| items.first());
+                    if let (true, Some(error), Some(returned_error)) =
+                        (same_error, error, returned_error)
+                    {
+                        if let Some(equal) = structural_eq(error, returned_error) {
+                            self.assume(&pc, equal);
+                        }
+                    }
+                }
+            }
+        }
+        self.prove_try_return(&path, &result);
+    }
+
     /// Assumes `term` on the paths `pc` describes.
     pub(super) fn assume(&mut self, pc: &str, term: String) {
         if pc == "true" {
@@ -1462,7 +1503,24 @@ impl<'a> Exec<'a> {
     /// The callable alias with a contract that the field `path` names, when
     /// it is a field of a class declared as one.
     fn place_contract(&self, path: &str) -> Option<String> {
-        let (parent, field) = path.rsplit_once('.')?;
+        let Some((parent, field)) = path.rsplit_once('.') else {
+            // A `mut` parameter of a contracted callable alias type: the
+            // caller reads it back as one that keeps the contract.
+            let param = self
+                .function
+                .params
+                .iter()
+                .find(|param| param.name == path)?;
+            if param.passing != crate::mir::MirReceiverKind::BorrowMut {
+                return None;
+            }
+            let decl = self.cx.decl(&self.function.name)?;
+            let declared = decl.params.iter().find(|param| param.name == path)?;
+            return self
+                .cx
+                .callable_contract(&declared.ty)
+                .map(|(alias, _)| alias);
+        };
         match self.place_type(parent)? {
             Type::Named(class, _) => self.cx.field_contract(&class, field),
             _ => None,
@@ -3511,6 +3569,24 @@ impl<'a> Exec<'a> {
                         );
                         fresh_target(self)
                     }
+                    // Every modeled integer fits in an `int128`; any other
+                    // conversion to a wide integer may trap.
+                    (Val::Int(..), None) if matches!(ty, Type::Named(name, _) if name == "int128") => {
+                        fresh_target(self)
+                    }
+                    (_, None)
+                        if IntTy::is_unmodeled(ty)
+                            && self.operand_type(value).as_ref() != Some(ty) =>
+                    {
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            *span,
+                            "integer conversion in range",
+                            &state.pc.clone(),
+                            Goal::Unsupported(format!("conversions to `{ty}` are not modeled yet")),
+                        );
+                        fresh_target(self)
+                    }
                     _ => fresh_target(self),
                 }
             }
@@ -3801,8 +3877,9 @@ impl<'a> Exec<'a> {
                     _ => target.map_or(Val::Opaque, |target| self.fresh_local(target)),
                 }
             }
-            Rvalue::Try { value, .. } => {
+            Rvalue::Try { value, from, .. } => {
                 let operand = self.operand(state, value, None);
+                self.try_error_return(state, &operand, from.is_none());
                 match &operand {
                     Val::Enum(name, tag, payloads) => match self.cx.variant_index(name, "Ok") {
                         Some(ok) => {
@@ -4087,6 +4164,8 @@ impl<'a> Exec<'a> {
                         || trap == ArithmeticTrap::Runtime))
                     || (trapping_arith
                         && (is_array_or_duration(left_ty.as_ref())
+                            || left_ty.as_ref().is_some_and(IntTy::is_unmodeled)
+                            || right_ty.as_ref().is_some_and(IntTy::is_unmodeled)
                             || is_array_or_duration(right_ty.as_ref())
                             || (op == BinaryOp::Mul
                                 && (is_str(left_ty.as_ref()) || is_str(right_ty.as_ref())))));
@@ -6362,16 +6441,20 @@ pub(super) fn structural_eq(left: &Val, right: &Val) -> Option<String> {
     match (left, right) {
         (Val::Int(a, _), Val::Int(b, _))
         | (Val::Bool(a), Val::Bool(b))
-        | (Val::Str(a), Val::Str(b))
-        | (Val::Set { members: a, .. }, Val::Set { members: b, .. }) => {
-            Some(format!("(= {a} {b})"))
-        }
+        | (Val::Str(a), Val::Str(b)) => Some(format!("(= {a} {b})")),
+        (
+            Val::Set {
+                members: a, elem, ..
+            },
+            Val::Set { members: b, .. },
+        ) if FloatTy::of(elem).is_none() => Some(format!("(= {a} {b})")),
         (Val::Float(a, _), Val::Float(b, _)) => Some(format!("(fp.eq {a} {b})")),
         (
             Val::Map {
                 keys: a,
                 values: Some(x),
                 key,
+                value,
                 ..
             },
             Val::Map {
@@ -6381,8 +6464,18 @@ pub(super) fn structural_eq(left: &Val, right: &Val) -> Option<String> {
             },
         ) => {
             let sort = key_sort(key)?;
+            if FloatTy::of(key).is_some() {
+                return None;
+            }
+            // Float values compare as numbers: `0.0` equals `-0.0` and NaN
+            // equals nothing.
+            let same = if FloatTy::of(value).is_some() {
+                "fp.eq"
+            } else {
+                "="
+            };
             Some(format!(
-                "(and (= {a} {b}) (forall ((k {sort})) (=> (select {a} k) (= (select {x} k) (select {y} k)))))"
+                "(and (= {a} {b}) (forall ((k {sort})) (=> (select {a} k) ({same} (select {x} k) (select {y} k)))))"
             ))
         }
         (Val::Unit, Val::Unit) => Some("true".to_string()),

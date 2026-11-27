@@ -17,6 +17,28 @@ in this file.
   in a field or in a list of lists, are compiled in place. `graph_paths`
   runs half the instructions it did in 0.17.0, and `order_book` two
   thirds.
+- A long chain of `indirect` enum variants, such as a linked list of
+  hundreds of thousands of `Cons` cells, is dropped, compared with `==`,
+  and copied without running out of stack, in a task, in a generator, and
+  on the main task, under `aura run` and in native builds.
+- The compiler reports a diagnostic instead of stopping or stalling on
+  several inputs. An `extern "C"` union whose name or member name is
+  reserved where its generated declarations use it, such as `view`, `dyn`
+  or `__invariant__`, is `AU1101`. Each extra item of a `with` header
+  counts against the nesting limit of 128. An inferred tuple type of more
+  than 65,536 type nodes is `AU2999`. A `match` on a wide tuple whose arms
+  leave most elements as `_` and a long chain of method calls such as
+  `x.wrapping_add(1).wrapping_add(1)...` compile in time linear in their
+  size.
+- `aura verify` proves more on paths it used to accept. The error path of
+  `try` proves the function's `ensures` and the class invariants of its
+  `mut` parameters and of `self`. `==` of dicts with float values compares
+  them as numbers, so `0.0` equals `-0.0`. A `mut` parameter of a
+  contracted callable alias proves that what is stored in it keeps the
+  contract. Each position `enumerate(xs, start)` counts in a contract must
+  fit an `int64`. Arithmetic and conversions on `int128`, `uint128`,
+  `intsize`, and `uintsize` are reported as not modeled (`AU5104`) instead
+  of being skipped.
 - Speed: a loop written `for j in range(i + 1, n)` reads and writes list
   elements without bounds checks when the outer loop proves the range, and
   a function that only calls small leaves keeps no frame record. `nbody`
