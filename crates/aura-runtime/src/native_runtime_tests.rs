@@ -34173,3 +34173,60 @@ fn a_str_element_box_has_its_words_where_it_lies() {
         unsafe { super::release_untracked_value(value) };
     }
 }
+
+#[test]
+fn a_boundary_leaves_with_one_word_for_its_count_and_a_generator_exit() {
+    let stack = super::DirectFrameStack::allocate();
+    // SAFETY: the stack was just allocated and nothing else uses it.
+    let frames = unsafe { &mut *stack.as_ptr() };
+
+    // Nested boundaries count up and down, and none finds an exit.
+    frames.enter_boundary();
+    frames.enter_boundary();
+    assert_eq!(frames.rust_boundary_depth(), 2);
+    assert!(!frames.leave_boundary());
+    assert!(!frames.leave_boundary());
+    assert_eq!(frames.rust_boundary_depth(), 0);
+
+    // A count that is zero already stays zero.
+    assert!(!frames.leave_boundary());
+    assert_eq!(frames.rust_boundary_depth(), 0);
+    assert!(!frames.generator_drop_exit_armed());
+
+    // An exit recorded inside a boundary is reported by every boundary
+    // that ends until one takes it, and the count goes on.
+    frames.enter_boundary();
+    frames.enter_boundary();
+    frames.set_generator_drop_exit_armed(true);
+    assert_eq!(frames.rust_boundary_depth(), 2);
+    assert!(frames.leave_boundary());
+    assert_eq!(frames.rust_boundary_depth(), 1);
+    assert!(frames.generator_drop_exit_armed());
+    frames.set_generator_drop_exit_armed(false);
+    assert!(!frames.leave_boundary());
+    assert_eq!(frames.rust_boundary_depth(), 0);
+
+    // A recovered call that restored a count of zero under an exit still
+    // reports the exit, and the count stays zero.
+    frames.set_generator_drop_exit_armed(true);
+    assert!(frames.leave_boundary());
+    assert_eq!(frames.rust_boundary_depth(), 0);
+    assert!(frames.generator_drop_exit_armed());
+    frames.enter_boundary();
+    assert_eq!(frames.rust_boundary_depth(), 1);
+    assert!(frames.leave_boundary());
+    frames.set_generator_drop_exit_armed(false);
+
+    // Setting the count keeps the exit's mark, and the other way round.
+    frames.set_rust_boundary_depth(3);
+    frames.set_generator_drop_exit_armed(true);
+    frames.set_rust_boundary_depth(5);
+    assert!(frames.generator_drop_exit_armed());
+    assert_eq!(frames.rust_boundary_depth(), 5);
+    frames.set_generator_drop_exit_armed(false);
+    assert_eq!(frames.rust_boundary_depth(), 5);
+    frames.set_rust_boundary_depth(0);
+
+    // SAFETY: nothing uses the stack afterwards.
+    unsafe { super::DirectFrameStack::free(stack) };
+}

@@ -6033,25 +6033,22 @@ struct RustBoundaryDepthGuard {
 // The boundary guards are plain loads and stores: debug builds of the
 // runtime run generated code too, and every runtime operation enters one.
 impl RustBoundaryDepthGuard {
-    #[inline]
+    #[inline(always)]
     fn enter() -> Self {
         let stack = aura_direct_frame_stack();
         // SAFETY: every task has a frame stack, which lives as long as the
         // task's runtime state, and only this task's thread touches it
-        // while the task runs. A depth never nears `usize::MAX`.
-        unsafe { (*stack).rust_boundary_depth += 1 };
+        // while the task runs.
+        unsafe { (*stack).enter_boundary() };
         Self { stack }
     }
-}
 
-impl Drop for RustBoundaryDepthGuard {
-    #[inline]
-    fn drop(&mut self) {
+    /// Ends the boundary's count, and returns whether a dropped generator
+    /// recorded an exit for it to propagate.
+    #[inline(always)]
+    fn leave(self) -> bool {
         // SAFETY: as in `enter`; a task never moves to another state.
-        let depth = unsafe { &mut (*self.stack).rust_boundary_depth };
-        if *depth > 0 {
-            *depth -= 1;
-        }
+        unsafe { (*self.stack).leave_boundary() }
     }
 }
 
@@ -6064,10 +6061,10 @@ pub(crate) fn record_generator_drop_exit(exit: crate::runtime_value::PendingGene
     // SAFETY: the stack belongs to the running task, and nothing else uses
     // it while that task runs.
     let stack = unsafe { &mut *stack.as_ptr() };
-    if stack.rust_boundary_depth == 0 || stack.generator_drop_exit_armed {
+    if stack.rust_boundary_depth() == 0 || stack.generator_drop_exit_armed() {
         return;
     }
-    stack.generator_drop_exit_armed = true;
+    stack.set_generator_drop_exit_armed(true);
     with_direct_task_runtime_state(|state| state.generator_drop_exit = Some(exit));
 }
 
@@ -6075,29 +6072,35 @@ pub(crate) fn record_generator_drop_exit(exit: crate::runtime_value::PendingGene
 fn take_generator_drop_exit() -> Option<crate::runtime_value::PendingGeneratorDropExit> {
     let stack = current_direct_frame_stack()?;
     // SAFETY: as in `record_generator_drop_exit`.
-    let armed = unsafe { &mut (*stack.as_ptr()).generator_drop_exit_armed };
-    if !std::mem::replace(armed, false) {
+    let stack = unsafe { &mut *stack.as_ptr() };
+    if !stack.generator_drop_exit_armed() {
         return None;
     }
+    stack.set_generator_drop_exit_armed(false);
     with_direct_task_runtime_state(|state| state.generator_drop_exit.take())
 }
 
 /// The runtime boundaries active on the current task's machine stack.
 fn current_rust_boundary_depth() -> usize {
     // SAFETY: as in `RustBoundaryDepthGuard::enter`.
-    unsafe { (*aura_direct_frame_stack()).rust_boundary_depth }
+    unsafe { (*aura_direct_frame_stack()).rust_boundary_depth() }
 }
 
 impl DirectTaskRuntimeState {
     fn rust_boundary_depth(&self) -> usize {
         // SAFETY: the state owns its frame stack.
-        unsafe { self.frames.as_ref().rust_boundary_depth }
+        unsafe { self.frames.as_ref().rust_boundary_depth() }
     }
 
-    fn rust_boundary_depth_mut(&mut self) -> &mut usize {
+    /// Sets the count of active runtime boundaries and returns the count
+    /// it replaces.
+    fn replace_rust_boundary_depth(&mut self, depth: usize) -> usize {
         // SAFETY: the state owns its frame stack, and `&mut self` excludes
         // other users on this thread.
-        unsafe { &mut (*self.frames.as_ptr()).rust_boundary_depth }
+        let frames = unsafe { &mut *self.frames.as_ptr() };
+        let previous = frames.rust_boundary_depth();
+        frames.set_rust_boundary_depth(depth);
+        previous
     }
 }
 
@@ -6122,9 +6125,7 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
     // the runtime run that code too. The failure paths are out of line.
     let depth_guard = RustBoundaryDepthGuard::enter();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-    // SAFETY: as in `RustBoundaryDepthGuard::enter`.
-    let drop_exit_armed = unsafe { (*depth_guard.stack).generator_drop_exit_armed };
-    drop(depth_guard);
+    let drop_exit_armed = depth_guard.leave();
     match outcome {
         Ok(value) => {
             if drop_exit_armed {
@@ -19859,11 +19860,11 @@ impl DirectGeneratorFrames {
                 &mut state.foreign_callback_failure,
                 &mut self.foreign_callback_failure,
             );
-            mem::swap(state.rust_boundary_depth_mut(), &mut self.boundary_depth);
+            self.boundary_depth = state.replace_rust_boundary_depth(self.boundary_depth);
             mem::swap(&mut state.generator_drop_exit, &mut self.drop_trap_exit);
             let armed = state.generator_drop_exit.is_some();
             // SAFETY: the state owns its frame stack.
-            unsafe { (*state.frames.as_ptr()).generator_drop_exit_armed = armed };
+            unsafe { (*state.frames.as_ptr()).set_generator_drop_exit_armed(armed) };
             state.refresh_frame_flags();
             state.refresh_stack_limit();
         });

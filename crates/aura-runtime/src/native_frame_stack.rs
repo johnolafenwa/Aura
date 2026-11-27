@@ -109,16 +109,87 @@ pub struct DirectFrameStack {
     /// changes no record, so generated code makes it.
     pop_guard: usize,
     /// The runtime boundaries (`task_runtime_boundary`) active on this
-    /// task's machine stack. Kept here, next to the task's frames, so a
-    /// boundary counts itself without looking the task's state up.
-    pub(super) rust_boundary_depth: usize,
-    /// Whether the task's runtime state holds an exit a dropped generator
-    /// recorded inside the current runtime boundary. Kept here so a
-    /// boundary that returns normally checks it without a lookup.
-    pub(super) generator_drop_exit_armed: bool,
+    /// task's machine stack, with [`BOUNDARY_EXIT_ARMED`] set while the
+    /// task's runtime state holds an exit a dropped generator recorded
+    /// inside the current runtime boundary. Kept here, next to the task's
+    /// frames, so a boundary counts itself without looking the task's
+    /// state up, and as one word, so a boundary that returns normally
+    /// leaves with one subtraction whose sign tells it of both the exit
+    /// and a count that was already zero.
+    pub(super) boundaries: usize,
 }
 
+/// The bits of [`DirectFrameStack::boundaries`] that say a dropped
+/// generator's exit waits for the current runtime boundary. They are the
+/// top two bits, which the count below them never reaches: with both set
+/// the word is negative, and stays negative when one is subtracted from a
+/// count of zero.
+pub(super) const BOUNDARY_EXIT_ARMED: usize = 0b11 << (usize::BITS - 2);
+
 impl DirectFrameStack {
+    /// The runtime boundaries active on this task's machine stack.
+    #[inline]
+    pub(super) fn rust_boundary_depth(&self) -> usize {
+        self.boundaries & !BOUNDARY_EXIT_ARMED
+    }
+
+    /// Sets the count of active runtime boundaries, as a recovered call
+    /// does when it changes the state that owns this stack.
+    #[inline]
+    pub(super) fn set_rust_boundary_depth(&mut self, depth: usize) {
+        self.boundaries = (self.boundaries & BOUNDARY_EXIT_ARMED) | (depth & !BOUNDARY_EXIT_ARMED);
+    }
+
+    /// Whether a dropped generator's exit waits for the current boundary.
+    #[inline]
+    pub(super) fn generator_drop_exit_armed(&self) -> bool {
+        self.boundaries & BOUNDARY_EXIT_ARMED != 0
+    }
+
+    /// Notes whether a dropped generator's exit waits for the current
+    /// boundary.
+    #[inline]
+    pub(super) fn set_generator_drop_exit_armed(&mut self, armed: bool) {
+        if armed {
+            self.boundaries |= BOUNDARY_EXIT_ARMED;
+        } else {
+            self.boundaries &= !BOUNDARY_EXIT_ARMED;
+        }
+    }
+
+    /// Counts one runtime boundary more.
+    #[inline(always)]
+    pub(super) fn enter_boundary(&mut self) {
+        // A depth never nears the exit's bits.
+        self.boundaries = self.boundaries.wrapping_add(1);
+    }
+
+    /// Counts one runtime boundary fewer, and returns whether a dropped
+    /// generator's exit waits for the boundary that just ended. The common
+    /// case, a count above zero and no exit, is one subtraction: its result
+    /// is negative exactly when the count was zero already or the exit's
+    /// bits are set.
+    #[inline(always)]
+    pub(super) fn leave_boundary(&mut self) -> bool {
+        let left = self.boundaries.wrapping_sub(1);
+        self.boundaries = left;
+        (left as isize) < 0 && self.leave_marked_boundary()
+    }
+
+    /// [`DirectFrameStack::leave_boundary`] for a word whose subtraction
+    /// came out negative. A count that was zero stays zero, and an exit's
+    /// bits stay set until the boundary takes the exit.
+    #[cold]
+    #[inline(never)]
+    fn leave_marked_boundary(&mut self) -> bool {
+        // Undo the subtraction, then redo it on the count alone.
+        let before = self.boundaries.wrapping_add(1);
+        let armed = before & BOUNDARY_EXIT_ARMED != 0;
+        let depth = (before & !BOUNDARY_EXIT_ARMED).saturating_sub(1);
+        self.boundaries = depth | if armed { BOUNDARY_EXIT_ARMED } else { 0 };
+        armed
+    }
+
     /// An empty stack at a fixed address, which [`DirectFrameStack::free`]
     /// releases.
     pub(super) fn allocate() -> NonNull<Self> {
@@ -138,8 +209,7 @@ impl DirectFrameStack {
             inline: [0; DIRECT_FRAME_STACK_INLINE_ENTRIES],
             owned_values: DirectOwnedValues::new(),
             pop_guard: 0,
-            rust_boundary_depth: 0,
-            generator_drop_exit_armed: false,
+            boundaries: 0,
         })));
         // SAFETY: the box was just leaked, so nothing else refers to it.
         let header = unsafe { &mut *stack.as_ptr() };
