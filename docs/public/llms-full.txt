@@ -3974,8 +3974,8 @@ Runtime diagnostics include source context where possible.
 
 By default, task execution uses the available parallelism that the host
 reports. The provisional `AURA_WORKERS` environment override accepts a
-positive integer, including a count larger than the host's available-core
-count.
+positive integer up to 4096, including a count larger than the host's
+available-core count.
 
 - `AURA_WORKERS=4 aura run app.au` selects four pinned task workers.
 - `AURA_WORKERS=1` keeps single-worker cooperative execution through the same
@@ -8786,6 +8786,9 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 ### Networking
 
 - TLS handshakes have a 10-second hard cap, even when the caller supplies no shorter timeout.
+- A `WebSocketListener` gives each client 10 seconds to finish its handshake. A client whose handshake fails or stalls is dropped, and `accept` waits for the next client.
+- An `HttpListener` gives each client 30 seconds to send its request, and `respond_text`/`respond_bytes` 30 seconds to write the response. A client that sends a malformed request gets 400, 413 or 431, and one that asks for a transfer coding other than `chunked` gets 501; either way, and when a client disconnects or runs out of time, `accept` closes that client and waits for the next one. It fails only for its own timeout, cancellation or a listener error. One slow client still delays the clients behind it by up to its 30 seconds.
+- `websocket_connect` accepts only `ws://` and `wss://` URLs. Ping and pong frames are answered and skipped by `recv_text` and `recv_bytes`, which return `None` only at a close.
 - TLS APIs require PEM certificate and key assets.
 - The `http` client supports HTTP/1.1 over `http://` and validated `https://`, with streamed bodies, redirects, kept connections, gzip and deflate decoding, and a custom CA file. HTTP/2, proxies, cookies, and streamed request bodies are not implemented.
 - The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.17 contract.
@@ -9855,7 +9858,8 @@ long call chains are shortened in the diagnostic.
 configuration. `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and
 `AURA_BLOCKING_QUEUE_CAPACITY` each require a positive decimal integer. Aura
 rejects empty, zero, signed, whitespace-padded, non-decimal, non-Unicode, and
-overflowing values before user code runs. The diagnostic names the setting and
+overflowing values before user code runs, and an `AURA_WORKERS` count above
+4096. The diagnostic names the setting and
 renders the supplied value, using a lossy display for a non-Unicode value.
 Failure to create the configured blocking-I/O worker set also reports
 `AU4006`. The runtime does not fall back to fewer workers or to synchronous
@@ -18721,8 +18725,10 @@ The client follows statuses 301, 302, 303, 307, and 308 that carry a
 the next request is a `GET` without a body. After 307 and 308 the method
 and body are kept. When the redirect leads to another scheme, host, or
 port, the client drops the `Authorization`, `Cookie`, and
-`Proxy-Authorization` headers. A request that meets more than
-`max_redirects` redirects fails with `io.Error.Other`.
+`Proxy-Authorization` headers. A redirect from `https://` to `http://`
+fails with `io.Error.InvalidData`, so nothing of a secure request is sent
+in clear text. A request that meets more than `max_redirects` redirects
+fails with `io.Error.Other`.
 
 ## Compression
 
@@ -18735,7 +18741,12 @@ caller sets `Accept-Encoding`, the body is returned as sent.
 
 - The client speaks HTTP/1.1. It does not speak HTTP/2 or HTTP/3.
 - It does not use proxies and does not keep cookies.
-- A request body is sent whole. It cannot be streamed.
+- A request body is sent whole. It cannot be streamed. A caller's
+  `Content-Length` header must match the body, a request may name one
+  `Host` and one `Content-Length`, and a `Transfer-Encoding` header fails
+  with `io.Error.InvalidInput`.
+- A response may send at most 32 interim (1xx) responses and 64 KiB of
+  chunked trailer fields, and a server-sent event at most 64 MiB of data.
 - A response head is limited to 256 KiB and 64 headers, and one line of a
   body to 64 MiB.
 - Server-sent event lines that end with a lone `\r` are not supported.

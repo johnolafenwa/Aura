@@ -82,8 +82,8 @@ Runtime diagnostics include source context where possible.
 
 By default, task execution uses the available parallelism that the host
 reports. The provisional `AURA_WORKERS` environment override accepts a
-positive integer, including a count larger than the host's available-core
-count.
+positive integer up to 4096, including a count larger than the host's
+available-core count.
 
 - `AURA_WORKERS=4 aura run app.au` selects four pinned task workers.
 - `AURA_WORKERS=1` keeps single-worker cooperative execution through the same
