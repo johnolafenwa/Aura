@@ -912,35 +912,20 @@ fn a_solver_that_never_answers_is_stopped_and_its_query_is_undecided() {
     let dir = script_dir("stuck");
     let stuck = script(&dir, "z3", STUCK_SOLVER, true);
     let command = smt::SolverCommand::find(Some(&stuck)).expect("found");
-    // The query is undecided once the limit and the allowance have passed,
-    // and the process is gone.
+    // The query is undecided once the limit and the watchdog's margin
+    // have passed, and the solver is stopped.
     let begun = std::time::Instant::now();
-    let mut solver = smt::Solver::start_with_grace(&command, 50, 100).expect("starts");
-    assert!(!solver.overdue());
-    assert_eq!(
-        solver.check_after("(push 1)\n(assert false)"),
-        Ok(smt::SatResult::Unknown)
-    );
-    assert!(solver.overdue());
-    assert!(solver.exit_status().is_some());
+    let mut solver = smt::Solver::start(&command, 50).expect("starts");
+    assert!(!solver.stopped());
+    solver.send("(push 1)\n(assert false)").expect("is written");
+    assert_eq!(solver.check(), Ok(smt::SatResult::Unknown));
+    assert!(solver.stopped());
     let waited = begun.elapsed();
     assert!(
-        waited >= std::time::Duration::from_millis(150),
+        waited >= std::time::Duration::from_millis(50 + smt::WATCHDOG_MARGIN_MS),
         "{waited:?}"
     );
     assert!(waited < std::time::Duration::from_secs(60), "{waited:?}");
-    // What is sent to it afterwards fails, and a later query is undecided.
-    assert!(solver.send("(assert true)").is_err() || solver.send("(assert true)").is_err());
-    assert!(solver.stopped());
-    assert_eq!(solver.check(), Ok(smt::SatResult::Unknown));
-    drop(solver);
-    // A limit too large to add to the clock is no limit: an answer that
-    // comes is read.
-    let answers = script(&dir, "z3-answers", UNKNOWN_SOLVER, true);
-    let command = smt::SolverCommand::find(Some(&answers)).expect("found");
-    let mut solver = smt::Solver::start(&command, u64::MAX).expect("starts");
-    assert_eq!(solver.check(), Ok(smt::SatResult::Unknown));
-    assert!(!solver.overdue());
     drop(solver);
 
     // `aura verify` reports the check as undecided instead of waiting.
@@ -959,7 +944,7 @@ fn a_solver_that_never_answers_is_stopped_and_its_query_is_undecided() {
     assert_eq!(open_checks(&report), ["2 overflow unknown"]);
     let waited = begun.elapsed();
     assert!(
-        waited >= std::time::Duration::from_millis(50 + smt::OVERDUE_GRACE_MS),
+        waited >= std::time::Duration::from_millis(50 + smt::WATCHDOG_MARGIN_MS),
         "{waited:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);

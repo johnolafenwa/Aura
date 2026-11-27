@@ -7,8 +7,8 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 /// The environment variable that names the solver to run.
@@ -60,6 +60,31 @@ impl SolverCommand {
             .ok_or_else(|| {
                 format!("no SMT solver found; install Z3 or cvc5 on PATH, or set {SOLVER_ENV} to its path")
             })
+    }
+
+    /// The second solver of a cross-check: `explicit` when given, else the
+    /// other one of Z3 and cvc5, found on `PATH`.
+    pub fn second(&self, explicit: Option<&str>) -> Result<Self, String> {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        self.second_in(explicit, &path)
+    }
+
+    /// `second` with `PATH` given.
+    pub fn second_in(
+        &self,
+        explicit: Option<&str>,
+        path: &std::ffi::OsStr,
+    ) -> Result<Self, String> {
+        if explicit.is_some() {
+            return Self::find_in(explicit, None, path);
+        }
+        let other = match self.kind {
+            SolverKind::Z3 => "cvc5",
+            SolverKind::Cvc5 => "z3",
+        };
+        Self::find_in(Some(other), None, path).map_err(|_| {
+            format!("`--cross-check` asks a second solver, and `{other}` was not found on PATH; install it, or name one with `--cross-solver <path>`")
+        })
     }
 
     /// The solver's version line, for reports and the proof cache key.
@@ -115,76 +140,39 @@ pub enum SatResult {
     Unknown,
 }
 
-/// How long past its time limit a solver may keep the verifier waiting
-/// before it is stopped, in milliseconds. A solver's own limit covers a
-/// query's search and nothing else: Z3 5.3.3 can spend unbounded time in a
-/// `push`, where its limit is not in force. The allowance is for a busy
-/// machine, where a solver that keeps its limit still answers late.
-pub const OVERDUE_GRACE_MS: u64 = 3_000;
-
-/// When the solver must have answered, for the thread that stops it.
-struct Watch {
-    /// The instant after which the solver is stopped; `None` while the
-    /// verifier is not waiting for it.
-    deadline: Option<Instant>,
-    /// Whether the solver was stopped for passing a deadline.
-    overdue: bool,
-    /// Whether the solver is being dropped.
-    done: bool,
-}
-
-/// Stops `child` whenever a deadline in `watch` passes, until `done`. It
-/// runs on a thread of its own for as long as the solver is kept.
-fn stop_when_overdue(watch: &(Mutex<Watch>, Condvar), child: &Mutex<Child>) {
-    let (watch, wake) = watch;
-    let mut state = watch.lock().expect("the solver watch lock");
-    while !state.done {
-        state = match state.deadline {
-            None => wake.wait(state).expect("the solver watch lock"),
-            Some(deadline) => {
-                let now = Instant::now();
-                if now < deadline {
-                    wake.wait_timeout(state, deadline - now)
-                        .expect("the solver watch lock")
-                        .0
-                } else {
-                    let _ = child.lock().expect("the solver process lock").kill();
-                    state.deadline = None;
-                    state.overdue = true;
-                    state
-                }
-            }
-        };
-    }
-}
+/// How much longer than its own time limit a solver may take to answer
+/// before it is stopped: Z3 does not always keep to its limit on string
+/// queries.
+pub const WATCHDOG_MARGIN_MS: u64 = 2_000;
 
 /// A running solver process.
 pub struct Solver {
-    child: Arc<Mutex<Child>>,
+    child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// The lines the solver prints, read on a thread of their own so a
+    /// solver that never answers cannot block the verifier.
+    lines: Receiver<std::io::Result<String>>,
+    /// How long one answer may take before the process is killed.
+    patience: Duration,
     marker: u64,
+    /// The answer being read, when a command was sent and its answer is
+    /// not complete yet.
+    pending: Option<Pending>,
     /// Whether a write to the process or a read from it found it gone.
     stopped: bool,
-    /// The longest the verifier waits for the process at one step.
-    patience: Duration,
-    watch: Arc<(Mutex<Watch>, Condvar)>,
+}
+
+/// An answer being read: the line that ends it, when the watchdog stops
+/// waiting for it, and what came so far.
+struct Pending {
+    marker: String,
+    deadline: Instant,
+    output: String,
 }
 
 impl Solver {
-    /// Starts `command` with a per-query limit of `timeout_ms`. A solver
-    /// that keeps the verifier waiting `OVERDUE_GRACE_MS` past that limit
-    /// is stopped, and its query is undecided.
+    /// Starts `command` with a per-query limit of `timeout_ms`.
     pub fn start(command: &SolverCommand, timeout_ms: u64) -> Result<Self, String> {
-        Self::start_with_grace(command, timeout_ms, OVERDUE_GRACE_MS)
-    }
-
-    /// `start` with the allowance past the time limit given.
-    pub fn start_with_grace(
-        command: &SolverCommand,
-        timeout_ms: u64,
-        grace_ms: u64,
-    ) -> Result<Self, String> {
         let mut process = Command::new(&command.program);
         match command.kind {
             SolverKind::Z3 => {
@@ -211,28 +199,27 @@ impl Solver {
                 )
             })?;
         let stdin = child.stdin.take().expect("piped solver stdin");
-        let stdout = BufReader::new(child.stdout.take().expect("piped solver stdout"));
-        let child = Arc::new(Mutex::new(child));
-        let watch = Arc::new((
-            Mutex::new(Watch {
-                deadline: None,
-                overdue: false,
-                done: false,
-            }),
-            Condvar::new(),
-        ));
-        {
-            let (watch, child) = (Arc::clone(&watch), Arc::clone(&child));
-            std::thread::spawn(move || stop_when_overdue(&watch, &child));
-        }
+        let mut stdout = BufReader::new(child.stdout.take().expect("piped solver stdout"));
+        let (sender, lines) = std::sync::mpsc::channel();
+        // The thread ends at the end of the output, which killing the
+        // process brings, or once nobody listens. A line that is not
+        // text is reported and the reading goes on.
+        std::thread::spawn(move || loop {
+            let mut line = String::new();
+            let read = stdout.read_line(&mut line);
+            let more = !matches!(read, Ok(0));
+            if sender.send(read.map(|_| line)).is_err() || !more {
+                break;
+            }
+        });
         let mut solver = Self {
             child,
             stdin,
-            stdout,
+            lines,
+            patience: Duration::from_millis(timeout_ms + WATCHDOG_MARGIN_MS),
             marker: 0,
+            pending: None,
             stopped: false,
-            patience: Duration::from_millis(timeout_ms.saturating_add(grace_ms)),
-            watch,
         };
         let mut setup = String::from("(set-option :print-success false)\n");
         if command.kind == SolverKind::Z3 {
@@ -244,29 +231,8 @@ impl Solver {
         Ok(solver)
     }
 
-    /// Runs `step`, which waits for the process, and stops the process if
-    /// the step outlasts the verifier's patience. A limit too far ahead to
-    /// name is no limit.
-    fn within_patience<T>(&mut self, step: impl FnOnce(&mut Self) -> T) -> T {
-        let deadline = Instant::now().checked_add(self.patience);
-        self.watch.0.lock().expect("the solver watch lock").deadline = deadline;
-        self.watch.1.notify_one();
-        let result = step(self);
-        self.watch.0.lock().expect("the solver watch lock").deadline = None;
-        result
-    }
-
-    /// Whether the process was stopped for keeping the verifier waiting.
-    pub fn overdue(&self) -> bool {
-        self.watch.0.lock().expect("the solver watch lock").overdue
-    }
-
     /// Writes commands that print nothing.
     pub fn send(&mut self, text: &str) -> Result<(), String> {
-        self.within_patience(|solver| solver.write(text))
-    }
-
-    fn write(&mut self, text: &str) -> Result<(), String> {
         let written = self
             .stdin
             .write_all(format!("{text}\n").as_bytes())
@@ -293,29 +259,61 @@ impl Solver {
     }
 
     /// Sends `text`, then reads everything the solver prints for it.
-    fn exchange(&mut self, text: &str) -> Result<String, String> {
-        self.within_patience(|solver| solver.exchange_unwatched(text))
+    /// `None` when the solver did not answer in time: the watchdog then
+    /// kills it, and it counts as stopped.
+    fn exchange(&mut self, text: &str) -> Result<Option<String>, String> {
+        self.begin(text)?;
+        loop {
+            if let Some(answer) = self.poll(self.patience)? {
+                return Ok(answer);
+            }
+        }
     }
 
-    fn exchange_unwatched(&mut self, text: &str) -> Result<String, String> {
+    /// Sends `text` and a marker to wait for, without waiting.
+    fn begin(&mut self, text: &str) -> Result<(), String> {
         self.marker += 1;
         let marker = format!("aura-done-{}", self.marker);
-        self.write(&format!("{text}\n(echo \"{marker}\")"))?;
-        let mut output = String::new();
+        self.send(&format!("{text}\n(echo \"{marker}\")"))?;
+        self.pending = Some(Pending {
+            marker,
+            deadline: Instant::now() + self.patience,
+            output: String::new(),
+        });
+        Ok(())
+    }
+
+    /// Reads the answer `begin` asked for, for at most `wait`. `None` while
+    /// it is not complete, `Some(None)` when the watchdog stopped the
+    /// solver, and `Some(Some(answer))` once it is.
+    fn poll(&mut self, wait: Duration) -> Result<Option<Option<String>>, String> {
+        let mut pending = self.pending.take().expect("an answer was asked for");
+        let until = pending.deadline.min(Instant::now() + wait);
         loop {
-            let mut line = String::new();
-            let read = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|error| format!("could not read the SMT solver's answer: {error}"))?;
-            if read == 0 {
+            let left = until.saturating_duration_since(Instant::now());
+            let line = match self.lines.recv_timeout(left) {
+                Err(RecvTimeoutError::Timeout) if Instant::now() < pending.deadline => {
+                    self.pending = Some(pending);
+                    return Ok(None);
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    let _ = self.child.kill();
+                    self.stopped = true;
+                    return Ok(Some(None));
+                }
+                // The reader stops at the end of the output.
+                read => read
+                    .unwrap_or_else(|_| Ok(String::new()))
+                    .map_err(|error| format!("could not read the SMT solver's answer: {error}"))?,
+            };
+            if line.is_empty() {
                 let ended = self.ended();
                 return Err(format!("the SMT solver exited before answering{ended}"));
             }
-            if line.trim().trim_matches('"') == marker {
-                return Ok(output);
+            if line.trim().trim_matches('"') == pending.marker {
+                return Ok(Some(Some(pending.output)));
             }
-            output.push_str(&line);
+            pending.output.push_str(&line);
         }
     }
 
@@ -324,12 +322,7 @@ impl Solver {
     /// closed its output is given a moment to finish exiting.
     pub fn exit_status(&mut self) -> Option<std::process::ExitStatus> {
         for _ in 0..50 {
-            let waited = self
-                .child
-                .lock()
-                .expect("the solver process lock")
-                .try_wait();
-            match waited {
+            match self.child.try_wait() {
                 Ok(Some(status)) => return Some(status),
                 Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
                 Err(_) => return None,
@@ -340,36 +333,48 @@ impl Solver {
 
     /// Runs `(check-sat)`.
     pub fn check(&mut self) -> Result<SatResult, String> {
-        self.check_after("")
+        let answer = self.exchange("(check-sat)")?;
+        verdict(answer)
     }
 
-    /// Sends `query`, commands that print nothing, then runs `(check-sat)`.
-    /// A solver stopped for not taking the query or not answering it in
-    /// time has not decided it.
-    pub fn check_after(&mut self, query: &str) -> Result<SatResult, String> {
-        let answer = match self.exchange(&format!("{query}\n(check-sat)")) {
-            Ok(answer) => answer,
-            Err(_) if self.overdue() => return Ok(SatResult::Unknown),
-            Err(error) => return Err(error),
-        };
-        let answer = answer.trim();
-        // A query stopped at the time limit answers `unknown`, after an
-        // error that says so. Z3's limit can also cancel a `push` or an
-        // `assert` sent before the query, under load, and then it answers
-        // for a different set of facts: that answer is not trusted either.
-        if answer.contains("canceled") {
-            return Ok(SatResult::Unknown);
-        }
-        if answer.contains("(error") {
-            return Err(format!("the SMT solver refused a query: {answer}"));
-        }
-        Ok(match answer.lines().last().map(str::trim) {
-            Some("unsat") => SatResult::Unsat,
-            Some("sat") => SatResult::Sat,
-            _ => SatResult::Unknown,
-        })
+    /// Starts `(check-sat)` without waiting for the answer, which
+    /// [`Solver::poll_check`] reads.
+    pub fn start_check(&mut self) -> Result<(), String> {
+        self.begin("(check-sat)")
     }
 
+    /// The answer to the query [`Solver::start_check`] started, once it
+    /// is there: waits for it at most `wait`.
+    pub fn poll_check(&mut self, wait: Duration) -> Result<Option<SatResult>, String> {
+        self.poll(wait)?.map(verdict).transpose()
+    }
+}
+
+/// What the answer to a `(check-sat)` says. `None` is no answer: the
+/// watchdog stopped the solver.
+fn verdict(answer: Option<String>) -> Result<SatResult, String> {
+    let Some(answer) = answer else {
+        return Ok(SatResult::Unknown);
+    };
+    let answer = answer.trim();
+    // A query stopped at the time limit answers `unknown`, after an
+    // error that says so. Z3's limit can also cancel a `push` or an
+    // `assert` sent before the query, under load, and then it answers
+    // for a different set of facts: that answer is not trusted either.
+    if answer.contains("canceled") {
+        return Ok(SatResult::Unknown);
+    }
+    if answer.contains("(error") {
+        return Err(format!("the SMT solver refused a query: {answer}"));
+    }
+    Ok(match answer.lines().last().map(str::trim) {
+        Some("unsat") => SatResult::Unsat,
+        Some("sat") => SatResult::Sat,
+        _ => SatResult::Unknown,
+    })
+}
+
+impl Solver {
     /// The model's value of each term, after a `sat` answer, as the solver
     /// printed them. `None` when the solver gives no model.
     pub fn values(&mut self, terms: &[String]) -> Option<Vec<String>> {
@@ -378,7 +383,7 @@ impl Solver {
         }
         let answer = self
             .exchange(&format!("(get-value ({}))", terms.join(" ")))
-            .ok()?;
+            .ok()??;
         if answer.contains("(error") {
             return None;
         }
@@ -390,11 +395,8 @@ impl Drop for Solver {
     fn drop(&mut self) {
         let _ = self.stdin.write_all(b"(exit)\n");
         let _ = self.stdin.flush();
-        self.watch.0.lock().expect("the solver watch lock").done = true;
-        self.watch.1.notify_one();
-        let mut child = self.child.lock().expect("the solver process lock");
-        let _ = child.kill();
-        let _ = child.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

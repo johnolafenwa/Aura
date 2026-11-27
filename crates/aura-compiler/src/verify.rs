@@ -33,6 +33,8 @@ mod guard;
 mod integers;
 #[path = "verify_raw_memory.rs"]
 mod raw_memory;
+#[path = "verify_recovery.rs"]
+mod recovery;
 #[path = "verify_shapes.rs"]
 mod shapes;
 #[path = "verify_smt.rs"]
@@ -155,6 +157,19 @@ pub struct Report {
     pub must_verify: Vec<MustVerify>,
     /// The imported modules whose functions this run did not verify.
     pub unchecked_modules: Vec<String>,
+    /// With [`Options::cross_check`], the checks the two solvers disagree
+    /// about. Each is undecided in `obligations`.
+    pub disputes: Vec<Dispute>,
+}
+
+/// A check the first solver proved and the second solver of a cross-check
+/// found inputs to break.
+#[derive(Clone, Debug)]
+pub struct Dispute {
+    /// The check's position in [`Report::obligations`].
+    pub obligation: usize,
+    /// The second solver's program.
+    pub second: String,
 }
 
 impl Report {
@@ -169,6 +184,15 @@ impl Report {
     /// or their function's contract can never hold.
     pub fn failed(&self) -> usize {
         self.count(|status| matches!(status, Status::Failed { .. }))
+    }
+
+    /// The second solver that found inputs breaking obligation `index`,
+    /// which the first solver proved.
+    pub fn disputed_by(&self, index: usize) -> Option<&str> {
+        self.disputes
+            .iter()
+            .find(|dispute| dispute.obligation == index)
+            .map(|dispute| dispute.second.as_str())
     }
 
     /// How many checks depend on a step the verifier does not model.
@@ -198,8 +222,25 @@ impl Report {
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         self.obligations
             .iter()
-            .filter_map(|obligation| {
+            .enumerate()
+            .filter_map(|(index, obligation)| {
                 let what = &obligation.message;
+                if let Some(second) = self.disputed_by(index) {
+                    return Some(
+                        Diagnostic::coded_at(
+                            "AU5123",
+                            obligation.span,
+                            format!("solvers disagree about {what}"),
+                        )
+                        .with_note(format!(
+                            "in `{}` ({} check): {} proved it, and `{second}` found inputs that break it",
+                            obligation.function,
+                            obligation.kind.name(),
+                            self.solver
+                        ))
+                        .with_help("one of the solvers is wrong here, so the check counts as undecided"),
+                    );
+                }
                 let diagnostic = match &obligation.status {
                     Status::Proved => return None,
                     Status::Failed { .. } if obligation.kind == ObligationKind::Satisfiable => {
@@ -272,6 +313,11 @@ pub struct Options {
     /// The functions that must verify completely, by the name a report
     /// shows. One with a check that is not proved is reported as `AU5122`.
     pub must_verify: Vec<String>,
+    /// Ask a second solver about every check the first one proves.
+    pub cross_check: bool,
+    /// The second solver of a cross-check; the other one of Z3 and cvc5
+    /// when `None`.
+    pub cross_solver: Option<String>,
 }
 
 impl Default for Options {
@@ -284,6 +330,8 @@ impl Default for Options {
             cache_dir: None,
             prove_sites: false,
             must_verify: Vec::new(),
+            cross_check: false,
+            cross_solver: None,
         }
     }
 }
@@ -1338,6 +1386,14 @@ pub fn verify_module(
         .map_err(|message| Diagnostic::coded("AU5103", message))?;
     let cx = VerifyContext::new(program, module);
     let version = command.version();
+    let second = match options.cross_check {
+        true => Some(
+            command
+                .second(options.cross_solver.as_deref())
+                .map_err(|message| Diagnostic::coded("AU5103", message))?,
+        ),
+        false => None,
+    };
     let mut report = Report {
         solver: format!("{} ({version})", command.program.display()),
         ..Report::default()
@@ -1345,6 +1401,7 @@ pub fn verify_module(
     let mut merged: BTreeMap<(String, (usize, usize), ObligationKind, String), ObligationReport> =
         BTreeMap::new();
     let mut proved_sites = BTreeSet::new();
+    let mut disputed_keys = BTreeSet::new();
     let proof_cache = options
         .cache_dir
         .as_deref()
@@ -1354,6 +1411,7 @@ pub fn verify_module(
     let mut solver: Option<smt::Solver> = None;
     let mut rough_solver: Option<smt::Solver> = None;
     let mut sample_solver: Option<smt::Solver> = None;
+    let mut second_solver: Option<smt::Solver> = None;
     let trace = options.trace;
     let raw_effects = raw_memory::affected_functions(module);
     // The module body is verified like a function. A build that removes
@@ -1484,7 +1542,7 @@ pub fn verify_module(
         let cache = proof_cache
             .as_ref()
             .map(|proof_cache| (proof_cache, cache_key(&version, options, &exec)));
-        let statuses = match cache
+        let mut statuses = match cache
             .as_ref()
             .and_then(|(proof_cache, key)| proof_cache.read(key, exec.obligations.len()))
         {
@@ -1511,7 +1569,15 @@ pub fn verify_module(
                 } else {
                     Some(Lane::new(&mut sample_solver, &sample_start))
                 };
-                let statuses = solve(main_lane, rough, sample, &exec, trace)
+                // Only Z3 takes a new limit between queries.
+                let retry = (command.kind == smt::SolverKind::Z3
+                    && options.timeout_ms > QUICK_TIMEOUT_MS)
+                    .then_some(Retry {
+                        quick_ms: QUICK_TIMEOUT_MS,
+                        full_ms: options.timeout_ms,
+                        start: &start,
+                    });
+                let statuses = solve(main_lane, rough, sample, retry.as_ref(), &exec, trace)
                     .map_err(|message| Diagnostic::coded("AU5103", message))?;
                 // An answer the solver gave up on depends on the machine's
                 // speed, so it is solved again next time.
@@ -1523,9 +1589,21 @@ pub fn verify_module(
                 statuses
             }
         };
+        // The cache holds the first solver's answers, so a cross-check
+        // asks the second one each time.
+        let disputed = match &second {
+            Some(second) => {
+                let start = || smt::Solver::start(second, options.timeout_ms);
+                let lane = Lane::new(&mut second_solver, &start);
+                cross_check(lane, &exec, &mut statuses, trace)
+                    .map_err(|message| Diagnostic::coded("AU5103", message))?
+            }
+            None => vec![false; statuses.len()],
+        };
         // A site is proved only when every path that reaches it is.
         let mut sites: BTreeMap<(usize, usize), bool> = BTreeMap::new();
-        for (obligation, status) in exec.obligations.iter().zip(statuses) {
+        for ((obligation, status), disputed) in exec.obligations.iter().zip(statuses).zip(disputed)
+        {
             erased_open |= obligation.erased && status != Status::Proved;
             if is_erased_only {
                 continue;
@@ -1554,6 +1632,9 @@ pub fn verify_module(
                 obligation.kind,
                 obligation.message.clone(),
             );
+            if disputed {
+                disputed_keys.insert(key.clone());
+            }
             match merged.get_mut(&key) {
                 Some(existing) => {
                     if status.rank() > existing.status.rank() {
@@ -1582,6 +1663,17 @@ pub fn verify_module(
                     .filter(|(_, proved)| *proved)
                     .map(|((block, position), _)| (function.name.clone(), block, position)),
             );
+        }
+    }
+    // A check another path fails stays failed.
+    for (index, (key, obligation)) in merged.iter().enumerate() {
+        if disputed_keys.contains(key) && obligation.status == Status::Unknown {
+            report.disputes.push(Dispute {
+                obligation: index,
+                second: second
+                    .as_ref()
+                    .map_or(String::new(), |second| second.program.display().to_string()),
+            });
         }
     }
     report.obligations = merged.into_values().collect();
@@ -1817,9 +1909,11 @@ impl<'a> Lane<'a> {
                 Err(message) => return Err(message),
             }
         };
-        // A solver that died after answering is dropped like one that
-        // answered `unknown`: the answer it gave stands.
-        if status == Status::Unknown || self.solver()?.send("(pop 1)").is_err() {
+        // A solver that died after answering, or that the watchdog
+        // stopped while it gave a model, is dropped like one that answered
+        // `unknown`: the answer it gave stands.
+        let solver = self.solver()?;
+        if status == Status::Unknown || solver.stopped() || solver.send("(pop 1)").is_err() {
             *self.slot = None;
         }
         Ok(status)
@@ -1842,32 +1936,183 @@ fn ask_once(
     query: &str,
     exec: Option<&exec::Exec<'_>>,
 ) -> std::result::Result<Status, String> {
-    Ok(match solver.check_after(query)? {
+    solver.send(query)?;
+    Ok(match solver.check()? {
         smt::SatResult::Unsat => Status::Proved,
         smt::SatResult::Unknown => Status::Unknown,
-        smt::SatResult::Sat => {
-            let counterexample = match exec {
-                Some(exec) => {
-                    let terms: Vec<String> =
-                        exec.inputs.iter().map(|(_, term)| term.clone()).collect();
-                    solver
-                        .values(&terms)
-                        .map(|values| {
-                            exec.inputs
-                                .iter()
-                                .zip(values)
-                                .map(|((name, _), value)| {
-                                    (name.clone(), exec.input_text(name, smt::render_int(&value)))
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default()
-                }
+        smt::SatResult::Sat => Status::Failed {
+            counterexample: match exec {
+                Some(exec) => counterexample(solver, exec),
                 None => Vec::new(),
-            };
-            Status::Failed { counterexample }
-        }
+            },
+        },
     })
+}
+
+/// The model's values of `exec`'s inputs, after `sat`. Empty when the
+/// solver gives no model.
+fn counterexample(solver: &mut smt::Solver, exec: &exec::Exec<'_>) -> Vec<(String, String)> {
+    let terms: Vec<String> = exec.inputs.iter().map(|(_, term)| term.clone()).collect();
+    solver
+        .values(&terms)
+        .map(|values| {
+            exec.inputs
+                .iter()
+                .zip(values)
+                .map(|((name, _), value)| {
+                    (name.clone(), exec.input_text(name, smt::render_int(&value)))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// How a check that Z3 does not decide quickly is asked again.
+///
+/// Z3 answers a query in a scope with the solver it keeps between queries,
+/// which does not simplify the problem first. Many checks it gives up on
+/// that way it decides in a moment as one problem on its own, with every
+/// fact restated in a fresh process; a few it decides only in a scope. So
+/// each check first gets a short limit in a scope, and one still open is
+/// then asked both ways at once with the full limit. The first answer
+/// that decides it wins.
+struct Retry<'a> {
+    /// The limit of the first attempt, in milliseconds.
+    quick_ms: u64,
+    /// The limit of a check, in milliseconds.
+    full_ms: u64,
+    /// Starts a fresh solver with the full limit.
+    start: &'a dyn Fn() -> std::result::Result<smt::Solver, String>,
+}
+
+impl Retry<'_> {
+    /// The check `obligation`, whose query is `query` in the scope that
+    /// `scope` sets up, asked again in two fresh solvers: as one problem,
+    /// and in a scope. A solver that fails drops out of the race.
+    fn again(
+        &self,
+        scope: &str,
+        exec: &exec::Exec<'_>,
+        obligation: &exec::Obligation,
+        query: &str,
+    ) -> Status {
+        let mut problem = String::new();
+        for decl in &exec.decls {
+            problem.push_str(decl);
+            problem.push('\n');
+        }
+        problem.push_str(&shared_facts(exec, 0, obligation.facts));
+        problem.push_str(&query["(push 1)\n".len()..]);
+        let scoped = format!("{scope}\n{query}");
+        let mut racers: Vec<smt::Solver> = [problem, scoped]
+            .iter()
+            .filter_map(|text| {
+                let mut solver = (self.start)().ok()?;
+                solver.send(text).ok()?;
+                solver.start_check().ok()?;
+                Some(solver)
+            })
+            .collect();
+        while !racers.is_empty() {
+            let mut index = 0;
+            while index < racers.len() {
+                match racers[index].poll_check(RACE_POLL) {
+                    Ok(None) => index += 1,
+                    Ok(Some(smt::SatResult::Unsat)) => return Status::Proved,
+                    Ok(Some(smt::SatResult::Sat)) => {
+                        return Status::Failed {
+                            counterexample: counterexample(&mut racers[index], exec),
+                        }
+                    }
+                    _ => {
+                        racers.remove(index);
+                    }
+                }
+            }
+        }
+        Status::Unknown
+    }
+}
+
+/// How long a race of solvers waits on one before it looks at the other.
+const RACE_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// The time limit of the first attempt at a check (see [`Retry`]).
+const QUICK_TIMEOUT_MS: u64 = 1_000;
+
+/// The query of the check `obligation`, whose goal is `goal`: a scope with
+/// the facts only this check reads and the goal's negation.
+fn check_query(
+    exec: &exec::Exec<'_>,
+    described: &BTreeMap<&str, BTreeSet<usize>>,
+    obligation: &exec::Obligation,
+    goal: &str,
+) -> String {
+    format!(
+        "(push 1)\n{}{}(assert {})\n",
+        exec.lazy_asserts(obligation),
+        exec.descriptions(described, obligation, goal),
+        exec::and(&obligation.pc, &exec::not(goal))
+    )
+}
+
+/// The facts `exec` assumes from fact `from` up to fact `to` that every
+/// later check reads, as assertions.
+fn shared_facts(exec: &exec::Exec<'_>, from: usize, to: usize) -> String {
+    (from..to)
+        .filter(|index| !exec.lazy.contains_key(index) && !exec.is_described(*index))
+        .map(|index| format!("(assert {})\n", exec.facts[index]))
+        .collect()
+}
+
+/// Asks a second solver, on `lane`, about every check of `exec` that
+/// `statuses` has proved, and says which ones it refutes. One of the two
+/// solvers is wrong about such a check, so it becomes undecided.
+fn cross_check(
+    mut lane: Lane<'_>,
+    exec: &exec::Exec<'_>,
+    statuses: &mut [Status],
+    trace: bool,
+) -> std::result::Result<Vec<bool>, String> {
+    let mut disputed = vec![false; statuses.len()];
+    let mut prelude = String::from("(push 1)\n");
+    for decl in &exec.decls {
+        prelude.push_str(decl);
+        prelude.push('\n');
+    }
+    lane.send(&prelude)?;
+    let described = exec.described_by();
+    let mut asserted = 0usize;
+    for ((obligation, status), disputed) in exec
+        .obligations
+        .iter()
+        .zip(statuses.iter_mut())
+        .zip(&mut disputed)
+    {
+        let exec::Goal::Holds(goal) = &obligation.goal else {
+            continue;
+        };
+        if *status != Status::Proved {
+            continue;
+        }
+        if obligation.facts > asserted {
+            lane.send(&shared_facts(exec, asserted, obligation.facts))?;
+            asserted = obligation.facts;
+        }
+        let answer = lane.ask(&check_query(exec, &described, obligation, goal), None)?;
+        if trace {
+            eprintln!(
+                "; {} at {}:{} by the second solver => {answer:?}",
+                obligation.message, obligation.span.line, obligation.span.column
+            );
+        }
+        if matches!(answer, Status::Failed { .. }) {
+            *status = Status::Unknown;
+            *disputed = true;
+        }
+    }
+    lane.close();
+    Ok(disputed)
 }
 
 /// Checks each obligation of `exec` against its declarations and facts.
@@ -1875,6 +2120,7 @@ fn solve(
     mut solver: Lane<'_>,
     mut rough: Option<Lane<'_>>,
     mut sample: Option<Lane<'_>>,
+    retry: Option<&Retry<'_>>,
     exec: &exec::Exec<'_>,
     trace: bool,
 ) -> std::result::Result<Vec<Status>, String> {
@@ -1961,7 +2207,10 @@ fn solve(
             // Unsatisfiable facts are a contract no input meets. A solver
             // that cannot tell is not a reason to report one.
             exec::Goal::CanHold => {
-                let status = match solver.ask("(push 1)\n", None)? {
+                let limit = retry.map_or(String::new(), |retry| {
+                    format!("(set-option :timeout {})\n", retry.full_ms)
+                });
+                let status = match solver.ask(&format!("{limit}(push 1)\n"), None)? {
                     Status::Proved => Status::Failed {
                         counterexample: Vec::new(),
                     },
@@ -1975,12 +2224,7 @@ fn solve(
             }
             exec::Goal::Holds(goal) => goal,
         };
-        let query = format!(
-            "(push 1)\n{}{}(assert {})\n",
-            exec.lazy_asserts(obligation),
-            exec.descriptions(&described, obligation, goal),
-            exec::and(&obligation.pc, &exec::not(goal))
-        );
+        let query = check_query(exec, &described, obligation, goal);
         if trace {
             eprintln!(
                 "; {} at {}:{}\n{query}",
@@ -2005,12 +2249,10 @@ fn solve(
                 samples = Some(allowed_samples(lane, exec, drawn, trace)?.unwrap_or_default());
             }
             let rows = samples.as_mut().expect("the samples were just drawn");
-            let mut facts = String::from("; the check with its float inputs fixed\n");
-            for (index, fact) in exec.facts[..obligation.facts].iter().enumerate() {
-                if !exec.lazy.contains_key(&index) && !exec.is_described(index) {
-                    facts.push_str(&format!("(assert {fact})\n"));
-                }
-            }
+            let facts = format!(
+                "; the check with its float inputs fixed\n{}",
+                shared_facts(exec, 0, obligation.facts)
+            );
             let goal = &query["(push 1)\n".len()..];
             for fixed in rows.iter().take(attempts) {
                 attempts -= 1;
@@ -2036,7 +2278,24 @@ fn solve(
             statuses.push(status);
             continue;
         }
-        let status = solver.ask(&query, Some(exec))?;
+        let status = match retry {
+            Some(retry) => {
+                let quick = format!("(set-option :timeout {})\n{query}", retry.quick_ms);
+                match solver.ask(&quick, Some(exec))? {
+                    Status::Unknown => {
+                        if trace {
+                            eprintln!(
+                                "; => Unknown within {} ms, so asked again as one problem",
+                                retry.quick_ms
+                            );
+                        }
+                        retry.again(&solver.base, exec, obligation, &query)
+                    }
+                    status => status,
+                }
+            }
+            None => solver.ask(&query, Some(exec))?,
+        };
         if trace {
             eprintln!("; => {status:?}");
         }
@@ -2073,6 +2332,9 @@ mod tests_closures;
 #[path = "verify_outcomes_tests.rs"]
 mod tests_outcomes;
 #[cfg(test)]
+#[path = "verify_solver_tests.rs"]
+mod tests_solver;
+#[cfg(test)]
 #[path = "verify_text_tests.rs"]
 mod tests_text;
 
@@ -2103,6 +2365,10 @@ mod tests_workflow;
 #[cfg(test)]
 #[path = "verify_shapes_tests.rs"]
 mod tests_shapes;
+
+#[cfg(test)]
+#[path = "verify_recovery_tests.rs"]
+mod tests_recovery;
 
 #[cfg(test)]
 #[path = "verify_soundness_tests.rs"]

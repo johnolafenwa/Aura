@@ -54,3 +54,17 @@ hold).
 - Not done: contracts on local `def` functions and an in-source
   must-verify marker both need parser changes; `match` and `is_ok()` in
   contracts are rejected by sema (AU2048).
+
+## Stage 3 (2026-11-24)
+
+- `verify_recovery.rs`: `control.recover`, sync values, tensor shapes.
+  `sema/contracts.rs` lets `shape()` and `len()` on a tensor appear in
+  contracts.
+- Solver: each Z3 check first gets 1 s in the running solver, then races a
+  fresh standalone process against a fresh scoped one with the full limit.
+  Z3 skips its simplification inside `push` scopes, which was the main
+  cause of timeouts. `verify_smt.rs` has a watchdog thread.
+- 912 run-pass fixtures after stage 3: 3241 proved, 1748 failed,
+  18 undecided, 345 not modeled, 398 s.
+- Worktree targets copied with `cp -al` share cargo fingerprints through
+  hard links and can run stale code: copy with `cp -a` instead.

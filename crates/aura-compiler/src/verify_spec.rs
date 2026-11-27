@@ -17,6 +17,7 @@ use super::exec::{
     array_parts, array_shape, bind_span_views, conjoin, key_sort, lit, not, scalar_val, smt_string,
     span_range_names, structural_eq, Exec, FloatTy, Goal, IntTy, State, Val,
 };
+use super::recovery::tensor_parts;
 use super::ObligationKind;
 use crate::ast::{
     BinaryOp, BindingTarget, CompareOp, ComprehensionOutput, ContractClause, ContractKind, Expr,
@@ -1050,7 +1051,8 @@ impl Exec<'_> {
                             .bit_terms
                             .evaluate(method, value, *ty, count.as_deref()));
                     }
-                    if let Some((len, rank, dims)) = array_parts(&receiver) {
+                    let parts = array_parts(&receiver).or_else(|| tensor_parts(&receiver));
+                    if let Some((len, rank, dims)) = parts {
                         return match field.as_str() {
                             "len" => Ok(Val::Int(len, IntTy::INT64)),
                             "shape" => Ok(array_shape(rank, dims)),
