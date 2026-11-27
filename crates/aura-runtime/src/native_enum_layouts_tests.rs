@@ -18,9 +18,10 @@ use crate::collection_index::hash_value;
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::native_runtime::{
     aura_direct_enum_new_typed, aura_direct_enum_new_typed_boxes, aura_direct_enum_unit_cell,
-    aura_direct_instance_put_field, aura_direct_register_enum_layouts,
-    aura_direct_release_last_owned_variant, aura_direct_release_value, aura_direct_retain_value,
-    aura_direct_variant_matches, aura_direct_variant_payload, aura_direct_variant_payload_int64,
+    aura_direct_instance_put_field, aura_direct_own_lent_payload,
+    aura_direct_register_enum_layouts, aura_direct_release_last_owned_variant,
+    aura_direct_release_value, aura_direct_retain_value, aura_direct_variant_matches,
+    aura_direct_variant_payload, aura_direct_variant_payload_int64,
     aura_direct_variant_take_payload, aura_direct_vec_push_in_place, boxed_value,
     empty_unit_variant_cells, list_view_of, release_untracked_value, retain_untracked_value,
     share_direct_value, value_mut, value_ref, with_direct_task_runtime_scope,
@@ -497,6 +498,55 @@ fn generated_code_builds_tests_and_reads_typed_variants() {
         unsafe { aura_direct_release_value(copied) };
         unsafe { aura_direct_release_value(read) };
         unsafe { aura_direct_release_value(other) };
+        // A lent payload of a variant whose only reference is the caller's
+        // moves out as it is, since the caller's release frees the variant.
+        let filled = |name: &str| {
+            let made = unsafe { aura_direct_enum_new_typed(cell, 2) };
+            let block = unsafe { &*made }.list_elements.get();
+            let payload = boxed_value(text(name));
+            unsafe { aura_direct_instance_put_field(block as *mut Option<ElementBox>, payload) };
+            (made, payload)
+        };
+        let (dying, lent) = filled("l");
+        let owned = unsafe { aura_direct_own_lent_payload(lent, dying) };
+        assert_eq!(owned, lent);
+        unsafe { aura_direct_release_value(dying) };
+        assert_eq!(unsafe { value_ref(owned) }, text("l"));
+        // A payload the variant does not hold, or no longer holds, is
+        // copied, and so is the payload of anything that is no typed
+        // variant with one confined reference: a variant another reference
+        // holds, a shared one, a frozen one, another kind of value, and no
+        // value at all.
+        let (kept, held) = filled("k");
+        let untyped = boxed_value(variant(prefix, "Named", vec![text("u"), int32(1)]));
+        let second = unsafe { aura_direct_retain_value(kept) };
+        let (shared_variant, shared_payload) = filled("s");
+        unsafe { share_direct_value(shared_variant) };
+        let frozen = unsafe { aura_direct_enum_new_typed(cell, 0) };
+        for (payload, scrutinee) in [
+            (owned, kept),
+            (held, kept),
+            (shared_payload, shared_variant),
+            (owned, frozen),
+            (owned, untyped),
+            (owned, owned),
+            (owned, std::ptr::null_mut()),
+        ] {
+            let copy = unsafe { aura_direct_own_lent_payload(payload, scrutinee) };
+            assert_ne!(copy, payload);
+            assert_eq!(unsafe { value_ref(copy) }, unsafe { value_ref(payload) });
+            unsafe { aura_direct_release_value(copy) };
+        }
+        assert_eq!(
+            unsafe { value_ref(kept) },
+            variant(prefix, "Named", vec![text("k"), int32(0)])
+        );
+        unsafe { aura_direct_release_value(second) };
+        // With one reference left, the payload moves out.
+        assert_eq!(unsafe { aura_direct_own_lent_payload(held, kept) }, held);
+        for value in [kept, held, shared_variant, untyped, owned] {
+            unsafe { aura_direct_release_value(value) };
+        }
         // A change through the runtime turns the payloads into values, and
         // the view follows.
         unsafe {

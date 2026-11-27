@@ -18886,6 +18886,74 @@ pub extern "C-unwind" fn aura_direct_instance_copy_field(
     })
 }
 
+/// A box the running task owns for `payload`, the box a variant in
+/// `scrutinee` lends, for generated code that releases its reference to
+/// `scrutinee` next. When that reference is the only one to a confined
+/// variant, the release frees the variant, so the payload's box moves out
+/// of it as it is, as an owning match takes it: the variant no longer
+/// holds the box when the task's ledger links it. Any other `scrutinee`
+/// keeps its payload, and the result is a copy, as
+/// [`aura_direct_instance_copy_field`] makes one.
+///
+/// # Safety
+///
+/// `payload` is a live box, and `scrutinee` is null or a live box the
+/// caller owns a reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_own_lent_payload(
+    payload: *mut OpaqueValue,
+    scrutinee: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        if let Some(taken) = unsafe { take_last_payload_box(scrutinee, payload) } {
+            return owned_element_box(taken);
+        }
+        let runtime_type_name = unsafe { explicit_runtime_type_tag(payload) };
+        let copied = unsafe { with_value(payload, try_clone_array_containing_value) };
+        boxed_value_with_type(direct_array_result(copied, 0, 0), runtime_type_name)
+    })
+}
+
+/// Moves `payload` out of the typed variant in `scrutinee` that holds it,
+/// when the caller's reference to `scrutinee` is its only one and the box
+/// is confined and not frozen. `None` leaves `scrutinee` as it is.
+///
+/// # Safety
+///
+/// As [`aura_direct_own_lent_payload`].
+unsafe fn take_last_payload_box(
+    scrutinee: *mut OpaqueValue,
+    payload: *mut OpaqueValue,
+) -> Option<ElementBox> {
+    // SAFETY: the caller passes null or a live box.
+    let header = unsafe { scrutinee.as_ref() }?;
+    if header.ref_count.load(Ordering::Acquire) != 1
+        || header.shared_lock().is_some()
+        || header.is_frozen()
+    {
+        return None;
+    }
+    // SAFETY: the only reference is the caller's and the box is confined,
+    // so nothing else reads or writes the value meanwhile.
+    unsafe {
+        value_mut(scrutinee, |value| {
+            let Value::EnumVariant(variant) = value else {
+                return None;
+            };
+            let VariantPayloads::Typed(typed) = &variant.payloads else {
+                return None;
+            };
+            let slot = (0..typed.len()).find(|index| {
+                typed
+                    .payload_box(*index)
+                    .is_some_and(|held| std::ptr::eq(held.as_ptr(), payload))
+            })?;
+            variant.payloads.take_box(slot)
+        })
+    }
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_instance_get_field(
     value: *mut OpaqueValue,

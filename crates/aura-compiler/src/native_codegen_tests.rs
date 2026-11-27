@@ -2075,6 +2075,32 @@ fn a_str_box_is_read_through_its_view_with_the_runtime_as_fallback() {
 }
 
 #[test]
+fn a_try_takes_the_payload_box_out_of_the_result_it_releases() {
+    let source = include_str!("../tests/fixtures/run-pass/try_takes_the_payload_of_its_result.au");
+    let mir = lower_source_to_mir(source).expect("payload reads lower");
+    let object = emit_unoptimized_object(&mir).expect("payload reads emit");
+    // `try` releases the result it reads right after the read: the runtime
+    // moves the payload's box out of a result nothing else holds, and
+    // copies it otherwise.
+    let tried = object_function_referenced_symbols(&object, "aura_fn_stamped");
+    assert!(
+        tried
+            .iter()
+            .any(|symbol| symbol.ends_with("aura_direct_own_lent_payload")),
+        "{tried:?}"
+    );
+    // A variant read in place out of a list is not the function's to take
+    // from: its payload is copied.
+    let shared = object_function_referenced_symbols(&object, "aura_fn_shared");
+    assert!(
+        !shared
+            .iter()
+            .any(|symbol| symbol.ends_with("aura_direct_own_lent_payload")),
+        "{shared:?}"
+    );
+}
+
+#[test]
 fn indexed_text_compares_as_a_unicode_scalar() {
     let source = include_str!("../tests/fixtures/run-pass/indexed_str_comparison.au");
     let mir = lower_source_to_mir(source).expect("string comparisons lower");

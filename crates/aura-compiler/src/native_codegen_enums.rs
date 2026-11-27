@@ -760,6 +760,16 @@ impl FunctionCompiler<'_> {
                 self.builder.seal_block(present_block);
                 if lend {
                     vec![boxed, self.builder.iconst(types::I64, 1)]
+                } else if self.take_payload {
+                    // The function gives up its reference to the scrutinee
+                    // after this read: the payload's box moves out of a
+                    // variant that reference is the last to, as the
+                    // runtime's read of an owned result takes it, and is
+                    // copied out of any other.
+                    let taken = self
+                        .builder
+                        .call(self.runtime[RuntimeFn::OwnLentPayload], &[boxed, object]);
+                    vec![taken.results[0]]
                 } else {
                     let copy = self
                         .builder
