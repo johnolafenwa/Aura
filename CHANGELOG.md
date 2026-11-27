@@ -7,6 +7,9 @@ in this file.
 
 ## Unreleased
 
+- Speed: a lookup with a `str` key in a dictionary or set of eight
+  entries or fewer compares each entry's bytes in place. The
+  `interpreter` benchmark runs 3.6% fewer instructions.
 - Speed: a `Result` that a function returns and its caller matches or
   unwraps with `try` no longer allocates. `bank_ledger` runs half the
   instructions it did in 0.17.0.
@@ -14,6 +17,28 @@ in this file.
   in a field or in a list of lists, are compiled in place. `graph_paths`
   runs half the instructions it did in 0.17.0, and `order_book` two
   thirds.
+- A long chain of `indirect` enum variants, such as a linked list of
+  hundreds of thousands of `Cons` cells, is dropped, compared with `==`,
+  and copied without running out of stack, in a task, in a generator, and
+  on the main task, under `aura run` and in native builds.
+- The compiler reports a diagnostic instead of stopping or stalling on
+  several inputs. An `extern "C"` union whose name or member name is
+  reserved where its generated declarations use it, such as `view`, `dyn`
+  or `__invariant__`, is `AU1101`. Each extra item of a `with` header
+  counts against the nesting limit of 128. An inferred tuple type of more
+  than 65,536 type nodes is `AU2999`. A `match` on a wide tuple whose arms
+  leave most elements as `_` and a long chain of method calls such as
+  `x.wrapping_add(1).wrapping_add(1)...` compile in time linear in their
+  size.
+- `aura verify` proves more on paths it used to accept. The error path of
+  `try` proves the function's `ensures` and the class invariants of its
+  `mut` parameters and of `self`. `==` of dicts with float values compares
+  them as numbers, so `0.0` equals `-0.0`. A `mut` parameter of a
+  contracted callable alias proves that what is stored in it keeps the
+  contract. Each position `enumerate(xs, start)` counts in a contract must
+  fit an `int64`. Arithmetic and conversions on `int128`, `uint128`,
+  `intsize`, and `uintsize` are reported as not modeled (`AU5104`) instead
+  of being skipped.
 - Speed: a loop written `for j in range(i + 1, n)` reads and writes list
   elements without bounds checks when the outer loop proves the range, and
   a function that only calls small leaves keeps no frame record. `nbody`
@@ -199,6 +224,58 @@ in this file.
   lookup; `out.append(texts[i].clone())` copies the element straight into the
   list; and a new `dict` takes its key and value types without comparing type
   names. `template_render` now runs 39% fewer instructions than in 0.17.0.
+- Images: decoding checks a PNG's declared size against its compressed
+  data and allocates every pixel buffer fallibly, and `resize` checks its
+  target size before it allocates. An image too large to hold reports
+  `AU4005` instead of aborting the process.
+- Tensors: safetensors headers are capped at 100 MiB and 64 dimensions per
+  shape, and every tensor's byte size is checked, so a malformed file
+  reports an error that names the tensor instead of aborting.
+- Regex: `replace` and `replace_all` stop with `AU4005` at the string
+  limit while they build, a pattern table holds at most 65,536 patterns and
+  64 MiB, and the per-thread cache keeps at most 64 compiled patterns.
+- Numbers: `Decimal` normalization takes logarithmic steps, and
+  `BigInt`/`Decimal` arithmetic, radix conversion and formatting check the
+  result size against the string limit first, reporting `AU4005`.
+- Text encodings: decoded and encoded results are capped at the string
+  limit and reserved fallibly (`AU4005` `encoding_too_large`).
+- JSON: looking up a key in an object of 16 or more entries uses an index,
+  and `json.entries` collects in linear time.
+- `str.join`, `replace`, `to_lower`, `to_upper`, `chars` and
+  `list.extend` check their result against the string or list limit before
+  they allocate, and report `AU4005` instead of aborting.
+- Formatting a float with more than 65,535 decimal places pads with zeros
+  instead of panicking. `AURA_WORKERS` above 4,096 is refused with `AU4006`.
+- TLS: a CA file given to a TLS client or the `http` client replaces the
+  built-in roots instead of adding to them. A CA file with no certificate
+  is an error.
+- HTTP: requests with duplicate `Host` or `Content-Length` headers, a
+  `Content-Length` that does not match the body, or a `Transfer-Encoding`
+  header are refused before they are sent. The server refuses a request
+  with both `Transfer-Encoding` and `Content-Length`, a head line ended by
+  a bare LF, or chunk framing that is not strict hex with CRLF. Request
+  heads are capped at 64 KiB and chunked trailers at 16 KiB.
+- `http` client: at most 32 interim (1xx) responses, 64 KiB of trailers and
+  one line of data per server-sent event are read; compressed bodies are
+  decoded in bounded steps; chunk framing is read strictly; and a redirect
+  from `https` to `http` is refused.
+- Networking: a listener's `accept` and a UDP socket's `recv`, `recv_from`
+  and `send_to` no longer hold the socket's lock while they wait, so other
+  tasks on the same worker can use the socket meanwhile. `accept` goes on
+  past a client that aborted its connection.
+- `HttpListener.accept` closes a client whose request fails and waits for
+  the next one, instead of failing: a transfer coding other than `chunked`
+  gets 501, and each client has 30 seconds to send its request. A response
+  write times out after 30 seconds.
+- WebSockets: `WebSocketListener.accept` drops a client whose handshake
+  fails or takes over 10 seconds and waits for the next one.
+  `websocket_connect` refuses a URL that is not `ws://` or `wss://` before
+  it connects. `recv_text` and `recv_bytes` skip ping and pong frames
+  instead of returning `None`, and a send that had to wait no longer sends
+  its message twice.
+- `close` on a TLS stream or WebSocket that another task is using returns
+  at once and shuts the socket down, so the other task's wait ends, instead
+  of waiting for that task without a limit.
 
 ## VS Code extension 0.17.0 — 2026-11-24
 

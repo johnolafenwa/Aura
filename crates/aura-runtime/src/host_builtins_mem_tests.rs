@@ -225,6 +225,31 @@ fn mem_builtins_are_excluded_from_safe_table_and_validate_addresses() {
 }
 
 #[test]
+fn a_decoded_text_over_the_string_limit_traps_instead_of_being_built() {
+    use crate::text_encodings::Encoding;
+    // Each byte from 0x80 up decodes to two UTF-8 bytes, so half the limit
+    // and one more byte decodes past it.
+    let bytes = vec![0xE9_u8; crate::runtime_value::MAX_STRING_BYTES / 2 + 1];
+    let error = decode_text_result(&bytes, Encoding::Latin1).expect_err("over the limit");
+    assert_eq!(error.code, "AU4005");
+    assert!(
+        error.message.contains("`bytes.decode` result exceeds"),
+        "{}",
+        error.message
+    );
+    // Half the limit decodes to a text exactly at it.
+    let fits = decode_text_result(&bytes[1..], Encoding::Latin1).expect("a decode");
+    let Value::EnumVariant(fits) = fits else {
+        panic!("a `Result`");
+    };
+    assert_eq!(&*fits.variant_name, "Ok");
+    let Value::String(text) = &fits.payloads[0] else {
+        panic!("a text");
+    };
+    assert_eq!(text.len(), crate::runtime_value::MAX_STRING_BYTES);
+}
+
+#[test]
 fn ordered_atomics_check_order_and_arguments_before_writing() {
     let mut cell = 7_u16;
     let address = Value::Int(IntegerValue::from_u64((&mut cell as *mut u16) as u64));

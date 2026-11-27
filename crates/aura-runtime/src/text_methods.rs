@@ -52,7 +52,7 @@ pub fn evaluate_text_method(
         "find" => Ok(find(text, argument()?)),
         "count" => count_occurrences(text, argument()?),
         "repeat" => repeat(text, count),
-        "chars" => Ok(chars(text)),
+        "chars" => chars(text),
         "char_at" => char_at(text, text.is_ascii(), count),
         _ => Err(Diagnostic::coded(
             "AU4001",
@@ -151,8 +151,145 @@ pub fn lines(text: &str) -> Value {
 }
 
 /// `str.chars()`: each Unicode scalar value as a one-character string.
-pub fn chars(text: &str) -> Value {
-    string_list(text.chars().map(String::from))
+/// The list is reserved fallibly, so a text too long for the memory left
+/// traps with `AU4005`.
+pub fn chars(text: &str) -> Result<Value> {
+    let count = if text.is_ascii() {
+        text.len()
+    } else {
+        text.chars().count()
+    };
+    let mut parts: Vec<Value> = Vec::new();
+    if parts.try_reserve_exact(count).is_err() {
+        return Err(Diagnostic::coded("AU4005", "string allocation failed"));
+    }
+    parts.extend(text.chars().map(|ch| Value::string(String::from(ch))));
+    Ok(Value::Vec(VecValue {
+        element_type: SharedType::from(str_type()),
+        elements: parts.into(),
+        str_view: Default::default(),
+    }))
+}
+
+fn string_too_long() -> Diagnostic {
+    Diagnostic::coded(
+        "AU4005",
+        format!("string output exceeds the maintained {MAX_STRING_BYTES}-byte allocation limit"),
+    )
+}
+
+/// An empty string with room for `len` bytes, when `len` (which is `None`
+/// when it overflowed) fits the string limit and the memory can be had.
+pub(crate) fn reserved_string(len: Option<usize>) -> Result<String> {
+    let len = len
+        .filter(|len| *len <= MAX_STRING_BYTES)
+        .ok_or_else(string_too_long)?;
+    let mut output = String::new();
+    if output.try_reserve_exact(len).is_err() {
+        return Err(Diagnostic::coded("AU4005", "string allocation failed"));
+    }
+    Ok(output)
+}
+
+/// `separator.join(parts)`, refused with `AU4005` before it is built when
+/// the result is over the string limit.
+pub fn join_checked<S: AsRef<str>>(parts: &[S], separator: &str) -> Result<String> {
+    let separators = parts.len().saturating_sub(1);
+    let len = parts
+        .iter()
+        .try_fold(0usize, |len, part| len.checked_add(part.as_ref().len()))
+        .and_then(|len| separator.len().checked_mul(separators)?.checked_add(len));
+    let mut output = reserved_string(len)?;
+    for (index, part) in parts.iter().enumerate() {
+        if index > 0 {
+            output.push_str(separator);
+        }
+        output.push_str(part.as_ref());
+    }
+    Ok(output)
+}
+
+/// An upper bound on the length of `text.replace(from, to)` that fits the
+/// string limit, or `AU4005` when the result is over it. The matches are
+/// counted only when the most matches the text could hold might reach it.
+pub fn replaced_len_checked(text: &str, from: &str, to: &str) -> Result<usize> {
+    // An empty pattern matches at every character boundary; others do not
+    // overlap, so they cover at most the whole text.
+    let most_matches = text.len() / from.len().max(1) + 1;
+    let most = to
+        .len()
+        .checked_mul(most_matches)
+        .and_then(|added| added.checked_add(text.len()));
+    if most.is_some_and(|most| most <= MAX_STRING_BYTES) {
+        return Ok(most.unwrap_or_default());
+    }
+    let matches = if from.is_empty() {
+        text.chars().count() + 1
+    } else {
+        memchr::memmem::find_iter(text.as_bytes(), from.as_bytes()).count()
+    };
+    to.len()
+        .checked_mul(matches)
+        .and_then(|added| (text.len() - matches * from.len()).checked_add(added))
+        .filter(|len| *len <= MAX_STRING_BYTES)
+        .ok_or_else(string_too_long)
+}
+
+/// `text.replace(from, to)`, refused with `AU4005` before it is built when
+/// the result is over the string limit.
+pub fn replace_checked(text: &str, from: &str, to: &str) -> Result<String> {
+    replaced_len_checked(text, from, to)?;
+    let mut output = reserved_string(Some(text.len()))?;
+    if from.is_empty() {
+        output.push_str(to);
+        for ch in text.chars() {
+            output.push(ch);
+            output.push_str(to);
+        }
+        return Ok(output);
+    }
+    let mut rest = 0;
+    for position in memchr::memmem::find_iter(text.as_bytes(), from.as_bytes()) {
+        output.push_str(&text[rest..position]);
+        output.push_str(to);
+        rest = position + from.len();
+    }
+    output.push_str(&text[rest..]);
+    Ok(output)
+}
+
+/// `text.to_lower()` or, with `upper`, `text.to_upper()`, refused with
+/// `AU4005` before it is built when the result is over the string limit.
+/// A character's case mapping can be longer than the character.
+pub fn change_case_checked(text: &str, upper: bool) -> Result<String> {
+    if text.is_ascii() {
+        let mut output = reserved_string(Some(text.len()))?;
+        output.push_str(text);
+        if upper {
+            output.make_ascii_uppercase();
+        } else {
+            output.make_ascii_lowercase();
+        }
+        return Ok(output);
+    }
+    let len = text.chars().try_fold(0usize, |len, ch| {
+        let mapped: usize = if upper {
+            ch.to_uppercase().map(char::len_utf8).sum()
+        } else {
+            ch.to_lowercase().map(char::len_utf8).sum()
+        };
+        len.checked_add(mapped)
+    });
+    // `str::to_lowercase` maps a final sigma by its context, which keeps
+    // its length, so the count above is exact.
+    if len.is_none_or(|len| len > MAX_STRING_BYTES) {
+        return Err(string_too_long());
+    }
+    Ok(if upper {
+        text.to_uppercase()
+    } else {
+        text.to_lowercase()
+    })
 }
 
 /// `ord(text)`: the Unicode scalar value of a one-character string. Any

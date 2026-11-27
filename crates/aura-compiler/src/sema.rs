@@ -9099,7 +9099,11 @@ impl<'a> FunctionChecker<'a> {
                         Ok(ty)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(Type::Tuple(element_types))
+                let ty = Type::Tuple(element_types);
+                self.type_names
+                    .expansion_budget()
+                    .check_inferred(&ty, expr.span)?;
+                Ok(ty)
             }
             ExprKind::List(elements) => {
                 let mut element_ty = expected.and_then(vec_element_type).cloned();

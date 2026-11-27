@@ -6,7 +6,8 @@
 //! of an object. Each thread keeps the compiled programs of the patterns it
 //! used last and compiles a pattern again from its text when it has dropped
 //! it. The table keeps every distinct pattern text for the life of the
-//! process, and nothing else.
+//! process, and nothing else, up to [`MAX_PATTERN_COUNT`] patterns and
+//! [`MAX_PATTERN_TABLE_BYTES`] bytes of text.
 
 use super::*;
 use regex::Regex;
@@ -21,7 +22,15 @@ pub use regex_eval::with_local_patterns;
 
 /// The compiled patterns one thread keeps. A thread that uses more starts
 /// again from an empty cache and compiles each pattern when it next runs.
-const REGEX_CACHE_PATTERNS: usize = 256;
+/// A compiled program can take several megabytes, so the cache is small.
+const REGEX_CACHE_PATTERNS: usize = 64;
+
+/// The most distinct patterns a process keeps. Past it `regex.compile`
+/// reports an error for a pattern it has not seen.
+pub(crate) const MAX_PATTERN_COUNT: usize = 1 << 16;
+
+/// The most bytes of distinct pattern text a process keeps.
+pub(crate) const MAX_PATTERN_TABLE_BYTES: usize = 64 << 20;
 
 /// The patterns a thread used last, found by comparing numbers without
 /// hashing. Most programs use a handful of patterns in a loop.
@@ -32,6 +41,34 @@ const RECENT_PATTERNS: usize = 8;
 struct PatternTable {
     texts: Vec<Arc<str>>,
     numbers: HashMap<Arc<str>, i64>,
+    bytes: usize,
+}
+
+impl PatternTable {
+    /// The number of `pattern`, adding it when the table has room for one
+    /// more of at most `count` patterns and `bytes` bytes of text.
+    fn number(
+        &mut self,
+        pattern: &str,
+        count: usize,
+        bytes: usize,
+    ) -> std::result::Result<i64, String> {
+        if let Some(number) = self.numbers.get(pattern) {
+            return Ok(*number);
+        }
+        let total = self.bytes.saturating_add(pattern.len());
+        if self.texts.len() >= count || total > bytes {
+            return Err(format!(
+                "the program has compiled more than {count} distinct patterns or {bytes} bytes of pattern text"
+            ));
+        }
+        self.bytes = total;
+        let text: Arc<str> = Arc::from(pattern);
+        let number = self.texts.len() as i64;
+        self.texts.push(Arc::clone(&text));
+        self.numbers.insert(text, number);
+        Ok(number)
+    }
 }
 
 static PATTERNS: RwLock<Option<PatternTable>> = RwLock::new(None);
@@ -98,17 +135,11 @@ fn pattern_number(pattern: &str) -> std::result::Result<i64, String> {
         let mut table = PATTERNS
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let table = table.get_or_insert_with(PatternTable::default);
-        match table.numbers.get(pattern) {
-            Some(number) => *number,
-            None => {
-                let text: Arc<str> = Arc::from(pattern);
-                let number = table.texts.len() as i64;
-                table.texts.push(Arc::clone(&text));
-                table.numbers.insert(text, number);
-                number
-            }
-        }
+        table.get_or_insert_with(PatternTable::default).number(
+            pattern,
+            MAX_PATTERN_COUNT,
+            MAX_PATTERN_TABLE_BYTES,
+        )?
     };
     COMPILED.with(|cache| cache.borrow_mut().keep(number, &regex));
     Ok(number)
@@ -329,20 +360,13 @@ pub fn evaluate_regex_builtin(
                     format!("`{name}` expects a replacement"),
                 ));
             };
-            let replaced = if name == "regex::__aura_replace" {
-                regex.replace(text, replacement)
-            } else {
-                regex.replace_all(text, replacement)
-            };
-            if replaced.len() > MAX_STRING_BYTES {
-                return Err(Diagnostic::coded(
-                    "AU4005",
-                    format!(
-                        "regex replacement result exceeds the maintained {MAX_STRING_BYTES}-byte string limit"
-                    ),
-                ));
-            }
-            Value::string(replaced.as_ref())
+            let replaced = bounded_replace(
+                &regex,
+                text,
+                replacement,
+                name == "regex::__aura_replace_all",
+            )?;
+            Value::string(replaced)
         }
         other => {
             return Err(Diagnostic::coded(
@@ -351,6 +375,91 @@ pub fn evaluate_regex_builtin(
             ))
         }
     })
+}
+
+fn replacement_too_long() -> Diagnostic {
+    Diagnostic::coded(
+        "AU4005",
+        format!(
+            "regex replacement result exceeds the maintained {MAX_STRING_BYTES}-byte string limit"
+        ),
+    )
+}
+
+/// Appends `piece` to `output` when the result stays inside the string
+/// limit, reserving the room fallibly.
+fn push_bounded(output: &mut String, piece: &str) -> Result<()> {
+    if output.len().saturating_add(piece.len()) > MAX_STRING_BYTES {
+        return Err(replacement_too_long());
+    }
+    if output.try_reserve(piece.len()).is_err() {
+        return Err(Diagnostic::coded("AU4005", "string allocation failed"));
+    }
+    output.push_str(piece);
+    Ok(())
+}
+
+/// A group reference at the start of `replacement`, which begins with
+/// `$`: the group and the length of the reference. The syntax is the
+/// `regex` crate's: `$name` takes the longest run of letters, digits and
+/// `_`, `${name}` anything up to `}`, and a name of digits is a number.
+fn group_reference(replacement: &str) -> Option<(&str, usize)> {
+    let bytes = replacement.as_bytes();
+    if bytes.get(1) == Some(&b'{') {
+        let close = replacement[2..].find('}')?;
+        return Some((&replacement[2..2 + close], close + 3));
+    }
+    let name_len = bytes[1..]
+        .iter()
+        .take_while(|byte| byte.is_ascii_alphanumeric() || **byte == b'_')
+        .count();
+    (name_len > 0).then(|| (&replacement[1..1 + name_len], name_len + 1))
+}
+
+/// `text` with its first match, or with every match when `all`, replaced
+/// by `replacement` with its group references expanded. The result grows
+/// piece by piece and stops at the string limit, so a large replacement
+/// repeated over many matches is refused before it is built.
+fn bounded_replace(regex: &Regex, text: &str, replacement: &str, all: bool) -> Result<String> {
+    let mut output = String::new();
+    let mut last = 0;
+    let literal = !replacement.contains('$');
+    for captures in regex.captures_iter(text) {
+        let found = captures.get(0).expect("a match has group 0");
+        push_bounded(&mut output, &text[last..found.start()])?;
+        last = found.end();
+        if literal {
+            push_bounded(&mut output, replacement)?;
+        } else {
+            let mut rest = replacement;
+            while let Some(at) = rest.find('$') {
+                push_bounded(&mut output, &rest[..at])?;
+                rest = &rest[at..];
+                if rest.as_bytes().get(1) == Some(&b'$') {
+                    push_bounded(&mut output, "$")?;
+                    rest = &rest[2..];
+                    continue;
+                }
+                let Some((group, length)) = group_reference(rest) else {
+                    push_bounded(&mut output, "$")?;
+                    rest = &rest[1..];
+                    continue;
+                };
+                rest = &rest[length..];
+                let value = match group.parse::<usize>() {
+                    Ok(index) => captures.get(index),
+                    Err(_) => captures.name(group),
+                };
+                push_bounded(&mut output, value.map_or("", |value| value.as_str()))?;
+            }
+            push_bounded(&mut output, rest)?;
+        }
+        if !all {
+            break;
+        }
+    }
+    push_bounded(&mut output, &text[last..])?;
+    Ok(output)
 }
 
 /// `regex::__aura_compile`: the number of `pattern` and an empty text, or
@@ -404,7 +513,16 @@ pub fn host_regex_escape(args: Vec<Value>, _program_args: Option<&[String]>) -> 
     if crate::builtin_limit::active() {
         crate::builtin_limit::check((text.len() as u64).saturating_mul(2))?;
     }
-    Ok(Value::string(regex::escape(text)))
+    let escaped = regex::escape(text);
+    if escaped.len() > MAX_STRING_BYTES {
+        return Err(Diagnostic::coded(
+            "AU4005",
+            format!(
+                "`regex.escape` result exceeds the maintained {MAX_STRING_BYTES}-byte string limit"
+            ),
+        ));
+    }
+    Ok(Value::string(escaped))
 }
 
 fn host_regex_search(name: &str, args: Vec<Value>) -> Result<Value> {

@@ -40,8 +40,24 @@ const HEADER: usize = 4;
 const MAX_RESULT_BITS: u64 = 1 << 32;
 
 /// The largest power of ten, as an exponent, that aligning or scaling a
-/// decimal may build.
-const MAX_SCALE_DIGITS: u64 = 400_000_000;
+/// decimal may build. A decimal with more digits than a `str` can hold
+/// cannot be written out, so the limit is the string limit.
+const MAX_SCALE_DIGITS: u64 = crate::runtime_value::MAX_STRING_BYTES as u64;
+
+/// The most digits a magnitude of `bits` bits has in `radix`, rounded up.
+fn digits_in_radix(bits: u64, radix: u32) -> u64 {
+    (bits as f64 / f64::from(radix).log2()).ceil() as u64 + 1
+}
+
+/// Refuses a text of up to `bytes` bytes that the string limit does not
+/// allow, before the text is built.
+fn text_fits(bytes: u64, what: &str) -> Result<()> {
+    if bytes > crate::runtime_value::MAX_STRING_BYTES as u64 {
+        Err(too_large(what))
+    } else {
+        Ok(())
+    }
+}
 
 fn domain(message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded("AU4001", message)
@@ -231,21 +247,49 @@ fn normalized(mut coefficient: BigInt, mut exponent: i64) -> Result<(BigInt, i64
     if coefficient.is_zero() {
         return Ok((coefficient, 0));
     }
-    let ten = BigInt::from(10u8);
     // A number divisible by 10^k is divisible by 2^k, so the trailing zero
-    // bits bound the loop and most odd numbers skip it.
-    let mut budget = coefficient.trailing_zeros().unwrap_or(0);
-    while budget > 0 {
-        let (quotient, remainder) = coefficient.div_rem(&ten);
+    // bits bound the zeros and most odd numbers skip the search.
+    let budget = coefficient.trailing_zeros().unwrap_or(0);
+    if budget == 0 {
+        return Ok((coefficient, exponent));
+    }
+    // Divide by 10, 10^2, 10^4, ... while each divides, then by the same
+    // powers from the largest down, so that k zeros take about 2 log k
+    // divisions instead of k.
+    let mut removed: u64 = 0;
+    let mut powers = vec![BigInt::from(10u8)];
+    loop {
+        let step = 1u64 << (powers.len() - 1);
+        if removed + step > budget {
+            break;
+        }
+        let power = powers.last().expect("one power");
+        let (quotient, remainder) = coefficient.div_rem(power);
         if !remainder.is_zero() {
             break;
         }
         coefficient = quotient;
-        exponent = exponent
-            .checked_add(1)
-            .ok_or_else(|| overflow("`numbers.Decimal` exponent overflow"))?;
-        budget -= 1;
+        removed += step;
+        if power.bits() > coefficient.bits() {
+            break;
+        }
+        let square = power * power;
+        powers.push(square);
     }
+    for (index, power) in powers.iter().enumerate().rev() {
+        let step = 1u64 << index;
+        if removed + step > budget || power.bits() > coefficient.bits() + 1 {
+            continue;
+        }
+        let (quotient, remainder) = coefficient.div_rem(power);
+        if remainder.is_zero() {
+            coefficient = quotient;
+            removed += step;
+        }
+    }
+    exponent = exponent
+        .checked_add_unsigned(removed)
+        .ok_or_else(|| overflow("`numbers.Decimal` exponent overflow"))?;
     Ok((coefficient, exponent))
 }
 
@@ -381,6 +425,8 @@ pub fn host_big_binary(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
     let op = int_argument(name, &args[0])?;
     let left = integer(name, &args, 1)?;
     let right = integer(name, &args, 3)?;
+    let wider = left.bits().max(right.bits());
+    let both = left.bits().saturating_add(right.bits());
     if crate::builtin_limit::active() {
         let bits = if matches!(op, 2 | 12) {
             left.bits().saturating_add(right.bits())
@@ -390,9 +436,18 @@ pub fn host_big_binary(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
         crate::builtin_limit::check((HEADER as u64 + bits.div_ceil(64)) * 8)?;
     }
     let result = match op {
-        0 => left + right,
-        1 => left - right,
-        2 => left * right,
+        0 | 1 => {
+            result_bits_fit(wider.saturating_add(1))?;
+            if op == 0 {
+                left + right
+            } else {
+                left - right
+            }
+        }
+        2 => {
+            result_bits_fit(both)?;
+            left * right
+        }
         3 | 4 => {
             if right.is_zero() {
                 return Err(domain("division by zero"));
@@ -437,7 +492,10 @@ pub fn host_big_binary(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
         9 => left & right,
         10 => left | right,
         11 => left ^ right,
-        12 => left.lcm(&right),
+        12 => {
+            result_bits_fit(both)?;
+            left.lcm(&right)
+        }
         _ => return Err(domain("`numbers.BigInt`: unknown operation")),
     };
     Ok(wire(&result, 0))
@@ -706,6 +764,10 @@ pub fn host_big_format(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
             "`BigInt` radix must be from 2 to 36, found {radix}"
         )));
     }
+    text_fits(
+        digits_in_radix(value.bits(), radix as u32).saturating_add(1),
+        "the text of a `BigInt`",
+    )?;
     let bits_per_digit = u64::from((radix as u32).ilog2());
     crate::builtin_limit::check(value.bits().div_ceil(bits_per_digit).saturating_add(1))?;
     Ok(Value::string(value.to_str_radix(radix as u32)))
@@ -769,8 +831,16 @@ fn aligned(left: (BigInt, i64), right: (BigInt, i64)) -> Result<(BigInt, BigInt,
     if right_coefficient.is_zero() {
         return Ok((left_coefficient, right_coefficient, left_exponent));
     }
-    let gap = (i128::from(left_exponent) - i128::from(right_exponent)).unsigned_abs();
-    let scale = power_of_ten(u64::try_from(gap).map_err(|_| too_large("a power of ten"))?)?;
+    // Two `i64` exponents are at most `u64::MAX` apart.
+    let gap = left_exponent.abs_diff(right_exponent);
+    let scaled = if left_exponent >= right_exponent {
+        &left_coefficient
+    } else {
+        &right_coefficient
+    };
+    // 10^gap has under 3.33 * gap bits.
+    result_bits_fit(scaled.bits().saturating_add(gap.saturating_mul(10) / 3 + 1))?;
+    let scale = power_of_ten(gap)?;
     Ok(if left_exponent >= right_exponent {
         (left_coefficient * scale, right_coefficient, right_exponent)
     } else {
@@ -839,10 +909,13 @@ pub fn host_dec_binary(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
             let (left, right, exponent) = aligned(left, right)?;
             (if op == 0 { left + right } else { left - right }, exponent)
         }
-        2 => (
-            left.0 * right.0,
-            exponent_sum(&[i128::from(left.1), i128::from(right.1)])?,
-        ),
+        2 => {
+            result_bits_fit(left.0.bits().saturating_add(right.0.bits()))?;
+            (
+                left.0 * right.0,
+                exponent_sum(&[i128::from(left.1), i128::from(right.1)])?,
+            )
+        }
         3 => {
             let digits = positive_digits("Decimal.divide", int_argument(name, &args[7])?)?;
             divided(left, right, digits, int_argument(name, &args[8])?)?
@@ -993,6 +1066,14 @@ pub fn host_dec_parse(args: Vec<Value>, _program_args: Option<&[String]>) -> Res
 
 /// Plain notation: every digit written out, with no exponent.
 fn plain(coefficient: &BigInt, exponent: i64) -> Result<String> {
+    // The digits, the zeros or places the exponent adds, a sign, a point
+    // and a leading zero.
+    text_fits(
+        digits_in_radix(coefficient.bits(), 10)
+            .saturating_add(exponent.unsigned_abs())
+            .saturating_add(3),
+        "the text of a decimal",
+    )?;
     let digit_bound = decimal_digit_bound(coefficient);
     let length = if exponent >= 0 {
         digit_bound.saturating_add(exponent as u64)
@@ -1025,6 +1106,11 @@ fn plain(coefficient: &BigInt, exponent: i64) -> Result<String> {
 /// between the seventh place after the point and the twenty-first before
 /// it, and `d.ddde30` otherwise, as a `float64` prints.
 fn display(coefficient: &BigInt, exponent: i64) -> Result<String> {
+    // The digits, a sign, a point and an exponent of up to 20 characters.
+    text_fits(
+        digits_in_radix(coefficient.bits(), 10).saturating_add(23),
+        "the text of a decimal",
+    )?;
     crate::builtin_limit::check(decimal_digit_bound(coefficient).saturating_add(22))?;
     let digits = coefficient.magnitude().to_str_radix(10);
     let top = digits.len() as i128 + i128::from(exponent) - 1;

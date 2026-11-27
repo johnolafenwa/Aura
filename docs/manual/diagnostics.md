@@ -971,7 +971,8 @@ long call chains are shortened in the diagnostic.
 configuration. `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and
 `AURA_BLOCKING_QUEUE_CAPACITY` each require a positive decimal integer. Aura
 rejects empty, zero, signed, whitespace-padded, non-decimal, non-Unicode, and
-overflowing values before user code runs. The diagnostic names the setting and
+overflowing values before user code runs, and an `AURA_WORKERS` count above
+4096. The diagnostic names the setting and
 renders the supplied value, using a lossy display for a non-Unicode value.
 Failure to create the configured blocking-I/O worker set also reports
 `AU4006`. The runtime does not fall back to fewer workers or to synchronous

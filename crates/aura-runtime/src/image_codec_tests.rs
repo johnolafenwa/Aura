@@ -410,6 +410,76 @@ fn a_png_that_claims_a_huge_size_is_refused_without_the_memory() {
     assert!(decode(&file, NO_LIMIT).is_err());
 }
 
+fn png_chunk(file: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]) {
+    file.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    let mut crc = flate2::Crc::new();
+    crc.update(kind);
+    crc.update(body);
+    file.extend_from_slice(kind);
+    file.extend_from_slice(body);
+    file.extend_from_slice(&crc.sum().to_be_bytes());
+}
+
+#[test]
+fn a_short_png_is_refused_before_its_frame_is_allocated() {
+    // A valid header for 16384 by 16384 RGBA and no pixel data at all.
+    let mut file = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut header = Vec::new();
+    header.extend_from_slice(&16384u32.to_be_bytes());
+    header.extend_from_slice(&16384u32.to_be_bytes());
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    png_chunk(&mut file, b"IHDR", &header);
+    // The start of the first row, compressed.
+    let mut row = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut row, &[0; 64]).unwrap();
+    png_chunk(&mut file, b"IDAT", &row.finish().unwrap());
+    png_chunk(&mut file, b"IEND", &[]);
+    let error = decode(&file, MAX_PIXEL_LIMIT as usize).expect_err("too short");
+    assert_eq!(
+        error,
+        ImageError::InvalidData("invalid PNG: the data ends before the pixels".to_string())
+    );
+}
+
+#[test]
+fn image_buffers_that_cannot_be_had_are_errors() {
+    assert_eq!(try_filled::<u8>(usize::MAX / 2), Err(out_of_memory()));
+    assert_eq!(try_filled::<u8>(3), Ok(vec![0; 3]));
+    let data = [0u8; 4];
+    for filter in [Filter::Nearest, Filter::Bilinear] {
+        assert_eq!(
+            resize(&data, 2, 2, 1, 1 << 32, 1 << 32, filter),
+            Err(out_of_memory())
+        );
+        assert_eq!(
+            resize(&data, 2, 2, 1, usize::MAX, 2, filter),
+            Err(out_of_memory())
+        );
+    }
+}
+
+#[test]
+fn resize_targets_over_the_allowance_are_refused_before_reserving() {
+    let data = [0u8; 4];
+    for filter in [Filter::Nearest, Filter::Bilinear] {
+        let mut inner = None;
+        let outer = crate::builtin_limit::with_allowance(64, || {
+            inner = Some(resize(&data, 2, 2, 1, 1 << 20, 1 << 20, filter));
+            Ok(())
+        });
+        assert_eq!(inner, Some(Err(out_of_memory())));
+        assert!(outer.is_err());
+    }
+}
+
+#[test]
+fn a_header_whose_sides_do_not_fit_int64_is_refused() {
+    let error = header(b"P5\n9223372036854775808 1\n255\n").expect_err("too wide");
+    assert_eq!(error.code(), 3);
+    let fine = header(b"P5\n9223372036854775807 1\n255\n").expect("fits");
+    assert_eq!(fine.width as u64, i64::MAX as u64);
+}
+
 #[test]
 fn format_and_filter_codes_round_trip() {
     for format in [Format::Png, Format::Jpeg, Format::Pnm] {
@@ -454,19 +524,19 @@ fn channel_conversion_covers_every_pair() {
 fn nearest_resize_repeats_and_drops_pixels() {
     let data = [1u8, 2, 3, 4];
     assert_eq!(
-        resize(&data, 2, 2, 1, 4, 4, Filter::Nearest),
+        resize(&data, 2, 2, 1, 4, 4, Filter::Nearest).unwrap(),
         [1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4]
     );
     let wide = [10u8, 20, 30, 40, 50, 60, 70, 80];
     assert_eq!(
-        resize(&wide, 8, 1, 1, 4, 1, Filter::Nearest),
+        resize(&wide, 8, 1, 1, 4, 1, Filter::Nearest).unwrap(),
         [20, 40, 60, 80]
     );
     assert_eq!(
-        resize(&wide, 4, 1, 2, 2, 1, Filter::Nearest),
+        resize(&wide, 4, 1, 2, 2, 1, Filter::Nearest).unwrap(),
         [30, 40, 70, 80]
     );
-    assert_eq!(resize(&data, 2, 2, 1, 2, 2, Filter::Bicubic), data);
+    assert_eq!(resize(&data, 2, 2, 1, 2, 2, Filter::Bicubic).unwrap(), data);
 }
 
 #[test]
@@ -474,7 +544,7 @@ fn smooth_resize_keeps_flat_images_flat_and_averages_when_shrinking() {
     for filter in [Filter::Bilinear, Filter::Bicubic] {
         let flat = vec![93u8; 9 * 7 * 3];
         for (width, height) in [(4, 3), (20, 15), (9, 30), (1, 1)] {
-            let resized = resize(&flat, 9, 7, 3, width, height, filter);
+            let resized = resize(&flat, 9, 7, 3, width, height, filter).unwrap();
             assert_eq!(resized.len(), width * height * 3);
             assert!(resized.iter().all(|&value| value == 93), "{filter:?}");
         }
@@ -483,7 +553,7 @@ fn smooth_resize_keeps_flat_images_flat_and_averages_when_shrinking() {
     let board: Vec<u8> = (0..64)
         .map(|i| if (i / 8 + i % 8) % 2 == 0 { 0 } else { 200 })
         .collect();
-    let halved = resize(&board, 8, 8, 1, 4, 4, Filter::Bilinear);
+    let halved = resize(&board, 8, 8, 1, 4, 4, Filter::Bilinear).unwrap();
     // The filter is cut off at the border, so the corners lean a little.
     assert!(
         halved.iter().all(|&value| (98..=102).contains(&value)),
@@ -492,21 +562,21 @@ fn smooth_resize_keeps_flat_images_flat_and_averages_when_shrinking() {
     assert_eq!(halved[5], 100);
     // Doubling a ramp stays between its ends and keeps its order.
     let ramp = [0u8, 100, 200];
-    let doubled = resize(&ramp, 3, 1, 1, 6, 1, Filter::Bilinear);
+    let doubled = resize(&ramp, 3, 1, 1, 6, 1, Filter::Bilinear).unwrap();
     assert_eq!(doubled, [0, 25, 75, 125, 175, 200]);
-    let cubic = resize(&ramp, 3, 1, 1, 6, 1, Filter::Bicubic);
+    let cubic = resize(&ramp, 3, 1, 1, 6, 1, Filter::Bicubic).unwrap();
     assert!(cubic.windows(2).all(|pair| pair[0] <= pair[1]), "{cubic:?}");
     // Bicubic overshoot clamps instead of wrapping.
     let edge = [0u8, 0, 255, 255];
-    let sharp = resize(&edge, 4, 1, 1, 8, 1, Filter::Bicubic);
+    let sharp = resize(&edge, 4, 1, 1, 8, 1, Filter::Bicubic).unwrap();
     assert_eq!((sharp[0], sharp[7]), (0, 255));
 }
 
 #[test]
 fn resize_matches_pillow_on_a_small_image() {
-    // Image.frombytes("L", (4, 2), bytes).resize((3, 2), Image.BILINEAR)
+    // Image.frombytes("L", (4, 2), bytes).resize((3, 2), Image.BILINEAR).unwrap()
     let data = [0u8, 50, 100, 150, 200, 150, 100, 50];
-    let resized = resize(&data, 4, 2, 1, 3, 2, Filter::Bilinear);
+    let resized = resize(&data, 4, 2, 1, 3, 2, Filter::Bilinear).unwrap();
     assert_eq!(resized, [15, 75, 135, 185, 125, 65]);
 }
 
@@ -662,7 +732,7 @@ fn resize_handles_every_order_and_tiny_sources() {
             (39, 3),
             (1, 1),
         ] {
-            let resized = resize(&data, 40, 30, 3, width, height, filter);
+            let resized = resize(&data, 40, 30, 3, width, height, filter).unwrap();
             assert_eq!(resized.len(), width * height * 3, "{filter:?}");
             // A resample of values between 90 and 216 stays near them.
             assert!(
@@ -673,12 +743,12 @@ fn resize_handles_every_order_and_tiny_sources() {
         for channels in 1..=4 {
             let one = vec![77u8; channels];
             assert_eq!(
-                resize(&one, 1, 1, channels, 5, 4, filter),
+                resize(&one, 1, 1, channels, 5, 4, filter).unwrap(),
                 vec![77u8; 20 * channels]
             );
             // The ends keep their side's value; bicubic may sharpen past it.
             let pair = [vec![100u8; channels], vec![150u8; channels]].concat();
-            let stretched = resize(&pair, 2, 1, channels, 4, 1, filter);
+            let stretched = resize(&pair, 2, 1, channels, 4, 1, filter).unwrap();
             assert!(stretched[..channels]
                 .iter()
                 .all(|&value| (90..=100).contains(&value)));
@@ -694,15 +764,18 @@ fn resize_on_several_threads_gives_the_pixels_of_one() {
     let data = picture(700, 500, 3);
     for filter in [Filter::Bilinear, Filter::Bicubic] {
         for (width, height) in [(350, 250), (1400, 300), (300, 1000), (900, 900)] {
-            let one = resize_on(&data, 700, 500, 3, width, height, filter, 1);
+            let one = resize_on(&data, 700, 500, 3, width, height, filter, 1).unwrap();
             for threads in [2, 3, 7, 64] {
                 assert_eq!(
-                    resize_on(&data, 700, 500, 3, width, height, filter, threads),
+                    resize_on(&data, 700, 500, 3, width, height, filter, threads).unwrap(),
                     one,
                     "{filter:?} to {width}x{height} on {threads} threads"
                 );
             }
-            assert_eq!(resize(&data, 700, 500, 3, width, height, filter), one);
+            assert_eq!(
+                resize(&data, 700, 500, 3, width, height, filter).unwrap(),
+                one
+            );
         }
     }
     assert!(thread_limit() >= 1);
@@ -711,7 +784,7 @@ fn resize_on_several_threads_gives_the_pixels_of_one() {
 #[test]
 fn filters_read_only_the_samples_in_reach() {
     // Halving with a triangle reads four samples a pixel, not five.
-    let half = axis_weights(1600, 800, Filter::Bilinear);
+    let half = axis_weights(1600, 800, Filter::Bilinear).unwrap();
     assert_eq!(half.taps, 4);
     assert_eq!(&half.weights[4..8], [0.125, 0.375, 0.375, 0.125]);
     assert_eq!(half.starts[1], 1);
@@ -721,10 +794,10 @@ fn filters_read_only_the_samples_in_reach() {
     assert!((half.weights[0] - 3.0 / 7.0).abs() < 1e-6 && half.weights[3] == 0.0);
     assert!((half.weights[2] - 1.0 / 7.0).abs() < 1e-6);
     // Doubling reads two.
-    let double = axis_weights(4, 8, Filter::Bilinear);
+    let double = axis_weights(4, 8, Filter::Bilinear).unwrap();
     assert_eq!(double.taps, 2);
     assert_eq!(&double.weights[2..4], [0.75, 0.25]);
-    for weights in [half, double, axis_weights(5, 3, Filter::Bicubic)] {
+    for weights in [half, double, axis_weights(5, 3, Filter::Bicubic).unwrap()] {
         for position in weights.weights.chunks_exact(weights.taps) {
             assert!((position.iter().sum::<f32>() - 1.0).abs() < 1e-5);
         }

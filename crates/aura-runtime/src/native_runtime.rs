@@ -8708,6 +8708,10 @@ fn replace_text(text: &crate::text::Text, from: &str, to: &str) -> crate::text::
 /// [`replace_text`], or `None` when `text` has no `from` and so stays as
 /// it is.
 fn replaced_text(text: &crate::text::Text, from: &str, to: &str) -> Option<crate::text::Text> {
+    // A result over the string limit traps before it is built.
+    if let Err(error) = crate::text_methods::replaced_len_checked(text, from, to) {
+        runtime_diagnostic_error(error);
+    }
     if from.is_empty() {
         return Some(text.replace(from, to).into());
     }
@@ -8860,8 +8864,11 @@ pub extern "C-unwind" fn aura_direct_string_to_lower(value: *mut OpaqueValue) ->
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| match value {
             Value::String(text) => boxed_value(Value::String(
-                text.map_ascii(u8::to_ascii_lowercase)
-                    .unwrap_or_else(|| text.to_lowercase().into()),
+                text.map_ascii(u8::to_ascii_lowercase).unwrap_or_else(|| {
+                    crate::text_methods::change_case_checked(text, false)
+                        .unwrap_or_else(|error| runtime_diagnostic_error(error))
+                        .into()
+                }),
             )),
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
@@ -8876,8 +8883,11 @@ pub extern "C-unwind" fn aura_direct_string_to_upper(value: *mut OpaqueValue) ->
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| match value {
             Value::String(text) => boxed_value(Value::String(
-                text.map_ascii(u8::to_ascii_uppercase)
-                    .unwrap_or_else(|| text.to_uppercase().into()),
+                text.map_ascii(u8::to_ascii_uppercase).unwrap_or_else(|| {
+                    crate::text_methods::change_case_checked(text, true)
+                        .unwrap_or_else(|error| runtime_diagnostic_error(error))
+                        .into()
+                }),
             )),
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
@@ -9076,14 +9086,16 @@ fn join_parts(elements: &ListElements, separator: &crate::text::Text) -> crate::
         Some(Value::String(part)) => part,
         _ => runtime_error("`join` requires `list[str]`"),
     };
-    let mut len = separator.len().saturating_mul(count.saturating_sub(1));
+    let mut len = separator.len().checked_mul(count.saturating_sub(1));
     let mut ascii = count < 2 || separator.is_ascii();
     for index in 0..count {
         let part = part(index);
-        len = len.saturating_add(part.len());
+        len = len.and_then(|len| len.checked_add(part.len()));
         ascii &= part.is_ascii();
     }
-    let mut joined = String::with_capacity(len);
+    // Refused with `AU4005` before it is built when over the string limit.
+    let mut joined = crate::text_methods::reserved_string(len)
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
     for index in 0..count {
         if index > 0 {
             joined.push_str(separator);
@@ -10630,7 +10642,13 @@ pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
         let Value::Vec(other) = other else {
             runtime_error("`extend` requires another `list[T]` value");
         };
-        with_vector_mut(vec, |vector| vector.elements.append(other.elements));
+        let appended = with_vector_mut(vec, |vector| vector.elements.try_append(other.elements));
+        if appended.is_err() {
+            runtime_diagnostic_error(Diagnostic::coded(
+                "AU4005",
+                "list capacity allocation failed",
+            ));
+        }
         boxed_value(Value::Unit)
     })
 }

@@ -1238,3 +1238,43 @@ fn int64_fast_paths_agree_with_value_lookups_on_large_dicts() {
     assert_eq!(shared.value_of_i64(7), None);
     assert_eq!(shared.len(), 38);
 }
+
+#[test]
+fn str_positions_find_keys_stored_bare_or_inside_a_union() {
+    let union_type = Type::normalize_union(
+        vec![Type::named("str"), Type::named("int64")],
+        "main",
+        &BTreeMap::new(),
+    )
+    .expect("normalized union");
+    let Type::Union(members) = &union_type else {
+        panic!("expected a union type");
+    };
+    let member_index = members
+        .members
+        .iter()
+        .position(|member| *member == Type::named("str"))
+        .expect("str member");
+    let wrapped = |value: &str| {
+        Value::Union(Box::new(UnionValue {
+            union_type: union_type.clone().into(),
+            member_index,
+            payload: text(value),
+        }))
+    };
+    for count in [4_usize, 40] {
+        let mut entries = DictEntries::new();
+        entries.insert(int(5), int(0));
+        entries.insert(wrapped("held"), int(1));
+        entries.insert(text(""), int(2));
+        for index in 0..count {
+            entries.insert(text(&format!("a long key number {index}")), int(3));
+        }
+        assert_eq!(entries.position(&text("held")), Some(1), "{count}");
+        assert_eq!(entries.position(&text("")), Some(2), "{count}");
+        assert_eq!(entries.position(&text("a long key number 0")), Some(3));
+        assert_eq!(entries.position(&text("a long key number 99")), None);
+        assert_eq!(entries.position(&text("5")), None, "{count}");
+        assert_eq!(entries.position(&text("hel")), None, "{count}");
+    }
+}

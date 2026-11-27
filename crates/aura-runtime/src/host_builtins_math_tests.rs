@@ -251,7 +251,8 @@ fn arguments_of_the_wrong_type_or_count_are_rejected() {
 fn encoding_result(value: Value) -> (String, Vec<Value>) {
     match value {
         Value::EnumVariant(value) => {
-            let crate::runtime_value::VariantPayloads::Values(payloads) = value.payloads else {
+            let crate::runtime_value::PayloadParts::Values(payloads) = value.payloads.into_parts()
+            else {
                 panic!("a host result holds plain values");
             };
             (value.variant_name.to_string(), payloads)
