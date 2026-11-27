@@ -1854,8 +1854,7 @@ fn ask_once(
     query: &str,
     exec: Option<&exec::Exec<'_>>,
 ) -> std::result::Result<Status, String> {
-    solver.send(query)?;
-    Ok(match solver.check()? {
+    Ok(match solver.check_after(query)? {
         smt::SatResult::Unsat => Status::Proved,
         smt::SatResult::Unknown => Status::Unknown,
         smt::SatResult::Sat => {

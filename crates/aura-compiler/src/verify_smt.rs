@@ -8,6 +8,8 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 /// The environment variable that names the solver to run.
 pub const SOLVER_ENV: &str = "AURA_SMT_SOLVER";
@@ -113,19 +115,76 @@ pub enum SatResult {
     Unknown,
 }
 
+/// How long past its time limit a solver may keep the verifier waiting
+/// before it is stopped, in milliseconds. A solver's own limit covers a
+/// query's search and nothing else: Z3 5.3.3 can spend unbounded time in a
+/// `push`, where its limit is not in force. The allowance is for a busy
+/// machine, where a solver that keeps its limit still answers late.
+pub const OVERDUE_GRACE_MS: u64 = 3_000;
+
+/// When the solver must have answered, for the thread that stops it.
+struct Watch {
+    /// The instant after which the solver is stopped; `None` while the
+    /// verifier is not waiting for it.
+    deadline: Option<Instant>,
+    /// Whether the solver was stopped for passing a deadline.
+    overdue: bool,
+    /// Whether the solver is being dropped.
+    done: bool,
+}
+
+/// Stops `child` whenever a deadline in `watch` passes, until `done`. It
+/// runs on a thread of its own for as long as the solver is kept.
+fn stop_when_overdue(watch: &(Mutex<Watch>, Condvar), child: &Mutex<Child>) {
+    let (watch, wake) = watch;
+    let mut state = watch.lock().expect("the solver watch lock");
+    while !state.done {
+        state = match state.deadline {
+            None => wake.wait(state).expect("the solver watch lock"),
+            Some(deadline) => {
+                let now = Instant::now();
+                if now < deadline {
+                    wake.wait_timeout(state, deadline - now)
+                        .expect("the solver watch lock")
+                        .0
+                } else {
+                    let _ = child.lock().expect("the solver process lock").kill();
+                    state.deadline = None;
+                    state.overdue = true;
+                    state
+                }
+            }
+        };
+    }
+}
+
 /// A running solver process.
 pub struct Solver {
-    child: Child,
+    child: Arc<Mutex<Child>>,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     marker: u64,
     /// Whether a write to the process or a read from it found it gone.
     stopped: bool,
+    /// The longest the verifier waits for the process at one step.
+    patience: Duration,
+    watch: Arc<(Mutex<Watch>, Condvar)>,
 }
 
 impl Solver {
-    /// Starts `command` with a per-query limit of `timeout_ms`.
+    /// Starts `command` with a per-query limit of `timeout_ms`. A solver
+    /// that keeps the verifier waiting `OVERDUE_GRACE_MS` past that limit
+    /// is stopped, and its query is undecided.
     pub fn start(command: &SolverCommand, timeout_ms: u64) -> Result<Self, String> {
+        Self::start_with_grace(command, timeout_ms, OVERDUE_GRACE_MS)
+    }
+
+    /// `start` with the allowance past the time limit given.
+    pub fn start_with_grace(
+        command: &SolverCommand,
+        timeout_ms: u64,
+        grace_ms: u64,
+    ) -> Result<Self, String> {
         let mut process = Command::new(&command.program);
         match command.kind {
             SolverKind::Z3 => {
@@ -153,12 +212,27 @@ impl Solver {
             })?;
         let stdin = child.stdin.take().expect("piped solver stdin");
         let stdout = BufReader::new(child.stdout.take().expect("piped solver stdout"));
+        let child = Arc::new(Mutex::new(child));
+        let watch = Arc::new((
+            Mutex::new(Watch {
+                deadline: None,
+                overdue: false,
+                done: false,
+            }),
+            Condvar::new(),
+        ));
+        {
+            let (watch, child) = (Arc::clone(&watch), Arc::clone(&child));
+            std::thread::spawn(move || stop_when_overdue(&watch, &child));
+        }
         let mut solver = Self {
             child,
             stdin,
             stdout,
             marker: 0,
             stopped: false,
+            patience: Duration::from_millis(timeout_ms.saturating_add(grace_ms)),
+            watch,
         };
         let mut setup = String::from("(set-option :print-success false)\n");
         if command.kind == SolverKind::Z3 {
@@ -170,8 +244,29 @@ impl Solver {
         Ok(solver)
     }
 
+    /// Runs `step`, which waits for the process, and stops the process if
+    /// the step outlasts the verifier's patience. A limit too far ahead to
+    /// name is no limit.
+    fn within_patience<T>(&mut self, step: impl FnOnce(&mut Self) -> T) -> T {
+        let deadline = Instant::now().checked_add(self.patience);
+        self.watch.0.lock().expect("the solver watch lock").deadline = deadline;
+        self.watch.1.notify_one();
+        let result = step(self);
+        self.watch.0.lock().expect("the solver watch lock").deadline = None;
+        result
+    }
+
+    /// Whether the process was stopped for keeping the verifier waiting.
+    pub fn overdue(&self) -> bool {
+        self.watch.0.lock().expect("the solver watch lock").overdue
+    }
+
     /// Writes commands that print nothing.
     pub fn send(&mut self, text: &str) -> Result<(), String> {
+        self.within_patience(|solver| solver.write(text))
+    }
+
+    fn write(&mut self, text: &str) -> Result<(), String> {
         let written = self
             .stdin
             .write_all(format!("{text}\n").as_bytes())
@@ -199,9 +294,13 @@ impl Solver {
 
     /// Sends `text`, then reads everything the solver prints for it.
     fn exchange(&mut self, text: &str) -> Result<String, String> {
+        self.within_patience(|solver| solver.exchange_unwatched(text))
+    }
+
+    fn exchange_unwatched(&mut self, text: &str) -> Result<String, String> {
         self.marker += 1;
         let marker = format!("aura-done-{}", self.marker);
-        self.send(&format!("{text}\n(echo \"{marker}\")"))?;
+        self.write(&format!("{text}\n(echo \"{marker}\")"))?;
         let mut output = String::new();
         loop {
             let mut line = String::new();
@@ -225,7 +324,12 @@ impl Solver {
     /// closed its output is given a moment to finish exiting.
     pub fn exit_status(&mut self) -> Option<std::process::ExitStatus> {
         for _ in 0..50 {
-            match self.child.try_wait() {
+            let waited = self
+                .child
+                .lock()
+                .expect("the solver process lock")
+                .try_wait();
+            match waited {
                 Ok(Some(status)) => return Some(status),
                 Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
                 Err(_) => return None,
@@ -236,7 +340,18 @@ impl Solver {
 
     /// Runs `(check-sat)`.
     pub fn check(&mut self) -> Result<SatResult, String> {
-        let answer = self.exchange("(check-sat)")?;
+        self.check_after("")
+    }
+
+    /// Sends `query`, commands that print nothing, then runs `(check-sat)`.
+    /// A solver stopped for not taking the query or not answering it in
+    /// time has not decided it.
+    pub fn check_after(&mut self, query: &str) -> Result<SatResult, String> {
+        let answer = match self.exchange(&format!("{query}\n(check-sat)")) {
+            Ok(answer) => answer,
+            Err(_) if self.overdue() => return Ok(SatResult::Unknown),
+            Err(error) => return Err(error),
+        };
         let answer = answer.trim();
         // A query stopped at the time limit answers `unknown`, after an
         // error that says so. Z3's limit can also cancel a `push` or an
@@ -275,8 +390,11 @@ impl Drop for Solver {
     fn drop(&mut self) {
         let _ = self.stdin.write_all(b"(exit)\n");
         let _ = self.stdin.flush();
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.watch.0.lock().expect("the solver watch lock").done = true;
+        self.watch.1.notify_one();
+        let mut child = self.child.lock().expect("the solver process lock");
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 

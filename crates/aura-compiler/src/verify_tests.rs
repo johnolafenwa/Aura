@@ -894,6 +894,77 @@ fn a_solver_that_dies_once_is_restarted_and_one_that_keeps_dying_is_an_error() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A stand-in solver that takes a `push` and then neither reads nor
+/// answers, as Z3 5.3.3 does when its text theory loops inside a `push`,
+/// where its time limit is not in force.
+#[cfg(unix)]
+const STUCK_SOLVER: &str = r#"[ "$1" = --version ] && exit 0
+while IFS= read -r line; do
+  case "$line" in
+    *push*) exec sleep 600 ;;
+  esac
+done
+"#;
+
+#[cfg(unix)]
+#[test]
+fn a_solver_that_never_answers_is_stopped_and_its_query_is_undecided() {
+    let dir = script_dir("stuck");
+    let stuck = script(&dir, "z3", STUCK_SOLVER, true);
+    let command = smt::SolverCommand::find(Some(&stuck)).expect("found");
+    // The query is undecided once the limit and the allowance have passed,
+    // and the process is gone.
+    let begun = std::time::Instant::now();
+    let mut solver = smt::Solver::start_with_grace(&command, 50, 100).expect("starts");
+    assert!(!solver.overdue());
+    assert_eq!(
+        solver.check_after("(push 1)\n(assert false)"),
+        Ok(smt::SatResult::Unknown)
+    );
+    assert!(solver.overdue());
+    assert!(solver.exit_status().is_some());
+    let waited = begun.elapsed();
+    assert!(
+        waited >= std::time::Duration::from_millis(150),
+        "{waited:?}"
+    );
+    assert!(waited < std::time::Duration::from_secs(60), "{waited:?}");
+    // What is sent to it afterwards fails, and a later query is undecided.
+    assert!(solver.send("(assert true)").is_err() || solver.send("(assert true)").is_err());
+    assert!(solver.stopped());
+    assert_eq!(solver.check(), Ok(smt::SatResult::Unknown));
+    drop(solver);
+    // A limit too large to add to the clock is no limit: an answer that
+    // comes is read.
+    let answers = script(&dir, "z3-answers", UNKNOWN_SOLVER, true);
+    let command = smt::SolverCommand::find(Some(&answers)).expect("found");
+    let mut solver = smt::Solver::start(&command, u64::MAX).expect("starts");
+    assert_eq!(solver.check(), Ok(smt::SatResult::Unknown));
+    assert!(!solver.overdue());
+    drop(solver);
+
+    // `aura verify` reports the check as undecided instead of waiting.
+    let program = crate::check_source(
+        "def double(x: int64) -> int64:\n    return x * 2\n\ndef main():\n    print(double(2))\n",
+    )
+    .expect("checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let options = Options {
+        solver: Some(stuck),
+        timeout_ms: 50,
+        ..Options::default()
+    };
+    let begun = std::time::Instant::now();
+    let report = verify_module(&program, &module, &options).expect("runs");
+    assert_eq!(open_checks(&report), ["2 overflow unknown"]);
+    let waited = begun.elapsed();
+    assert!(
+        waited >= std::time::Duration::from_millis(50 + smt::OVERDUE_GRACE_MS),
+        "{waited:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A stand-in solver that answers one query `unsat` and exits.
 #[cfg(unix)]
 const ONE_ANSWER_SOLVER: &str = r#"while IFS= read -r line; do
