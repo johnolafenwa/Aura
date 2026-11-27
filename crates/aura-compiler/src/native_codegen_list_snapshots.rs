@@ -10,12 +10,15 @@
 //! not change while the loop runs, as long as the view is one of the
 //! forms below when the loop is entered:
 //!
-//! - A read (`len`, an index read of a scalar or plain record element)
-//!   only reads the list. Its runtime call may take in elements generated
-//!   code appended, which sets the list's room, but leaves the view's
-//!   access code, element address, and length as they were.
-//! - Any other operation here (an element loan, an index read of a box)
-//!   may write the list through the runtime, which refreshes the view. A
+//! - A read (`len`, an index read of an element) only reads the list. Its
+//!   runtime call may take in elements generated code appended, which sets
+//!   the list's room, but leaves the view's access code, element address,
+//!   and length as they were. An index read of a box lends the box where
+//!   the list keeps it, or copies the element. Only the runtime lend moves
+//!   elements into boxes of their own, and a list already in boxes reaches
+//!   it only when the bound check fails, which stops the program.
+//! - Any other operation here (an element loan, a store of a scalar) may
+//!   write the list through the runtime, which refreshes the view. A
 //!   list whose storage nothing else shares keeps its storage, form, and
 //!   length through such a write, because none of these operations adds or
 //!   removes elements. Room tells generated code the storage is unshared,
@@ -69,6 +72,12 @@ pub(super) struct ListSnapshotRegion {
     /// The temporaries the loop lends the list to, when the list is a
     /// field of an instance (see `field_list_snapshot_regions`).
     pub(super) temps: HashSet<String>,
+    /// Set for the whole body of a method that keeps its receiver, `list`
+    /// (see `method_region`), which is entered where the body begins.
+    pub(super) method: bool,
+    /// The blocks of an earlier loop on the list whose view words still
+    /// hold at every entry of this one (see `carried_view`).
+    pub(super) carry: Option<HashSet<String>>,
 }
 
 pub(super) fn root(place: &str) -> &str {
@@ -99,9 +108,8 @@ enum ViewUse {
 }
 
 /// The use `instruction` makes of `list` when it is one of the operations
-/// a loop may hold, or `None`. `pure_index` says whether an index read of
-/// `list` only reads it.
-fn view_use(instruction: &Instruction, list: &str, pure_index: bool) -> Option<ViewUse> {
+/// a loop may hold, or `None`.
+fn view_use(instruction: &Instruction, list: &str) -> Option<ViewUse> {
     match instruction {
         Instruction::IndexInRange { list: named, index } if named == list && root(index) != list => {
             Some(ViewUse::Reads)
@@ -138,14 +146,15 @@ fn view_use(instruction: &Instruction, list: &str, pure_index: bool) -> Option<V
             }) =>
         {
             match op {
-                ListOp::Len | ListOp::IndexScalar(_) | ListOp::IndexScalarUnchecked(_) => {
-                    Some(ViewUse::Reads)
-                }
+                ListOp::Len
+                | ListOp::IndexScalar(_)
+                | ListOp::IndexScalarUnchecked(_)
+                | ListOp::Index
+                | ListOp::IndexUnchecked => Some(ViewUse::Reads),
                 // A store into unshared storage of the element's own kind
-                // keeps the storage, its form, and its length.
-                ListOp::SetIndexScalar(_) => Some(ViewUse::Writes),
-                ListOp::Index | ListOp::IndexUnchecked if pure_index => Some(ViewUse::Reads),
-                ListOp::Index | ListOp::IndexUnchecked => Some(ViewUse::Writes),
+                // keeps the storage, its form, and its length, and so does
+                // an exchange of two elements.
+                ListOp::SetIndexScalar(_) | ListOp::Swap => Some(ViewUse::Writes),
                 _ => None,
             }
         }
@@ -244,7 +253,8 @@ pub(super) fn array_region_rank(
 /// The kind of scalar the element reads and writes of `region`'s list
 /// name, when the loop has such accesses. A list has one element type, so
 /// they all name one kind, and each checks the view for that kind's access
-/// code.
+/// code. A list in a field is reached through the temporaries the loop
+/// lends it to.
 pub(super) fn region_scalar_element(
     function: &MirFunction,
     region: &ListSnapshotRegion,
@@ -272,7 +282,7 @@ pub(super) fn region_scalar_element(
                         ..
                     },
                 ..
-            } if *receiver == region.list => Some(*kind),
+            } if *receiver == region.list || region.temps.contains(receiver) => Some(*kind),
             _ => None,
         })
 }
@@ -296,12 +306,10 @@ fn reaches_list(instruction: &Instruction, list: &str) -> bool {
 }
 
 /// The loops of `function` that read the view of a list once. `candidate`
-/// says which locals hold a list native code may read this way, and
-/// `pure_index` whether an index read of one only reads it.
+/// says which locals hold a list native code may read this way.
 pub(super) fn list_snapshot_regions(
     function: &MirFunction,
     candidate: impl Fn(&str) -> bool,
-    pure_index: impl Fn(&str) -> bool,
 ) -> Vec<ListSnapshotRegion> {
     let mut lists = Vec::new();
     let mut seen = HashSet::new();
@@ -343,7 +351,6 @@ pub(super) fn list_snapshot_regions(
         .collect::<HashMap<_, _>>();
     let mut regions = Vec::new();
     for list in lists {
-        let pure = pure_index(&list);
         let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
         if instructions().any(|instruction| reaches_list(instruction, &list)) {
             continue;
@@ -363,7 +370,7 @@ pub(super) fn list_snapshot_regions(
                 if !mentioned_roots(instruction).contains(list.as_str()) {
                     continue;
                 }
-                match view_use(instruction, &list, pure) {
+                match view_use(instruction, &list) {
                     Some(use_) => {
                         uses = true;
                         writes |= use_ == ViewUse::Writes;
@@ -379,6 +386,7 @@ pub(super) fn list_snapshot_regions(
             }
             clean.insert(block.label.as_str(), (writes, uses));
         }
+        let first = regions.len();
         for component in strongly_connected(&clean, &successors) {
             let cyclic = component.len() > 1
                 || component.iter().any(|label| {
@@ -416,10 +424,75 @@ pub(super) fn list_snapshot_regions(
                 entries,
                 writes,
                 temps: HashSet::new(),
+                method: false,
+                carry: None,
             });
+        }
+        // A loop entered only after another loop on the list, through
+        // blocks that keep the view, may take the words that loop read.
+        for later in first..regions.len() {
+            regions[later].carry = (first..regions.len())
+                .find(|earlier| {
+                    *earlier != later
+                        && carried_view(
+                            function,
+                            &regions[*earlier],
+                            &regions[later],
+                            &clean,
+                            &successors,
+                        )
+                })
+                .map(|earlier| regions[earlier].blocks.clone());
         }
     }
     regions
+}
+
+/// Whether the view words read where `earlier` is entered still hold at
+/// every entry of `later`: every path to one passes an entry of `earlier`
+/// and, after the last, only blocks that keep the view. A block outside
+/// `earlier` that may write the list keeps it only when `earlier` found
+/// the storage unshared, which it checks when it writes.
+fn carried_view(
+    function: &MirFunction,
+    earlier: &ListSnapshotRegion,
+    later: &ListSnapshotRegion,
+    clean: &HashMap<&str, (bool, bool)>,
+    successors: &HashMap<&str, Vec<&str>>,
+) -> bool {
+    let keeps = |label: &str| {
+        earlier.blocks.contains(label)
+            || clean
+                .get(label)
+                .is_some_and(|(writes, _)| !writes || earlier.writes)
+    };
+    // Whether the words hold where each block ends, lowered from the most
+    // hopeful guess until every edge agrees.
+    let mut holds = function
+        .blocks
+        .iter()
+        .map(|block| {
+            let label = block.label.as_str();
+            (label, label != function.entry && keeps(label))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (from, nexts) in successors {
+            for next in nexts {
+                let entered = earlier
+                    .entries
+                    .iter()
+                    .any(|(source, target)| source.as_str() == *from && target.as_str() == *next);
+                if holds[next] && !holds[from] && !entered {
+                    holds.insert(*next, false);
+                    changed = true;
+                }
+            }
+        }
+    }
+    later.entries.iter().all(|(from, _)| holds[from.as_str()])
 }
 
 /// What `field_list_snapshot_regions` asks about a function.
@@ -430,14 +503,215 @@ pub(super) struct FieldListRules<'a> {
     /// Whether the field place holds a list native code may read this way
     /// through the temporary a lend names.
     pub(super) candidate: &'a dyn Fn(&str, &str) -> bool,
-    /// Whether an index read through the temporary only reads the list.
-    pub(super) pure_index: &'a dyn Fn(&str) -> bool,
     /// Whether the field place holds a scalar, which lies in the
     /// instance's block.
     pub(super) scalar_field: &'a dyn Fn(&str) -> bool,
     /// Whether a direct call of the function only reads scalar fields of
     /// an instance it is passed.
     pub(super) keeps_instances: &'a dyn Fn(&str) -> bool,
+    /// The fields whose lists a call of the method may store elements
+    /// into, when the method keeps its receiver (see `layout_keepers`).
+    pub(super) keeps_receiver: &'a dyn Fn(&str) -> Option<&'a HashSet<String>>,
+}
+
+/// The fields whose lists `instruction` may store elements into, when it
+/// is a call of a method that keeps its receiver (see `layout_keepers`)
+/// on the instance `root_name`, which it names nowhere else.
+fn receiver_keeper_call<'r>(
+    instruction: &Instruction,
+    root_name: &str,
+    rules: &FieldListRules<'r>,
+) -> Option<&'r HashSet<String>> {
+    let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Member {
+                        object: Operand::Place(object),
+                        receiver_place: Some(receiver),
+                        dispatch: Some(crate::mir::MethodDispatch::Static { function }),
+                        ..
+                    },
+                args,
+                type_args,
+            },
+        ..
+    } = instruction
+    else {
+        return None;
+    };
+    let mut mentions = Vec::new();
+    instruction_place_mentions(instruction, &mut mentions);
+    let passes = object == root_name
+        && receiver == root_name
+        && type_args.is_empty()
+        && args.iter().all(|arg| arg.writeback_place.is_none())
+        && mentions
+            .into_iter()
+            .filter(|place| root(place) == root_name)
+            .all(|place| place == root_name);
+    passes.then(|| (rules.keeps_receiver)(function)).flatten()
+}
+
+/// Whether `instruction` stores a scalar or plain record element into a
+/// list, which keeps the list's storage, form, and length while nothing
+/// else shares the storage.
+fn stores_scalar(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Runtime {
+                    op: RuntimeOp::List(ListOp::SetIndexScalar(_)),
+                    ..
+                },
+                ..
+            },
+            ..
+        }
+    )
+}
+
+/// The `mut self` methods of `functions` whose every call keeps the
+/// receiver in its layout, each field's box in its field, and each field
+/// list's storage, form, and length, with the fields whose lists each may
+/// store elements into. `candidate` says which methods have a receiver
+/// that keeps its fields in a block, `scalar_field` and `list_field` which
+/// of a method's places are fields of its receiver that hold a scalar and
+/// a list of scalars or plain records, and `keeps_instances` which
+/// functions only read scalar fields of an instance they are passed.
+///
+/// Such a method names its receiver only to read or write scalar fields,
+/// to lend a field's list to one operation that reads it or stores one of
+/// its elements, to call a method of this kind on it, or to pass it to a
+/// function that only reads scalar fields. It never appends to a list or
+/// stores another list in a field, never hands the receiver to a closure,
+/// a task, a loan, or a call that may write it back, and calls nothing
+/// that does. A store into a list keeps its storage while nothing else
+/// shares the storage, which a loop that reads the list's view once checks
+/// where it is entered when a call may store into it.
+pub(super) fn layout_keepers(
+    functions: &[MirFunction],
+    candidate: impl Fn(&MirFunction) -> bool,
+    scalar_field: impl Fn(&MirFunction, &str) -> bool,
+    list_field: impl Fn(&MirFunction, &str) -> bool,
+    keeps_instances: &dyn Fn(&str) -> bool,
+) -> HashMap<String, HashSet<String>> {
+    const RECEIVER: &str = "self";
+    // From every candidate, with no stores, down to the methods whose
+    // bodies keep the receiver given the others.
+    let mut keepers = functions
+        .iter()
+        .filter(|function| function.receiver.is_some() && candidate(function))
+        .map(|function| (function.name.clone(), HashSet::new()))
+        .collect::<HashMap<_, _>>();
+    loop {
+        let mut next = HashMap::new();
+        for function in functions {
+            if !keepers.contains_key(&function.name) {
+                continue;
+            }
+            let lend_temps = super::classes::field_lend_temps(function, |_| false);
+            let scalar = |place: &str| scalar_field(function, place);
+            let rules = FieldListRules {
+                lend_temps: &lend_temps,
+                candidate: &|_, _| false,
+                scalar_field: &scalar,
+                keeps_instances,
+                keeps_receiver: &|callee| keepers.get(callee),
+            };
+            if let Some(stores) = keeps_receiver_body(function, RECEIVER, &rules, &|place| {
+                list_field(function, place)
+            }) {
+                next.insert(function.name.clone(), stores);
+            }
+        }
+        if next == keepers {
+            return keepers;
+        }
+        keepers = next;
+    }
+}
+
+/// The fields whose lists the body of `function` may store elements into,
+/// when it keeps its receiver `receiver` (see `layout_keepers`).
+/// `list_field` says which places are fields of the receiver that hold
+/// lists of scalars or plain records.
+fn keeps_receiver_body(
+    function: &MirFunction,
+    receiver: &str,
+    rules: &FieldListRules<'_>,
+    list_field: &dyn Fn(&str) -> bool,
+) -> Option<HashSet<String>> {
+    let mut stores = HashSet::new();
+    let mut keeps = true;
+    for block in &function.blocks {
+        let mut lent = None::<(&str, &str)>;
+        for instruction in &block.instructions {
+            if reaches_list(instruction, receiver)
+                || matches!(instruction, Instruction::BeginElementLoan { source, .. } if root(source) == receiver)
+            {
+                return None;
+            }
+            match instruction {
+                // A field of the receiver itself, as `self.items`.
+                Instruction::Lend { place, temp, .. }
+                    if list_field(place) && rules.lend_temps.contains(temp) =>
+                {
+                    lent = Some((temp, &place[receiver.len() + 1..]));
+                }
+                Instruction::EndLend { temp, .. } if lent.is_some_and(|(lent, _)| lent == temp) => {
+                    lent = None;
+                }
+                _ if lent.is_some_and(|(temp, _)| mentioned_roots(instruction).contains(temp)) => {
+                    let (temp, field) = lent.expect("checked above");
+                    match view_use(instruction, temp) {
+                        Some(ViewUse::Reads) => {}
+                        Some(ViewUse::Writes) if stores_scalar(instruction) => {
+                            stores.insert(field.to_string());
+                        }
+                        _ => return None,
+                    }
+                }
+                _ if mentioned_roots(instruction).contains(receiver) => {
+                    match receiver_keeper_call(instruction, receiver, rules) {
+                        Some(called) => stores.extend(called.iter().cloned()),
+                        None if keeps_field_list(instruction, receiver, "", rules)
+                            && !matches!(
+                                instruction,
+                                Instruction::Lend { .. } | Instruction::EndLend { .. }
+                            ) => {}
+                        None => return None,
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A branch on a scalar field, or a return of one, reads it where
+        // it lies.
+        keeps &= terminator_place_mentions(&block.terminator)
+            .into_iter()
+            .filter(|place| root(place) == receiver)
+            .all(|place| (rules.scalar_field)(place));
+    }
+    keeps.then_some(stores)
+}
+
+/// Whether `instruction` is a call of a list's `len`.
+fn measures(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Runtime {
+                    op: RuntimeOp::List(ListOp::Len),
+                    ..
+                },
+                ..
+            },
+            ..
+        }
+    )
 }
 
 /// Whether `instruction`, which names the instance `root`, leaves the
@@ -489,10 +763,11 @@ fn keeps_field_list(
                 },
             ..
         } => {
-            (rules.keeps_instances)(function)
-                && type_args.is_empty()
-                && args.iter().all(|arg| arg.writeback_place.is_none())
-                && of_root().all(|place| place == root_name || (rules.scalar_field)(place))
+            receiver_keeper_call(instruction, root_name, rules).is_some()
+                || (rules.keeps_instances)(function)
+                    && type_args.is_empty()
+                    && args.iter().all(|arg| arg.writeback_place.is_none())
+                    && of_root().all(|place| place == root_name || (rules.scalar_field)(place))
         }
         _ => false,
     }
@@ -561,9 +836,13 @@ pub(super) fn field_list_snapshot_regions(
         }
         // The blocks that keep the instance and the list, with the
         // temporaries each lends the list to.
-        let mut clean = HashMap::<&str, Vec<&str>>::new();
+        let field = list.split_once('.').map_or("", |(_, field)| field);
+        let mut clean = HashMap::<&str, (Vec<&str>, bool)>::new();
+        // The blocks that hand the list to an operation other than `len`.
+        let mut reads_elements = HashSet::<&str>::new();
         'blocks: for block in &function.blocks {
             let mut temps = Vec::new();
+            let mut writes = false;
             let mut lent = None::<&str>;
             for instruction in &block.instructions {
                 match instruction {
@@ -582,16 +861,24 @@ pub(super) fn field_list_snapshot_regions(
                     // about its index.
                     _ if lent.is_some_and(|temp| mentioned_roots(instruction).contains(temp)) => {
                         let temp = lent.expect("checked above");
-                        if view_use(instruction, temp, (rules.pure_index)(temp))
-                            != Some(ViewUse::Reads)
-                        {
-                            continue 'blocks;
+                        if !measures(instruction) {
+                            reads_elements.insert(block.label.as_str());
+                        }
+                        match view_use(instruction, temp) {
+                            Some(ViewUse::Reads) => {}
+                            // A store of an element of the list's own kind.
+                            Some(ViewUse::Writes) if stores_scalar(instruction) => writes = true,
+                            _ => continue 'blocks,
                         }
                     }
                     _ if mentioned_roots(instruction).contains(instance)
                         && !keeps_field_list(instruction, instance, list, rules) =>
                     {
                         continue 'blocks;
+                    }
+                    _ if mentioned_roots(instruction).contains(instance) => {
+                        writes |= receiver_keeper_call(instruction, instance, rules)
+                            .is_some_and(|stores| stores.contains(field));
                     }
                     _ => {}
                 }
@@ -602,7 +889,7 @@ pub(super) fn field_list_snapshot_regions(
             {
                 continue;
             }
-            clean.insert(block.label.as_str(), temps);
+            clean.insert(block.label.as_str(), (temps, writes));
         }
         for component in strongly_connected(&clean, &successors) {
             let cyclic = component.len() > 1
@@ -616,7 +903,7 @@ pub(super) fn field_list_snapshot_regions(
             }
             let temps = component
                 .iter()
-                .flat_map(|label| clean[label].iter().map(|temp| temp.to_string()))
+                .flat_map(|label| clean[label].0.iter().map(|temp| temp.to_string()))
                 .collect::<HashSet<_>>();
             if temps.is_empty() {
                 continue;
@@ -635,19 +922,79 @@ pub(super) fn field_list_snapshot_regions(
                     }
                 }
             }
-            if entries.is_empty() {
+            // A loop that only measures the list and is entered on more
+            // than one way, as the part of a longer loop that skips its
+            // calls, would check the view at each entry to save one read
+            // of the length.
+            if entries.is_empty()
+                || entries.len() > 1
+                    && !component.iter().any(|label| reads_elements.contains(label))
+            {
                 continue;
             }
             regions.push(ListSnapshotRegion {
                 list: list.to_string(),
                 blocks: component.iter().map(|label| label.to_string()).collect(),
                 entries,
-                writes: false,
+                writes: component.iter().any(|label| clean[label].1),
                 temps,
+                method: false,
+                carry: None,
             });
         }
     }
+    regions.extend(method_region(function, &exclusive, rules));
     regions
+}
+
+/// The whole body of a method that keeps its receiver: `self`, held
+/// alone (see `field_list_snapshot_regions`), which every instruction
+/// that names it keeps in its layout (see `keeps_field_list`). The
+/// receiver then stays in the layout the body's entry found it in, and
+/// the caller's write-through sink stays absent, for the whole call.
+fn method_region(
+    function: &MirFunction,
+    exclusive: &impl Fn(&str) -> bool,
+    rules: &FieldListRules<'_>,
+) -> Option<ListSnapshotRegion> {
+    const RECEIVER: &str = "self";
+    if function.receiver.is_none() || !exclusive(RECEIVER) {
+        return None;
+    }
+    let mut names = false;
+    for block in &function.blocks {
+        // A branch on a scalar field reads it where it lies.
+        let terminator = terminator_place_mentions(&block.terminator)
+            .into_iter()
+            .filter(|place| root(place) == RECEIVER)
+            .collect::<Vec<_>>();
+        names |= !terminator.is_empty();
+        let mut keeps = terminator
+            .into_iter()
+            .all(|place| (rules.scalar_field)(place));
+        for instruction in &block.instructions {
+            if mentioned_roots(instruction).contains(RECEIVER) {
+                keeps &= keeps_field_list(instruction, RECEIVER, "", rules);
+                names = true;
+            }
+        }
+        if !keeps {
+            return None;
+        }
+    }
+    names.then(|| ListSnapshotRegion {
+        list: RECEIVER.to_string(),
+        blocks: function
+            .blocks
+            .iter()
+            .map(|block| block.label.clone())
+            .collect(),
+        entries: Vec::new(),
+        writes: false,
+        temps: HashSet::new(),
+        method: true,
+        carry: None,
+    })
 }
 
 /// The strongly connected components of the graph of `nodes`, with the
@@ -763,6 +1110,10 @@ pub(super) struct ListSnapshot {
     /// Each block that enters the loop, with its flag and the access code
     /// it read.
     pub(super) entries: Vec<(Blk, Val, Val)>,
+    /// Each block that enters the loop, with the flag of the loop's lists
+    /// of scalars alone, when the loop also reads other lists (see
+    /// `version_snapshot_loops`).
+    pub(super) scalar_entries: Vec<(Blk, Val)>,
     /// The access codes the loop's operations check the view for.
     pub(super) expected: Vec<i64>,
     /// The element accesses that stay in range while the guards hold
@@ -817,7 +1168,8 @@ impl FunctionCompiler<'_> {
     /// compiled.
     pub(super) fn snapshot_of_root(&self, name: &str) -> Option<usize> {
         self.list_snapshots.iter().position(|snapshot| {
-            (snapshot.region.list == name || snapshot.region.temps.contains(name))
+            !snapshot.region.method
+                && (snapshot.region.list == name || snapshot.region.temps.contains(name))
                 && snapshot
                     .region
                     .blocks
@@ -962,6 +1314,79 @@ impl FunctionCompiler<'_> {
         pad
     }
 
+    /// Reads, where the body of a method that keeps its receiver begins,
+    /// whether the receiver is in its typed layout with no write-through
+    /// sink, which the copy of the whole body runs for (see
+    /// `method_region`). The MIR entry block's code then begins in a block
+    /// of its own.
+    pub(super) fn enter_method_snapshot(
+        &mut self,
+        function: &MirFunction,
+    ) -> std::result::Result<(), String> {
+        let Some(index) = self
+            .list_snapshots
+            .iter()
+            .position(|snapshot| snapshot.region.method)
+        else {
+            return Ok(());
+        };
+        let start = self.blocks[&function.entry];
+        self.builder.switch_to_block(start);
+        // The layout every field of the receiver's class lies in.
+        let mut access = None;
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                let mut mentions = Vec::new();
+                instruction_place_mentions(instruction, &mut mentions);
+                for place in mentions {
+                    if access.is_none() && root(place) == "self" {
+                        access = self.class_place(place)?.map(|(_, slot, _)| slot.access);
+                    }
+                }
+            }
+        }
+        // A class whose fields lie in a map has no layout to keep, and the
+        // body no copy.
+        let Some(access) = access else {
+            return Ok(());
+        };
+        let zero = self.builder.iconst(types::I64, 0);
+        let object = self.local_vars("self")?[0];
+        let object = self.builder.use_var(object);
+        let check_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder
+            .brif(object, check_block, &[], join_block, &[zero]);
+        self.builder.switch_to_block(check_block);
+        self.builder.seal_block(check_block);
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let actual = self
+            .builder
+            .uload32(MemFlags::trusted(), object, layout.access_offset);
+        let same = self.builder.icmp_imm(IntCC::Equal, actual, access);
+        let same = self.builder.uextend(types::I64, same);
+        self.builder.jump(join_block, &[same]);
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let mut flag = self.builder.block_params(join_block)[0];
+        if let Some(slot) = self.list_snapshots[index].sink {
+            let sink = self.current_mutable_sink(slot);
+            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
+            let direct = self.builder.uextend(types::I64, direct);
+            flag = self.builder.band(flag, direct);
+        }
+        self.builder.def_var(self.list_snapshots[index].ok, flag);
+        let pad = self.builder.current_block().unwrap_or(start);
+        let body = self.builder.create_block();
+        self.builder.jump(body, &[]);
+        self.builder.switch_to_block(body);
+        self.builder.seal_block(body);
+        self.blocks.insert(function.entry.clone(), body);
+        self.list_snapshots[index].entries.push((pad, flag, flag));
+        Ok(())
+    }
+
     /// Fills the blocks the terminator just compiled jumps through to
     /// enter loops: each reads the views of its loops' lists and jumps on.
     pub(super) fn fill_snapshot_pads(&mut self) -> std::result::Result<(), String> {
@@ -969,8 +1394,75 @@ impl FunctionCompiler<'_> {
             self.builder.switch_to_block(pad);
             self.builder.seal_block(pad);
             let mut oks = Vec::new();
-            for index in &entering {
-                oks.push((*index, self.emit_list_snapshot(*index)?));
+            let sources = entering
+                .iter()
+                .map(|index| self.carry_source(*index))
+                .collect::<Option<Vec<_>>>();
+            match sources {
+                // Loops entered after other loops on each of their lists,
+                // whose words still hold, take them while every one of
+                // those loops found its view qualified.
+                Some(sources) => {
+                    let mut all = None;
+                    for source in &sources {
+                        let ok = self.builder.use_var(self.list_snapshots[*source].ok);
+                        all = Some(match all {
+                            None => ok,
+                            Some(all) => self.builder.band(all, ok),
+                        });
+                    }
+                    let all = all.expect("a pad enters at least one loop");
+                    let carry_block = self.builder.create_block();
+                    let fresh_block = self.builder.create_block();
+                    let join_block = self.builder.create_block();
+                    for _ in 0..4 * entering.len() {
+                        self.builder.append_block_param(join_block, types::I64);
+                    }
+                    self.builder.brif(all, carry_block, &[], fresh_block, &[]);
+                    self.builder.switch_to_block(carry_block);
+                    self.builder.seal_block(carry_block);
+                    let mut words = Vec::new();
+                    for (index, source) in entering.iter().zip(&sources) {
+                        words.extend(self.emit_carried_snapshot(*index, *source)?);
+                    }
+                    self.builder.jump(join_block, &words);
+                    self.builder.switch_to_block(fresh_block);
+                    self.builder.seal_block(fresh_block);
+                    words.clear();
+                    for index in &entering {
+                        self.emit_list_snapshot(*index)?;
+                        let snapshot = &self.list_snapshots[*index];
+                        let vars = [
+                            snapshot.ok,
+                            snapshot.access,
+                            snapshot.len,
+                            snapshot.elements,
+                        ];
+                        words.extend(vars.map(|variable| self.builder.use_var(variable)));
+                    }
+                    self.builder.jump(join_block, &words);
+                    self.builder.switch_to_block(join_block);
+                    self.builder.seal_block(join_block);
+                    let params = self.builder.block_params(join_block).to_vec();
+                    for (index, params) in entering.iter().zip(params.chunks(4)) {
+                        let snapshot = &self.list_snapshots[*index];
+                        let vars = [
+                            snapshot.ok,
+                            snapshot.access,
+                            snapshot.len,
+                            snapshot.elements,
+                        ];
+                        for (variable, value) in vars.into_iter().zip(params) {
+                            self.builder.def_var(variable, *value);
+                        }
+                        oks.push((*index, (params[0], params[1])));
+                    }
+                }
+                None => {
+                    for index in &entering {
+                        oks.push((*index, self.emit_list_snapshot(*index)?));
+                    }
+                }
             }
             // A loop that reads several lists' views once runs its copy
             // while every view qualifies. The jump on is in the block the
@@ -978,6 +1470,8 @@ impl FunctionCompiler<'_> {
             let pad = self.builder.current_block().unwrap_or(pad);
             for (index, (_, access)) in &oks {
                 let mut flag = None;
+                let mut scalars = None;
+                let mut mixed = false;
                 for (other, (ok, _)) in &oks {
                     if self.list_snapshots[*other].region.blocks
                         == self.list_snapshots[*index].region.blocks
@@ -986,12 +1480,25 @@ impl FunctionCompiler<'_> {
                             None => *ok,
                             Some(flag) => self.builder.band(flag, *ok),
                         });
+                        if self.list_snapshots[*other].scalar_element().is_some() {
+                            scalars = Some(match scalars {
+                                None => *ok,
+                                Some(flag) => self.builder.band(flag, *ok),
+                            });
+                        } else {
+                            mixed = true;
+                        }
                     }
                 }
                 let flag = flag.expect("a loop's own flag is among them");
                 self.list_snapshots[*index]
                     .entries
                     .push((pad, flag, *access));
+                if let Some(scalars) = scalars.filter(|_| mixed) {
+                    self.list_snapshots[*index]
+                        .scalar_entries
+                        .push((pad, scalars));
+                }
             }
             self.builder.jump(target, &[]);
         }
@@ -1121,12 +1628,48 @@ impl FunctionCompiler<'_> {
         self.builder.use_var(self.list_snapshots[index].elements)
     }
 
+    /// The loop on the same list whose view words snapshot `index` takes
+    /// (see `carried_view`), as an index into `list_snapshots`.
+    fn carry_source(&self, index: usize) -> Option<usize> {
+        let snapshot = &self.list_snapshots[index];
+        let blocks = snapshot.region.carry.as_ref()?;
+        self.list_snapshots.iter().position(|other| {
+            other.region.list == snapshot.region.list
+                && other.region.blocks == *blocks
+                && other.array.is_none()
+        })
+    }
+
+    /// The flag and the view words of snapshot `index`'s list, which loop
+    /// `source` found qualified with the words they still are: the words
+    /// are read again with no checks of their own.
+    fn emit_carried_snapshot(
+        &mut self,
+        index: usize,
+        source: usize,
+    ) -> std::result::Result<[Val; 4], String> {
+        let snapshot = self.list_snapshots[index].clone();
+        let source = self.list_snapshots[source].clone();
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let flags = MemFlags::trusted();
+        let source_ok = self.builder.use_var(source.ok);
+        let handle = self.local_list_handle(&snapshot.region.list)?;
+        let access = self.builder.uload32(flags, handle, layout.access_offset);
+        let len = self
+            .builder
+            .load(types::I64, flags, handle, layout.len_offset);
+        let elements = self
+            .builder
+            .load(types::I64, flags, handle, layout.elements_offset);
+        let qualifies =
+            self.view_qualifies(&snapshot, handle, access, len, Some((&source, source_ok)))?;
+        let ok = self.builder.uextend(types::I64, qualifies);
+        Ok([ok, access, len, elements])
+    }
+
     /// Copies the view of snapshot `index`'s list into its variables, with
     /// whether the view qualifies (see the module documentation).
     fn emit_list_snapshot(&mut self, index: usize) -> std::result::Result<(Val, Val), String> {
-        use aura_runtime::native_runtime::{
-            DirectListAccess, FIRST_CLASS_ACCESS, FIRST_PLAIN_ACCESS,
-        };
         let snapshot = self.list_snapshots[index].clone();
         if let Some(array) = &snapshot.array {
             return self.emit_array_snapshot(index, array);
@@ -1139,16 +1682,7 @@ impl FunctionCompiler<'_> {
                 self.builder.def_var(field_box, boxed);
                 boxed
             }
-            None => {
-                let vars = self.local_vars(&snapshot.region.list)?;
-                let [var] = vars.as_slice() else {
-                    return Err(format!(
-                        "direct backend read the view of `{}`, which is not one box",
-                        snapshot.region.list
-                    ));
-                };
-                self.builder.use_var(*var)
-            }
+            None => self.local_list_handle(&snapshot.region.list)?,
         };
         let read_block = self.builder.create_block();
         let join_block = self.builder.create_block();
@@ -1173,7 +1707,137 @@ impl FunctionCompiler<'_> {
         let elements = self
             .builder
             .load(types::I64, flags, handle, layout.elements_offset);
-        let mut qualifies = match snapshot.scalar_element() {
+        let qualifies = self.view_qualifies(&snapshot, handle, access, len, None)?;
+        let ok = self.builder.uextend(types::I64, qualifies);
+        self.builder.jump(join_block, &[ok, access, len, elements]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let params = self.builder.block_params(join_block).to_vec();
+        for (variable, value) in [
+            snapshot.ok,
+            snapshot.access,
+            snapshot.len,
+            snapshot.elements,
+        ]
+        .into_iter()
+        .zip(params.iter().copied())
+        {
+            self.builder.def_var(variable, value);
+        }
+        Ok((params[0], params[1]))
+    }
+
+    /// Whether the view words `access` and `len` of the list `handle`
+    /// let the loop of `snapshot` run its copy (see the module
+    /// documentation). `carried` is the loop the words come from, with
+    /// its flag, when they are that loop's.
+    fn view_qualifies(
+        &mut self,
+        snapshot: &ListSnapshot,
+        handle: Val,
+        access: Val,
+        len: Val,
+        carried: Option<(&ListSnapshot, Val)>,
+    ) -> std::result::Result<Val, String> {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let flags = MemFlags::trusted();
+        let mut qualifies = match carried {
+            // The words are the ones that loop found in its own form.
+            Some((source, source_ok)) if source.scalar_element() == snapshot.scalar_element() => {
+                self.builder.icmp_imm(IntCC::NotEqual, source_ok, 0)
+            }
+            _ => self.view_form(snapshot, access),
+        };
+        // A loop that wrote the list found its storage unshared, and the
+        // words it carries hold only while nothing shares it.
+        let carried_room = carried.is_some_and(|(source, _)| source.region.writes);
+        if snapshot.region.writes && !carried_room {
+            let room = self.builder.uload32(flags, handle, layout.capacity_offset);
+            let has_room = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
+            qualifies = self.builder.band(qualifies, has_room);
+        }
+        // The other loop checked the same sink.
+        let sink = match carried {
+            Some((source, _)) if source.sink == snapshot.sink => None,
+            _ => snapshot.sink,
+        };
+        if let Some(slot) = sink {
+            // A caller that asked for each write to be handed back takes
+            // a reference to the list with it, so the storage is shared.
+            let sink = self.current_mutable_sink(slot);
+            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
+            qualifies = self.builder.band(qualifies, direct);
+        }
+        // The carried length is the one the other loop's guards found long
+        // enough for each constant bound and distance.
+        let carried_reach = carried
+            .and_then(|(source, _)| source.range.as_ref())
+            .and_then(|proof| {
+                use super::range_loops::{RangeBound, RangeGuard};
+                proof
+                    .guards
+                    .iter()
+                    .filter_map(|guard| match guard {
+                        RangeGuard::Within {
+                            bound: RangeBound::Int(bound),
+                            distance,
+                        } => bound.checked_add(*distance),
+                        _ => None,
+                    })
+                    .max()
+            });
+        if let Some(proof) = &snapshot.range {
+            for guard in &proof.guards {
+                use super::range_loops::{RangeBound, RangeGuard};
+                if let (RangeGuard::Within { bound, distance }, Some(carried_reach)) =
+                    (guard, carried_reach)
+                {
+                    let bound = match bound {
+                        RangeBound::Int(value) => Some(*value),
+                        RangeBound::Place(place) => {
+                            let value = self.range_word(place)?;
+                            self.builder.integer_constant(value)
+                        }
+                    };
+                    if bound
+                        .and_then(|bound| bound.checked_add(*distance))
+                        .is_some_and(|reach| reach <= carried_reach)
+                    {
+                        continue;
+                    }
+                }
+                let holds = match guard {
+                    RangeGuard::AtLeast { place, least } => {
+                        let value = self.range_word(place)?;
+                        self.builder
+                            .icmp_imm(IntCC::SignedGreaterThanOrEqual, value, *least)
+                    }
+                    RangeGuard::Within { bound, distance } => {
+                        let bound = match bound {
+                            RangeBound::Place(place) => self.range_word(place)?,
+                            RangeBound::Int(value) => self.builder.iconst(types::I64, *value),
+                        };
+                        // A length is far below the range of `int64`, so
+                        // the difference is exact.
+                        let limit = self.builder.iadd_imm(len, -*distance);
+                        self.builder
+                            .icmp(IntCC::SignedLessThanOrEqual, bound, limit)
+                    }
+                };
+                qualifies = self.builder.band(qualifies, holds);
+            }
+        }
+        Ok(qualifies)
+    }
+
+    /// Whether the access code `access` names a form the loop of
+    /// `snapshot` reads its view once in.
+    fn view_form(&mut self, snapshot: &ListSnapshot, access: Val) -> Val {
+        use aura_runtime::native_runtime::{
+            DirectListAccess, FIRST_CLASS_ACCESS, FIRST_PLAIN_ACCESS,
+        };
+        match snapshot.scalar_element() {
             // The loop's scalar accesses check for one access code, a
             // scalar form, and the copy runs for that one.
             Some(element) => {
@@ -1209,61 +1873,18 @@ impl FunctionCompiler<'_> {
                 let form = self.builder.bor(scalar, boxes);
                 self.builder.bor(form, typed)
             }
-        };
-        if snapshot.region.writes {
-            let room = self.builder.uload32(flags, handle, layout.capacity_offset);
-            let has_room = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
-            qualifies = self.builder.band(qualifies, has_room);
         }
-        if let Some(slot) = snapshot.sink {
-            // A caller that asked for each write to be handed back takes
-            // a reference to the list with it, so the storage is shared.
-            let sink = self.current_mutable_sink(slot);
-            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
-            qualifies = self.builder.band(qualifies, direct);
-        }
-        if let Some(proof) = &snapshot.range {
-            for guard in &proof.guards {
-                use super::range_loops::{RangeBound, RangeGuard};
-                let holds = match guard {
-                    RangeGuard::AtLeast { place, least } => {
-                        let value = self.range_word(place)?;
-                        self.builder
-                            .icmp_imm(IntCC::SignedGreaterThanOrEqual, value, *least)
-                    }
-                    RangeGuard::Within { bound, distance } => {
-                        let bound = match bound {
-                            RangeBound::Place(place) => self.range_word(place)?,
-                            RangeBound::Int(value) => self.builder.iconst(types::I64, *value),
-                        };
-                        // A length is far below the range of `int64`, so
-                        // the difference is exact.
-                        let limit = self.builder.iadd_imm(len, -*distance);
-                        self.builder
-                            .icmp(IntCC::SignedLessThanOrEqual, bound, limit)
-                    }
-                };
-                qualifies = self.builder.band(qualifies, holds);
-            }
-        }
-        let ok = self.builder.uextend(types::I64, qualifies);
-        self.builder.jump(join_block, &[ok, access, len, elements]);
+    }
 
-        self.builder.switch_to_block(join_block);
-        self.builder.seal_block(join_block);
-        let params = self.builder.block_params(join_block).to_vec();
-        for (variable, value) in [
-            snapshot.ok,
-            snapshot.access,
-            snapshot.len,
-            snapshot.elements,
-        ]
-        .into_iter()
-        .zip(params.iter().copied())
-        {
-            self.builder.def_var(variable, value);
-        }
-        Ok((params[0], params[1]))
+    /// The box of the local list `list`.
+    fn local_list_handle(&mut self, list: &str) -> std::result::Result<Val, String> {
+        let vars = self.local_vars(list)?;
+        let [var] = vars.as_slice() else {
+            return Err(format!(
+                "direct backend read the view of `{list}`, which is not one box"
+            ));
+        };
+        Ok(self.builder.use_var(*var))
     }
 
     /// The value of the `int64` local `place`, which a range guard reads.
@@ -1327,17 +1948,28 @@ impl FunctionCompiler<'_> {
     /// it in while that holds the view, and from the list otherwise.
     pub(super) fn list_view_word(&mut self, list: Val, word: ViewWord) -> Val {
         let layout = aura_runtime::native_runtime::direct_list_layout();
-        let flags = MemFlags::trusted();
+        let flags = MemFlags::trusted_in;
         let read = match word {
-            ViewWord::Access => self.builder.uload32(flags, list, layout.access_offset),
-            ViewWord::Len => self
-                .builder
-                .load(types::I64, flags, list, layout.len_offset),
-            ViewWord::Elements => {
+            ViewWord::Access => {
                 self.builder
-                    .load(types::I64, flags, list, layout.elements_offset)
+                    .uload32(flags(AliasClass::BoxAccess), list, layout.access_offset)
             }
-            ViewWord::Room => self.builder.uload32(flags, list, layout.capacity_offset),
+            ViewWord::Len => self.builder.load(
+                types::I64,
+                flags(AliasClass::BoxLen),
+                list,
+                layout.len_offset,
+            ),
+            ViewWord::Elements => self.builder.load(
+                types::I64,
+                flags(AliasClass::BoxElements),
+                list,
+                layout.elements_offset,
+            ),
+            ViewWord::Room => {
+                self.builder
+                    .uload32(flags(AliasClass::BoxRoom), list, layout.capacity_offset)
+            }
         };
         let Some(&index) = self.snapshot_vals.get(&list) else {
             return read;
@@ -1378,22 +2010,24 @@ impl FunctionCompiler<'_> {
     }
 
     /// Gives each loop that reads a view once its copy for while the view
-    /// qualifies. A loop that shares blocks with one already copied keeps
-    /// reading its views from memory.
+    /// qualifies. Loops inside others come first, so the copy of a loop
+    /// around them, or across them, holds each of their versions.
     pub(super) fn version_snapshot_loops(&mut self) {
-        let mut copied = HashSet::<Blk>::new();
-        let mut done = vec![false; self.list_snapshots.len()];
+        // The loops with the same blocks, which one copy serves.
+        let mut groups = Vec::<Vec<usize>>::new();
         for index in 0..self.list_snapshots.len() {
-            if done[index] {
-                continue;
+            let blocks = &self.list_snapshots[index].region.blocks;
+            match groups
+                .iter_mut()
+                .find(|group| self.list_snapshots[group[0]].region.blocks == *blocks)
+            {
+                Some(group) => group.push(index),
+                None => groups.push(vec![index]),
             }
-            // The loops with the same blocks, which one copy serves.
-            let group = (index..self.list_snapshots.len())
-                .filter(|other| {
-                    self.list_snapshots[*other].region.blocks
-                        == self.list_snapshots[index].region.blocks
-                })
-                .collect::<Vec<_>>();
+        }
+        groups.sort_by_key(|group| self.list_snapshots[group[0]].region.blocks.len());
+        for group in groups {
+            let index = group[0];
             // A loop over one list whose operations all check for one
             // access code runs its copy only for that code, which the copy
             // then knows. A loop with scalar element accesses checked the
@@ -1416,7 +2050,6 @@ impl FunctionCompiler<'_> {
             let mut blocks = Vec::new();
             let mut selects = Vec::new();
             for member in &group {
-                done[*member] = true;
                 let known = code_of(&self.list_snapshots[*member]).or(expected);
                 blocks.extend(self.list_snapshots[*member].ir_blocks.iter().copied());
                 selects.extend(
@@ -1426,19 +2059,43 @@ impl FunctionCompiler<'_> {
                         .map(|(select, access)| (*select, known.filter(|_| *access))),
                 );
             }
-            let overlaps = blocks.iter().any(|block| copied.contains(block));
-            let entries = if overlaps {
-                Vec::new()
-            } else {
-                self.list_snapshots[index]
-                    .entries
-                    .iter()
-                    .map(|(pad, flag, access)| (*pad, *flag, expected.map(|code| (*access, code))))
-                    .collect()
-            };
-            if self.builder.version_blocks(&blocks, &selects, &entries) {
-                copied.extend(blocks);
+            let entries = self.list_snapshots[index]
+                .entries
+                .iter()
+                .map(|(pad, flag, access)| (*pad, *flag, expected.map(|code| (*access, code))))
+                .collect::<Vec<_>>();
+            // A loop that reads lists of scalars and other lists first gets
+            // a copy for while the lists of scalars qualify, whose view is
+            // the cheapest to keep and the likeliest to qualify. The copy
+            // for while every list qualifies is then tried first where the
+            // loop is entered, so a list that does not qualify costs the
+            // others nothing.
+            // A copy with nothing to settle gains nothing.
+            if selects.is_empty() {
+                continue;
             }
+            if !self.list_snapshots[index].scalar_entries.is_empty() {
+                let scalar_selects = group
+                    .iter()
+                    .filter(|member| self.list_snapshots[**member].scalar_element().is_some())
+                    .flat_map(|member| {
+                        let known = code_of(&self.list_snapshots[*member]);
+                        self.list_snapshots[*member]
+                            .selects
+                            .iter()
+                            .map(move |(select, access)| (*select, known.filter(|_| *access)))
+                    })
+                    .collect::<Vec<_>>();
+                let scalar_entries = self.list_snapshots[index]
+                    .scalar_entries
+                    .iter()
+                    .map(|(pad, flag)| (*pad, *flag, None))
+                    .collect::<Vec<_>>();
+                self.builder
+                    .version_blocks(&blocks, &scalar_selects, &scalar_entries);
+            }
+            self.builder.version_blocks(&blocks, &selects, &entries);
+            self.builder.seal_versions();
         }
     }
 }

@@ -1,0 +1,78 @@
+enum Shape:
+    Circle(float64)
+    Rect(float64, float64)
+    Empty
+
+
+def area(shape: Shape) -> float64:
+    match shape:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Rect(w, h):
+            return w * h
+        case Shape.Empty:
+            return 0.0
+
+
+def scaled(shape: Shape, by: float64) -> float64:
+    return area(shape) * by
+
+
+def kept(shape: Shape) -> Shape:
+    return shape
+
+
+class Holder:
+    current: Shape
+    next: Shape
+    count: int64
+
+    # The field is lent to a call that only reads it.
+    def probe(self) -> float64:
+        return area(self.current) + scaled(self.next, 2.0)
+
+    # A match on the field reads it in place.
+    def radius(self) -> float64:
+        match self.current:
+            case Shape.Circle(r):
+                return r
+            case _:
+                return -1.0
+
+    # The field written right after the match read it.
+    def step(mut self) -> float64:
+        mut next = Shape.Empty
+        mut result = 0.0
+        match self.current:
+            case Shape.Circle(r):
+                next = Shape.Rect(r, r + 1.0)
+                result = r
+            case Shape.Rect(w, h):
+                self.count += 1
+                result = w + h
+            case Shape.Empty:
+                next = Shape.Circle(self.count as float64)
+        self.current = next
+        return result + area(self.current)
+
+    # A call that returns the field keeps a copy of its own.
+    def snapshot(mut self) -> Shape:
+        taken = kept(self.current)
+        self.current = Shape.Empty
+        return taken
+
+
+def main():
+    mut holder = Holder(current=Shape.Circle(2.0), next=Shape.Rect(1.0, 3.0), count=0)
+    mut total = 0.0
+    for i in range(3):
+        total += holder.probe()
+        total += holder.radius()
+    print(total)
+    for i in range(7):
+        print(holder.step())
+    holder.current = Shape.Circle(4.0)
+    taken = holder.snapshot()
+    print(area(taken))
+    print(area(holder.current))
+    print(holder.probe())

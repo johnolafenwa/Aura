@@ -1991,6 +1991,64 @@ fn indexed_ascii_bindings_exclude_writable_and_nonliteral_strings() {
 }
 
 #[test]
+fn receiver_shape_keepers_lend_their_whole_receiver_to_no_reader() {
+    let source = include_str!("../tests/fixtures/run-pass/receiver_boxes_kept_by_list_methods.au");
+    let mir = lower_source_to_mir(source).expect("receiver keepers lower");
+    let receivers = mir
+        .classes
+        .iter()
+        .flat_map(|class| &class.methods)
+        .map(|method| (method.function_name.clone(), method.receiver))
+        .collect::<HashMap<_, _>>();
+    let sorted = |names: std::collections::HashSet<String>| {
+        let mut names = names.into_iter().collect::<Vec<_>>();
+        names.sort_unstable();
+        names
+    };
+    // `report` lends its whole receiver to `show`, which may read its tag;
+    // `reset` assigns `self`.
+    assert_eq!(
+        sorted(super::element_loans::receiver_keepers(&mir, &receivers)),
+        ["Book.add", "Book.fix", "Book.report", "Book.take"]
+    );
+    assert_eq!(
+        sorted(super::element_loans::receiver_shape_keepers(
+            &mir, &receivers
+        )),
+        ["Book.add", "Book.fix", "Book.take"]
+    );
+    emit_unoptimized_object(&mir).expect("receiver keepers emit");
+}
+
+#[test]
+fn nested_field_list_reads_follow_the_field_s_boxes() {
+    let source = include_str!("../tests/fixtures/run-pass/nested_field_lists_read_in_place.au");
+    let mir = lower_source_to_mir(source).expect("nested field list reads lower");
+    let object = emit_unoptimized_object(&mir).expect("nested field list reads emit");
+    // A copied string comes from the inner list's view, an appended one
+    // goes from its words to the list, and a checked position comes from
+    // the inner list itself, with the runtime walk kept for every other
+    // shape.
+    for (name, copy) in [
+        ("aura_fn_Mailboxes_first", "aura_direct_string_from_view"),
+        ("aura_fn_Mailboxes_gather", "aura_direct_vec_push_str_view"),
+    ] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        for expected in [
+            copy,
+            "aura_direct_vec_check_index",
+            "aura_direct_element_path_load",
+        ] {
+            // Mach-O symbol names carry a leading underscore.
+            assert!(
+                symbols.iter().any(|symbol| symbol.ends_with(expected)),
+                "{name}: {symbols:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn indexed_text_compares_as_a_unicode_scalar() {
     let source = include_str!("../tests/fixtures/run-pass/indexed_str_comparison.au");
     let mir = lower_source_to_mir(source).expect("string comparisons lower");
@@ -9664,8 +9722,10 @@ def main() -> int32:
 fn direct_string_to_bytes_routes_through_the_registered_host_builtin() {
     let source = r#"
 def main() -> int32:
-    payload = "café".to_bytes()
+    text = "café".to_upper()
+    payload = text.to_bytes()
     print(payload)
+    print("ok".to_bytes())
     return 0
 "#;
     let mir = lower_source_to_mir(source).expect("str.to_bytes source should lower to MIR");
@@ -9691,11 +9751,22 @@ def main() -> int32:
     );
     let bytes = emit_host_object(&mir).expect("str.to_bytes should emit direct native code");
     let referenced = object_referenced_symbols(&bytes);
+    // A literal's bytes are copied from where the program keeps them, and
+    // a boxed `str`'s from its box, with no lookup of the builtin.
     assert!(
         referenced
             .iter()
+            .any(|symbol| symbol.contains("aura_direct_string_to_bytes_view"))
+            && referenced
+                .iter()
+                .any(|symbol| symbol.contains("aura_direct_string_bytes")),
+        "str.to_bytes copies the words of a literal or a box: {referenced:?}"
+    );
+    assert!(
+        !referenced
+            .iter()
             .any(|symbol| symbol.contains("aura_host_str_to_bytes")),
-        "str.to_bytes must call its own host builtin entry: {referenced:?}"
+        "a boxed str.to_bytes reads its words in place: {referenced:?}"
     );
 
     let object = object::File::parse(bytes.as_slice())
@@ -14181,7 +14252,6 @@ def main():
     let referenced = object_referenced_symbols(&object);
     for symbol in [
         "aura_direct_compare_str_literal_at",
-        "aura_direct_compare_values_at",
         "aura_direct_vec_element_len",
         "aura_direct_vec_element_map_get_str_payload",
     ] {
@@ -14190,6 +14260,14 @@ def main():
             "the loops should call `{symbol}`, referenced: {referenced:?}"
         );
     }
+    // `other` reaches the view twin of `scan` as words, which compares the
+    // loaned element's bytes with them.
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_bytes_equal")),
+        "the loop should compare bytes, referenced: {referenced:?}"
+    );
     // The loop's bound check covers each loan, and the literal key is not
     // boxed.
     for symbol in [
@@ -14483,6 +14561,7 @@ def main():
         "aura_direct_vec_index",
         "aura_direct_vec_push_in_place",
         "aura_direct_vec_set_index_in_place",
+        "aura_direct_vec_set_index_discarded",
         "aura_direct_instance_get_field",
         "aura_direct_box_plain",
     ] {
@@ -14537,6 +14616,45 @@ def main():
         assert!(
             !referenced.iter().any(|name| name.ends_with(symbol)),
             "list literal code should not call `{symbol}`"
+        );
+    }
+}
+
+#[test]
+fn native_appended_instances_of_scalars_and_text_go_in_as_words() {
+    let source = r#"
+class Hit:
+    text: str
+    start: int64
+
+class Bag:
+    items: list[int64]
+
+def hits(line: str) -> int64:
+    mut found: list[Hit] = []
+    found.append(Hit(text=line[0:1], start=1))
+    mut bags: list[Bag] = []
+    bags.append(Bag(items=[1]))
+    mut total = 0
+    for hit in found:
+        total += hit.start
+    return total + bags.len()
+
+def main():
+    print(hits("ab"))
+"#;
+    let mir = lower_source_to_mir(source).expect("instance list source should lower");
+    let object = emit_host_object(&mir).expect("instance list source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    // The `Hit` goes in as its field words; a `Bag` holds a list, so it is
+    // built in its own box and pushed as one.
+    for symbol in [
+        "aura_direct_vec_push_instance",
+        "aura_direct_vec_push_in_place",
+    ] {
+        assert!(
+            referenced.iter().any(|name| name.ends_with(symbol)),
+            "instance list code should call `{symbol}`, referenced: {referenced:?}"
         );
     }
 }
@@ -15516,6 +15634,89 @@ fn str_append_root_needs_the_ownership_pass_form() {
 }
 
 #[test]
+fn str_literal_reads_share_a_frozen_box() {
+    // A literal a field, a local or a return takes is the literal's one
+    // frozen box, so no read of it allocates.
+    let source = r#"
+class Node:
+    tag: str
+
+def make(flag: bool) -> Node:
+    mut tag = ""
+    if flag:
+        tag = "p"
+    return Node(tag=tag)
+
+def main() -> int32:
+    print(make(true).tag)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the literals should lower");
+    let object = emit_host_object(&mir).expect("the literals should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_string_literal_cell"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_string_literal"),
+        "{referenced:?}"
+    );
+}
+
+#[test]
+fn str_append_root_takes_a_plus_on_the_root() {
+    let plus = |left: Operand, right: Operand| {
+        vec![
+            Instruction::Assign {
+                target: "%t1".to_string(),
+                value: Rvalue::Binary {
+                    op: BinaryOp::Add,
+                    left,
+                    right,
+                    span: Span::new(1, 1),
+                    trap: crate::mir::ArithmeticTrap::Runtime,
+                },
+            },
+            Instruction::Release {
+                place: "text".to_string(),
+            },
+            Instruction::Assign {
+                target: "text".to_string(),
+                value: Rvalue::Use(Operand::MovePlace("%t1".to_string())),
+            },
+        ]
+    };
+    let place = |name: &str| Operand::Place(name.to_string());
+    assert_eq!(
+        super::str_append_root(&plus(place("text"), Operand::String("!".to_string()))),
+        Some("text")
+    );
+    assert_eq!(
+        super::str_append_root(&plus(place("text"), place("other"))),
+        Some("text")
+    );
+    // `text + text` reads the root, and `other + text` adds to another.
+    assert_eq!(
+        super::str_append_root(&plus(place("text"), place("text"))),
+        None
+    );
+    assert_eq!(
+        super::str_append_root(&plus(place("other"), place("text"))),
+        None
+    );
+    let mut minus = plus(place("text"), place("other"));
+    if let Instruction::Assign {
+        value: Rvalue::Binary { op, .. },
+        ..
+    } = &mut minus[0]
+    {
+        *op = BinaryOp::Sub;
+    }
+    assert_eq!(super::str_append_root(&minus), None);
+}
+
+#[test]
 fn owned_replace_receiver_needs_a_released_temporary_and_literals() {
     let source = "def swap(text: str) -> str:\n    return text.replace(\"a\", \"b\").replace(\"c\", \"d\")\n\n\ndef main():\n    print(swap(\"ac\"))\n";
     let mir = lower_source_to_mir(source).expect("the replace chain should lower");
@@ -15702,45 +15903,6 @@ fn dict_str_clone_needs_a_checked_loan_cloned_and_ended() {
     assert_eq!(super::dict_str_clone(&other_loan), None);
 }
 
-#[test]
-fn extended_str_bytes_needs_the_list_of_bytes_to_go_straight_into_the_extend() {
-    let source = "def add(out: mut list[uint8], text: str):\n    out.extend(text.to_bytes())\n\n\ndef main():\n    mut out: list[uint8] = []\n    add(out, \"a\")\n    print(out.len())\n";
-    let mir = lower_source_to_mir(source).expect("the extend should lower");
-    let add = mir
-        .functions
-        .iter()
-        .find(|function| function.name == "add")
-        .expect("add");
-    let instructions = &add.blocks[0].instructions;
-    assert_eq!(
-        super::extended_str_bytes(instructions),
-        Some(&Operand::Place("text".to_string()))
-    );
-    // The extend alone, or after anything but `to_bytes`, reads a list.
-    assert_eq!(super::extended_str_bytes(&instructions[1..]), None);
-    assert_eq!(super::extended_str_bytes(&instructions[..1]), None);
-    let mut other_list = instructions.to_vec();
-    let Instruction::Assign {
-        value: Rvalue::Call { args, .. },
-        ..
-    } = &mut other_list[1]
-    else {
-        panic!("the second instruction is the extend");
-    };
-    args[0].value = Operand::MovePlace("out".to_string());
-    assert_eq!(super::extended_str_bytes(&other_list), None);
-    let mut moved_text = instructions.to_vec();
-    let Instruction::Assign {
-        value: Rvalue::Call { args, .. },
-        ..
-    } = &mut moved_text[0]
-    else {
-        panic!("the first instruction is the call");
-    };
-    args[0].value = Operand::MovePlace("text".to_string());
-    assert_eq!(super::extended_str_bytes(&moved_text), None);
-}
-
 /// The lookup slots of `LOOKUP_MATCH_SOURCE`'s `main` after `change`.
 fn lookup_slots_after(change: impl FnOnce(&mut MirFunction, &str)) -> BTreeSet<String> {
     let mir = lower_source_to_mir(LOOKUP_MATCH_SOURCE).expect("the lookup match should lower");
@@ -15898,8 +16060,9 @@ fn direct_queue_receives_and_discarded_puts_build_no_variant() {
     let mir = lower_source_to_mir(QUEUE_SLOT_SOURCE).expect("the queue program should lower");
     let object = emit_host_object(&mir).expect("the queue program should compile directly");
     let referenced = exact_referenced_symbols(&object);
+    // A discarded put of an `int64` passes the integer, with no box.
     for required in [
-        "aura_direct_channel_send_discarded",
+        "aura_direct_channel_send_discarded_i64",
         "aura_direct_channel_recv_item",
         "aura_direct_channel_recv_in_task_group_item",
     ] {
@@ -16076,14 +16239,17 @@ def main():
     let mir = lower_source_to_mir(equality).expect("the equality loop should lower");
     let object = emit_host_object(&mir).expect("the equality loop should compile directly");
     let referenced = exact_referenced_symbols(&object);
-    // The bytes are compared in generated code once the lengths match, and
-    // a list without a `str` view still takes the runtime compare.
-    for required in [
-        "aura_direct_bytes_equal",
-        "aura_direct_compare_str_literal_at",
-    ] {
-        assert!(referenced.contains(required), "{required}: {referenced:?}");
-    }
+    // The bytes of a short literal are compared in words in generated code
+    // once the lengths match, and a list without a `str` view still takes
+    // the runtime compare.
+    assert!(
+        referenced.contains("aura_direct_compare_str_literal_at"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_bytes_equal"),
+        "{referenced:?}"
+    );
 }
 
 #[test]
@@ -16224,6 +16390,30 @@ def main():
         "aura_direct_map_values",
     ] {
         assert!(!referenced.contains(list), "{list}: {referenced:?}");
+    }
+}
+
+#[test]
+fn a_walked_key_loop_holds_its_copied_key_as_a_box() {
+    // A `keys()` loop that walks the dict's entries reads each key as a
+    // box, so its variable is not an element slot of the list it skips.
+    let source = r#"
+def main():
+    mut words: dict[str, int64] = {}
+    words["one"] = 1
+    mut names: list[str] = []
+    for key in words.keys():
+        names.append(key.clone())
+    print(names.len())
+"#;
+    let mir = lower_source_to_mir(source).expect("the loop should lower");
+    let object = emit_host_object(&mir).expect("the loop should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in ["aura_direct_map_next_slot", "aura_direct_map_key_at"] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    for words in ["aura_direct_map_keys", "aura_direct_string_from_view"] {
+        assert!(!referenced.contains(words), "{words}: {referenced:?}");
     }
 }
 
@@ -16640,7 +16830,8 @@ def main():
         "{referenced:?}"
     );
     assert!(
-        !referenced.contains("aura_direct_vec_set_index_in_place"),
+        !referenced.contains("aura_direct_vec_set_index_in_place")
+            && !referenced.contains("aura_direct_vec_set_index_discarded"),
         "{referenced:?}"
     );
 }
@@ -17078,6 +17269,14 @@ def to_int(text: str) -> int64:
             return -1
 
 
+def to_float(text: str) -> float64:
+    match parse_float64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return -1.0
+
+
 def why(text: str) -> str:
     match own parse_float64(text):
         case Result.Ok(_):
@@ -17088,6 +17287,7 @@ def why(text: str) -> str:
 
 def main() -> int32:
     print(to_int("4"))
+    print(to_float("2.5"))
     print(why("x"))
     return 0
 "#;
@@ -17101,6 +17301,7 @@ def main() -> int32:
         super::lookups::lookup_payload_slots(function)
     };
     assert_eq!(slots("to_int").len(), 1);
+    assert_eq!(slots("to_float").len(), 1);
     // A match that reads the error keeps the `Result`.
     assert!(slots("why").is_empty());
     let object = emit_host_object(&mir).expect("the parses should compile directly");
@@ -17111,6 +17312,11 @@ def main() -> int32:
     );
     assert!(
         referenced.contains("aura_direct_parse_float64"),
+        "{referenced:?}"
+    );
+    // An `int64` parse keeps the number as a word.
+    assert!(
+        referenced.contains("aura_direct_parse_int64_word"),
         "{referenced:?}"
     );
     assert!(
@@ -17744,7 +17950,9 @@ def main() -> int32:
     return renamed(1)
 "#,
     );
-    let object = emit_host_object(&module).expect("every FFI v1 boundary type should emit");
+    // Unoptimized, the body is the one built, which has no slow-path copy.
+    let object = crate::native_backend::without_optimization(|| emit_host_object(&module))
+        .expect("every FFI v1 boundary type should emit");
     let referenced = object_referenced_symbols(&object);
     let calls = |symbol: &str| {
         referenced
@@ -18541,6 +18749,13 @@ class Tally:
     def halved(self) -> int64:
         return self.count // 2
 
+    def advance(mut self) -> int64:
+        self.count = self.count * 48271 % 2147483647
+        return self.count
+
+    def wrapped(self, by: float64) -> float64:
+        return by % 2.0
+
 class Counter:
     name: str
     count: int64
@@ -18606,21 +18821,23 @@ fn a_leaf_with_a_mutable_receiver_gets_a_frameless_second_body() {
     };
     // A `mut self` leaf keeps its framed body for calls that hand a sink
     // over, and gets a second one.
-    for name in ["Tally.bump", "Counter.bump"] {
+    for name in ["Tally.bump", "Tally.advance", "Counter.bump"] {
         assert!(super::leaf_variant(function(name), &classes), "{name}");
         assert!(!super::frameless_leaf(function(name), &classes), "{name}");
         assert!(super::small_leaf(function(name)), "{name}");
     }
     // A leaf that only reads its receiver needs one body, with no frame.
-    for name in ["Tally.scaled", "Counter.doubled"] {
+    // An integer division checks its divisor inline, and the failure path
+    // pushes the skipped frame record.
+    for name in ["Tally.scaled", "Tally.halved", "Counter.doubled"] {
         assert!(super::frameless_leaf(function(name), &classes), "{name}");
         assert!(!super::leaf_variant(function(name), &classes), "{name}");
     }
-    // A division traps in the runtime, a text field is a box of its own,
-    // an assignment to `self` replaces the box, a call needs the frame,
-    // and a generic class keeps a symbolic layout.
+    // A float remainder runs in the runtime, a text field is a box of its
+    // own, an assignment to `self` replaces the box, a call needs the
+    // frame, and a generic class keeps a symbolic layout.
     for name in [
-        "Tally.halved",
+        "Tally.wrapped",
         "Counter.rename",
         "Counter.label",
         "Counter.reset",
@@ -18665,6 +18882,98 @@ fn a_leaf_with_a_mutable_receiver_gets_a_frameless_second_body() {
         assert!(!defined.contains(name), "{name}: {defined:?}");
     }
     emit_host_object(&mir).expect("the leaf methods should emit optimized");
+}
+
+#[test]
+fn a_mutable_function_that_calls_out_gets_a_sink_free_body() {
+    let source = include_str!("../tests/fixtures/run-pass/sinkless_mutable_bodies.au");
+    let mir = lower_source_to_mir(source).expect("the mutable functions should lower");
+    let classes = mir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect::<HashMap<_, _>>();
+    let function = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("`{name}` should lower"))
+    };
+    for name in ["Marks.visit", "Marks.sweep", "fill", "forward", "countdown"] {
+        assert!(super::deferring_variant(function(name), &classes), "{name}");
+        assert!(!super::leaf_variant(function(name), &classes), "{name}");
+    }
+    // A body with cleanup keeps its record, and `main` takes nothing `mut`.
+    for name in ["guarded", "main"] {
+        assert!(
+            !super::deferring_variant(function(name), &classes),
+            "{name}"
+        );
+    }
+
+    let object = emit_unoptimized_object(&mir).expect("the mutable functions should emit");
+    let defined = object_defined_aura_functions(&object);
+    for name in [
+        "aura_fn_Marks_visit__nosinks",
+        "aura_fn_Marks_sweep__nosinks",
+        "aura_fn_fill__nosinks",
+        "aura_fn_forward__nosinks",
+        "aura_fn_countdown__nosinks",
+    ] {
+        assert!(defined.contains(name), "{name}: {defined:?}");
+    }
+    assert!(!defined.contains("aura_fn_guarded__nosinks"), "{defined:?}");
+    // A call whose `mut` arguments no sink follows enters the second body.
+    let sweep = object_function_referenced_symbols(&object, "aura_fn_Marks_sweep__nosinks");
+    assert!(
+        sweep
+            .iter()
+            .any(|name| name.ends_with("aura_fn_Marks_visit__nosinks")),
+        "{sweep:?}"
+    );
+    let main = object_function_referenced_symbols(&object, "aura_fn_main");
+    assert!(
+        main.iter()
+            .any(|name| name.ends_with("aura_fn_fill__nosinks")),
+        "{main:?}"
+    );
+    // A `mut` parameter may carry its caller's sink, so the framed body
+    // passes it on to the framed callee; its second body does not.
+    let framed = object_function_referenced_symbols(&object, "aura_fn_forward");
+    assert!(
+        framed.iter().any(|name| name.ends_with("aura_fn_fill")),
+        "{framed:?}"
+    );
+    let sinkless = object_function_referenced_symbols(&object, "aura_fn_forward__nosinks");
+    assert!(
+        sinkless
+            .iter()
+            .any(|name| name.ends_with("aura_fn_fill__nosinks")),
+        "{sinkless:?}"
+    );
+    emit_host_object(&mir).expect("the mutable functions should emit optimized");
+}
+
+#[test]
+fn a_function_on_no_cycle_pushes_its_record_where_it_calls_out() {
+    let source = include_str!("../tests/fixtures/run-fail/deferred_frames_name_every_caller.au");
+    let mir = lower_source_to_mir(source).expect("the deferred frames should lower");
+    let object = emit_unoptimized_object(&mir).expect("the deferred frames should emit");
+    // `pick` calls `lookup` on one way only, so it pushes its record there,
+    // in place, through the module's deferred frame entry.
+    let pick = object_function_referenced_symbols(&object, "aura_fn_pick");
+    assert!(
+        pick.iter()
+            .any(|name| name.ends_with("aura_enter_deferred_frame")),
+        "{pick:?}"
+    );
+    assert!(
+        !pick
+            .iter()
+            .any(|name| name.ends_with("aura_direct_enter_frame")),
+        "{pick:?}"
+    );
+    emit_host_object(&mir).expect("the deferred frames should emit optimized");
 }
 
 const FRAMELESS_CALLER_SOURCE: &str = r#"
@@ -19056,6 +19365,392 @@ def main():
     assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
 }
 
+const REPEATED_TAG_SOURCE: &str = r#"
+enum Cell:
+    Int(value: int64)
+    Text(value: str)
+
+def positive(cell: Cell) -> bool:
+    # A copy of the parameter keeps the tag its callers give it (see
+    # `untagged_args`).
+    held = cell
+    match held:
+        case Cell.Int(v):
+            return v > 0
+        case Cell.Text(_):
+            return false
+
+def first(row: list[Cell], at: int64) -> bool:
+    return positive(row[at])
+
+def main():
+    print(first([Cell.Int(value=1)], 0))
+"#;
+
+#[test]
+fn a_value_tagged_once_is_not_tagged_again_where_the_check_joins() {
+    let mir = lower_source_to_mir(REPEATED_TAG_SOURCE).expect("the source should lower");
+    let object = emit_unoptimized_object(&mir).expect("the source should compile directly");
+    // A tag of a value where an identical tag's check joins, with no call
+    // between, would change nothing, and is left out: five become three.
+    let tags = object_referenced_symbol_occurrences(&object, "aura_direct_tag_value_type_cell");
+    assert_eq!(tags, 3);
+}
+
+#[test]
+fn direct_int64_parse_slots_keep_the_number_as_a_word() {
+    let source = r#"
+def to_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return 0
+
+
+def to_i32(text: str) -> int32:
+    match parse_int32(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return 0
+
+
+def main() -> int32:
+    print(to_int("4"))
+    return to_i32("5")
+"#;
+    let mir = lower_source_to_mir(source).expect("the parse program should lower");
+    let function = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("`{name}`"))
+    };
+    let (slots, words) = super::lookups::lookup_slots(function("to_int"));
+    assert_eq!(words.len(), 1, "{words:?}");
+    assert!(words.is_subset(&slots));
+    // Only an int64 parse keeps a word; an int32 parse keeps its box.
+    let (slots, words) = super::lookups::lookup_slots(function("to_i32"));
+    assert_eq!(slots.len(), 1, "{slots:?}");
+    assert!(words.is_empty(), "{words:?}");
+    let views = super::str_slots::plan_views(&mir);
+    assert!(views.contains_key("to_int"), "{views:?}");
+    assert!(!views.contains_key("to_i32"), "{views:?}");
+}
+
+#[test]
+fn direct_quiet_sink_slots_are_the_mut_places_nothing_changes() {
+    let source = r#"
+class Box:
+    items: list[int64]
+    total: int64
+
+    def peek(mut self) -> int64:
+        return self.total
+
+    def grow(mut self) -> None:
+        self.items.append(1)
+
+
+def reads(b: mut Box, other: mut Box) -> int64:
+    return b.peek() + other.total
+
+
+def forwards(b: mut Box) -> int64:
+    mut local = Box(items=[], total=1)
+    return reads(b, local) + b.peek() + local.total
+
+
+def forwards_once(b: mut Box, c: mut Box) -> int64:
+    return reads(b, c)
+
+
+def grows(b: mut Box) -> None:
+    b.grow()
+
+
+def passes_on(b: mut Box) -> None:
+    grows(b)
+
+
+def stores(b: mut Box) -> None:
+    b.total = 3
+
+
+def total(items: list[int64]) -> int64:
+    return items.len()
+
+
+def lends(b: mut Box) -> int64:
+    return total(b.items)
+
+
+def puts(q: mut Queue[int64]) -> None:
+    _ = q.put(1)
+
+
+def main() -> int32:
+    mut b = Box(items=[], total=0)
+    mut c = Box(items=[], total=0)
+    _ = forwards(b)
+    _ = forwards_once(b, c)
+    passes_on(b)
+    stores(b)
+    _ = lends(b)
+    mut q = Queue[int64](capacity=2)
+    puts(q)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the program should lower");
+    let quiet = super::quiet_sinks::quiet_sink_slots(&mir);
+    let slots = |name: &str| {
+        let mut slots = quiet
+            .get(name)
+            .map(|slots| slots.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        slots.sort_unstable();
+        slots
+    };
+    assert_eq!(slots("Box.peek"), [0]);
+    assert_eq!(slots("reads"), [0, 1]);
+    assert_eq!(slots("forwards"), [0]);
+    assert_eq!(slots("forwards_once"), [0, 1]);
+    assert_eq!(slots("Box.grow"), Vec::<usize>::new());
+    assert_eq!(slots("grows"), Vec::<usize>::new());
+    assert_eq!(slots("passes_on"), Vec::<usize>::new());
+    assert_eq!(slots("stores"), Vec::<usize>::new());
+    assert_eq!(slots("lends"), Vec::<usize>::new());
+    // A queue's state changes where its handle points.
+    assert_eq!(slots("puts"), [0]);
+}
+
+const FRAME_FREE_SOURCE: &str = r#"
+enum Value:
+    Int(value: int64)
+    Text(value: str)
+    Pair(left: Value, right: Value)
+
+class Box:
+    value: int64
+
+def same(left: Value, right: Value) -> bool:
+    match left:
+        case Value.Int(a):
+            match right:
+                case Value.Int(b):
+                    return a == b and a >= 0
+                case _:
+                    return false
+        case Value.Text(a):
+            match right:
+                case Value.Text(b):
+                    return a != b
+                case _:
+                    return false
+        case _:
+            return false
+
+def is_int(value: Value) -> bool:
+    match value:
+        case Value.Int(_):
+            return true
+        case Value.Text(_):
+            return false
+        case Value.Pair(_, _):
+            return false
+
+def scaled(value: Value, factor: int64) -> int64:
+    match value:
+        case Value.Int(a):
+            return a * factor
+        case _:
+            return 0
+
+def halved(value: int64) -> int64:
+    return value // 2
+
+def before(left: str, right: str) -> bool:
+    return left < right
+
+def boxed(item: Box) -> int64:
+    return item.value
+
+def named(value: Value) -> str:
+    match value:
+        case Value.Text(text):
+            return text.clone()
+        case _:
+            return ""
+
+def inner(value: Value) -> bool:
+    match value:
+        case Value.Pair(left, _):
+            return is_int(left)
+        case _:
+            return false
+
+def calls(value: Value) -> bool:
+    return is_int(value)
+
+def bump(total: mut int64) -> int64:
+    total += 1
+    return total
+
+def countdown(n: int64) -> int64:
+    if n == 0:
+        return 0
+    return countdown(n - 1)
+
+def main():
+    mut total = 0
+    print(same(Value.Int(1), Value.Int(1)))
+    print(is_int(Value.Text("a")))
+    print(scaled(Value.Int(2), 3) + halved(5) + boxed(Box(value=1)) + bump(total))
+    print(before("a", "b"))
+    print(named(Value.Text("t")))
+    print(inner(Value.Pair(Value.Int(1), Value.Int(2))))
+    print(calls(Value.Int(1)))
+    print(countdown(3))
+"#;
+
+/// A function whose every way only copies, compares, releases, and reads
+/// variants needs no record of its caller; one that may trap, calls, takes
+/// a `mut` parameter, recurses, or reads a payload that is no scalar or
+/// `str` does.
+#[test]
+fn frame_free_callees_read_variants_and_compare_only() {
+    let mir = lower_source_to_mir(FRAME_FREE_SOURCE).expect("the source should lower");
+    let recursive = crate::mir::recursion::recursive_functions(&mir);
+    let free = super::frame_free_callees(&mir, &recursive);
+    for name in ["same", "is_int"] {
+        assert!(free.contains(name), "{name}: {free:?}");
+    }
+    for name in [
+        "scaled",
+        "halved",
+        "before",
+        "boxed",
+        "named",
+        "inner",
+        "calls",
+        "bump",
+        "countdown",
+        "main",
+    ] {
+        assert!(!free.contains(name), "{name}");
+    }
+}
+
+const CHAIN_SOURCE: &str = r#"
+copy class Stamp:
+    seconds: int64
+
+    def local(self) -> int64:
+        return self.seconds + 60
+
+def total(value: int64) -> int64:
+    return value
+
+def plus(value: int64) -> int64:
+    return value + 1
+
+def nested(value: int64) -> int64:
+    return plus(value) * total(value)
+
+def method(stamp: Stamp) -> int64:
+    return stamp.local() - 1
+
+def looped(count: int64) -> int64:
+    mut acc = 0
+    for i in range(count):
+        acc += i
+    return acc
+
+def bump(acc: mut int64) -> int64:
+    acc += 1
+    return acc
+
+def countdown(n: int64) -> int64:
+    if n == 0:
+        return 0
+    return countdown(n - 1)
+
+def printed(value: int64) -> int64:
+    print(value)
+    return plus(value)
+
+def main():
+    mut acc = 0
+    print(nested(3) + method(Stamp(seconds=1)) + looped(3) + bump(acc) + countdown(2) + printed(1))
+"#;
+
+/// A function that can only trap, on no cycle, with no `mut` parameter or
+/// loop, whose calls name only total leaves and such functions, lends its
+/// callers' chain; a total leaf, a loop, a `mut` parameter, recursion, or a
+/// call of anything else keeps it out.
+#[test]
+fn chain_callees_trap_only_and_call_only_each_other() {
+    let mir = lower_source_to_mir(CHAIN_SOURCE).expect("the source should lower");
+    let recursive = crate::mir::recursion::recursive_functions(&mir);
+    let classes = mir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect::<HashMap<_, _>>();
+    let total = super::total_leaves(&mir, &classes);
+    let chained = super::caller_chains::chain_callees(&mir, &classes, &total, &recursive);
+    for name in ["Stamp.local", "plus", "nested", "method"] {
+        assert!(chained.contains(name), "{name}: {chained:?}");
+    }
+    for name in ["total", "looped", "bump", "countdown", "printed", "main"] {
+        assert!(!chained.contains(name), "{name}: {chained:?}");
+    }
+}
+
+/// A frame-free function's enum parameter is passed untagged when the
+/// function only matches on it and reads its payloads; a copy of it, or a
+/// parameter of another type, keeps the tag.
+#[test]
+fn match_only_params_only_match_and_read_payloads() {
+    let source = r#"
+enum Value:
+    Int(value: int64)
+    Text(value: str)
+
+def same(left: Value, right: Value) -> bool:
+    match left:
+        case Value.Int(a):
+            match right:
+                case Value.Int(b):
+                    return a == b
+                case Value.Text(_):
+                    return false
+        case Value.Text(_):
+            return false
+
+def copied(value: Value, flag: bool) -> bool:
+    other = value
+    match other:
+        case Value.Int(_):
+            return flag
+        case Value.Text(_):
+            return false
+
+def main():
+    print(same(Value.Int(1), Value.Int(1)))
+    print(copied(Value.Int(1), true))
+"#;
+    let mir = lower_source_to_mir(source).expect("the source should lower");
+    let recursive = crate::mir::recursion::recursive_functions(&mir);
+    let free = super::frame_free_callees(&mir, &recursive);
+    let params = super::untagged_args::match_only_params(&mir, &free);
+    assert!(params.contains(&("same".to_string(), 0)), "{params:?}");
+    assert!(params.contains(&("same".to_string(), 1)), "{params:?}");
+    assert!(!params.contains(&("copied".to_string(), 0)), "{params:?}");
+    assert!(!params.contains(&("copied".to_string(), 1)), "{params:?}");
+}
+
 #[test]
 fn typed_enum_handle_payload_copies_into_a_fresh_box() {
     let source = r#"
@@ -19359,4 +20054,40 @@ def main():
     assert!(refs
         .iter()
         .all(|name| !name.contains("class_drop") && !name.contains("stamp_owner")));
+}
+
+#[test]
+fn an_owned_parameter_stamp_that_pushes_a_deferred_frame_starts_the_body_after_it() {
+    // `receive` defers its frame record, and the stamp of its owned
+    // parameter is the first call that needs the record, so the stamp's
+    // push ends the entry block.
+    let source = r#"
+class Ticket:
+    label: str
+
+    def __drop__(mut self):
+        print("drop " + self.label)
+
+def receive(ticket: own Ticket):
+    print("received " + ticket.label)
+
+def main():
+    receive(Ticket("x"))
+"#;
+    let mir = lower_source_to_mir(source).expect("the owner should lower");
+    emit_host_object(&mir).expect("the stamp should compile directly");
+    let object = emit_unoptimized_object(&mir).expect("the stamp should emit");
+    let referenced = object_function_referenced_symbols(&object, "aura_fn_receive");
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_stamp_owner")),
+        "{referenced:?}"
+    );
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_enter_frame")),
+        "{referenced:?}"
+    );
 }

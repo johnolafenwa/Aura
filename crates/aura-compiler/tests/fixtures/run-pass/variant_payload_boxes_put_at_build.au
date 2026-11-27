@@ -1,0 +1,51 @@
+# A variant that keeps some payloads in boxes of their own and others in
+# place takes its boxes as it is built, and a trap while its payloads are
+# made leaves nothing behind.
+import control
+
+enum Tree:
+    Leaf
+    Named(label: str, weight: int32, left: indirect Tree, right: indirect Tree)
+
+
+def build(depth: int64, limit: int64) -> Tree:
+    if depth == 0:
+        return Tree.Leaf
+    assert depth < limit, "too deep"
+    return Tree.Named(
+        label=f"n{depth}",
+        weight=(depth * 3) as int32,
+        left=build(depth - 1, limit),
+        right=build(depth - 1, limit),
+    )
+
+
+def weigh(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf:
+            return 0
+        case Tree.Named(label, weight, left, right):
+            return label.len() + (weight as int64) + weigh(left) + weigh(right)
+
+
+def sized(depth: int64, limit: int64) -> int64:
+    return weigh(build(depth, limit))
+
+
+def main():
+    print(weigh(build(3, 10)))
+    match control.recover(sized, 4, 3):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print("trapped")
+    match control.recover(sized, 2, 3):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print("trapped")
+    mut names = [Tree.Named(label="a", weight=1, left=Tree.Leaf, right=Tree.Leaf)]
+    first = names.pop(0)
+    names.append(Tree.Named(label="bc", weight=2, left=first, right=Tree.Leaf))
+    for tree in names:
+        print(weigh(tree))

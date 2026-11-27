@@ -1,0 +1,77 @@
+# A method whose every use of `self` reads or writes a scalar field, or
+# lends a field's list to one operation, runs a copy of its body that
+# checks the receiver's layout once, where it begins. A receiver in
+# another layout, or one the caller hands writes back for, runs the body
+# as written.
+import control
+
+class Book:
+    qty: list[int64]
+    trades: int64
+    volume: int64
+    open: bool
+
+    def fill(mut self, at: int64, wanted: int64) -> int64:
+        amount = min(wanted, self.qty[at])
+        self.qty[at] -= amount
+        self.trades += 1
+        self.volume += amount
+        if self.open:
+            self.volume += 1
+        return amount
+
+    def bump(mut self, by: int64):
+        self.trades += by
+
+class Desk:
+    book: Book
+    name: str
+
+class Node:
+    value: int64
+    next: indirect list[Node]
+
+    def grow(mut self, by: int64):
+        self.value += by
+
+def fill_all(book: mut Book) -> int64:
+    mut total = 0
+    for i in range(3):
+        total += book.fill(i, 2)
+    return total
+
+def bumped(by: int64) -> int64:
+    mut big = Book(qty=[1], trades=9223372036854775807, volume=0, open=false)
+    big.bump(by)
+    return big.trades
+
+def try_bump(by: int64):
+    match control.recover(bumped, by):
+        case Ok(v):
+            print(v)
+        case Err(trap):
+            print(trap.message)
+
+def main():
+    mut book = Book(qty=[3, 1, 5], trades=0, volume=0, open=true)
+    print(book.fill(0, 2))
+    print(book.fill(1, 4))
+    print(fill_all(book))
+    print(book.qty)
+    print(book.trades)
+    print(book.volume)
+    # Through a field and through a list element.
+    mut desk = Desk(book=Book(qty=[4, 4, 4], trades=0, volume=0, open=false), name="d")
+    print(desk.book.fill(2, 3))
+    mut books = [Book(qty=[9], trades=1, volume=0, open=true)]
+    print(books[0].fill(0, 4))
+    books[0].bump(5)
+    print(books[0].trades)
+    print(desk.book.volume)
+    # A class that holds itself keeps its fields in a map.
+    mut node = Node(value=1, next=[])
+    node.grow(2)
+    print(node.value)
+    # An overflow stops the method with its message.
+    try_bump(1)
+    try_bump(-1)

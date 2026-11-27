@@ -22,9 +22,11 @@ use std::fmt;
 
 use crate::collection_index::SharedVec;
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
-use crate::native_runtime::{plain_layout_for_value, ElementBox, ElementMut, PlainLayout};
+use crate::native_runtime::{
+    plain_layout_for_value, ClassLayout, ElementBox, ElementMut, PlainLayout, TypedFields,
+};
 use crate::randomness::DeterministicRng;
-use crate::runtime_value::Value;
+use crate::runtime_value::{InstanceFields, InstanceValue, Value};
 
 /// A single byte holding an Aura `bool` (`0` = `false`, `1` = `true`).
 /// Backing `list[bool]` with raw bytes prevents undefined behavior if foreign
@@ -91,6 +93,11 @@ pub enum ListElements {
     Boxes(SharedVec<ElementBox>),
     /// Boxed, so the typed form keeps every list one pointer and a tag.
     Typed(Box<TypedElements>),
+    /// Instances of one class kept in place, each in its block's bytes
+    /// (see [`InstanceElements`]). Only generated code's appends of new
+    /// instances build this form, and every operation other than reading
+    /// moves the list to the `Value` form first.
+    Instances(Box<InstanceElements>),
 }
 
 /// Which form a [`ListElements`] uses. The discriminants are the native
@@ -114,6 +121,9 @@ pub enum ListForm {
     Float32 = 13,
     Boxes = 14,
     Typed(u32),
+    /// Instances of the class layout whose instance list access code this
+    /// is.
+    Instances(u32),
 }
 
 impl ListForm {
@@ -121,7 +131,7 @@ impl ListForm {
     #[inline(always)]
     pub fn access(self) -> u32 {
         match self {
-            Self::Typed(access) => access,
+            Self::Typed(access) | Self::Instances(access) => access,
             // SAFETY: a `repr(u32)` enum starts every variant with its
             // `u32` discriminant, which is the access code.
             form => unsafe { *std::ptr::from_ref(&form).cast::<u32>() },
@@ -328,6 +338,234 @@ impl TypedElements {
     }
 }
 
+/// Instances of one class, in place: each element takes the class layout's
+/// stride of words, which hold its block's bytes, and the list owns the
+/// field boxes in them. Handles share the storage as the other forms do;
+/// the last one drops the boxes, and a write through a shared handle copies
+/// the elements, boxes and all, first.
+pub struct InstanceElements {
+    layout: &'static ClassLayout,
+    words: SharedVec<u64>,
+}
+
+impl Clone for InstanceElements {
+    fn clone(&self) -> Self {
+        Self {
+            layout: self.layout,
+            words: self.words.clone(),
+        }
+    }
+}
+
+impl Drop for InstanceElements {
+    fn drop(&mut self) {
+        if let Some(words) = std::mem::take(&mut self.words).into_last() {
+            drop_instance_words(self.layout, words);
+        }
+    }
+}
+
+/// The instances the first append to a list of instances makes room for:
+/// a list a loop builds one match or record at a time is often short, and
+/// one with room for eight grows less often than one with room for four.
+const INSTANCES_FIRST_ROOM: usize = 8;
+
+/// Drops every instance in `words`, then the words.
+fn drop_instance_words(layout: &ClassLayout, mut words: Vec<u64>) {
+    let stride = layout.stride_words();
+    for element in words.chunks_exact_mut(stride) {
+        // SAFETY: each chunk holds one live instance's bytes, and nothing
+        // reads them again.
+        unsafe { layout.drop_element(element.as_mut_ptr().cast()) };
+    }
+}
+
+impl InstanceElements {
+    pub fn new(layout: &'static ClassLayout) -> Self {
+        Self {
+            layout,
+            words: SharedVec::new(),
+        }
+    }
+
+    pub fn layout(&self) -> &'static ClassLayout {
+        self.layout
+    }
+
+    fn stride(&self) -> usize {
+        self.layout.stride_words()
+    }
+
+    fn len(&self) -> usize {
+        self.words.len() / self.stride()
+    }
+
+    /// The view of the form. It has no room: generated code reads the
+    /// elements in place but never appends or writes one there.
+    #[inline(never)]
+    fn view(&self) -> (ListForm, usize, usize, usize) {
+        (
+            ListForm::Instances(self.layout.instance_list_access()),
+            self.words.as_ptr() as usize,
+            self.len(),
+            0,
+        )
+    }
+
+    /// A copy of element `index`, which is in range.
+    #[inline(never)]
+    fn decode(&self, index: usize) -> Value {
+        let stride = self.stride();
+        let element = &self.words[index * stride..(index + 1) * stride];
+        // SAFETY: the words hold a live instance's bytes.
+        instance_value(self.layout, unsafe {
+            TypedFields::from_element(self.layout, element.as_ptr().cast(), true)
+        })
+    }
+
+    #[inline(never)]
+    fn get(&self, index: usize) -> Option<Cow<'_, Value>> {
+        (index < self.len()).then(|| Cow::Owned(self.decode(index)))
+    }
+
+    /// Field `name` of element `index`, read where it lies: `None` when
+    /// the class has no such field, `Some(None)` when `index` is out of
+    /// range.
+    fn field(&self, index: usize, name: &str) -> Option<Option<Cow<'_, Value>>> {
+        let stride = self.stride();
+        let Some(element) = self.words.get(index * stride..(index + 1) * stride) else {
+            return self.layout.has_field(name).then_some(None);
+        };
+        // SAFETY: the words hold a live instance's bytes, which the
+        // borrow of `self` keeps.
+        unsafe { self.layout.element_field(element.as_ptr().cast(), name) }.map(Some)
+    }
+
+    /// The words to write, copied first, with copies of their boxes, when
+    /// another handle shares them.
+    fn words_mut(&mut self) -> &mut Vec<u64> {
+        if self.words.is_shared() {
+            let stride = self.stride();
+            let mut copy = vec![0u64; self.words.len()];
+            for (from, to) in self
+                .words
+                .chunks_exact(stride)
+                .zip(copy.chunks_exact_mut(stride))
+            {
+                // SAFETY: `from` holds a live instance and `to` is dead.
+                unsafe {
+                    self.layout
+                        .clone_element(from.as_ptr().cast(), to.as_mut_ptr().cast())
+                };
+            }
+            let shared = std::mem::replace(&mut self.words, copy.into());
+            // The other handles may have dropped since the check.
+            if let Some(words) = shared.into_last() {
+                drop_instance_words(self.layout, words);
+            }
+        }
+        self.words
+            .unshared_mut()
+            .expect("a copy of the words is unshared")
+    }
+
+    /// Appends the instance whose block bytes lie at `src`, which the list
+    /// takes over.
+    ///
+    /// # Safety
+    ///
+    /// `src` is aligned for `u64` and holds a stride of words that hold a
+    /// live instance of the layout, which nothing else drops or reads.
+    pub unsafe fn push_words(&mut self, src: *const u64) {
+        let stride = self.stride();
+        let words = self.words_mut();
+        if words.capacity() == 0 {
+            words.reserve(INSTANCES_FIRST_ROOM * stride);
+        }
+        // SAFETY: the caller's contract.
+        words.extend_from_slice(unsafe { std::slice::from_raw_parts(src, stride) });
+    }
+
+    /// [`Self::push_words`] for storage no other handle shares, which
+    /// returns the address of the first element and the length after the
+    /// append. `None`, with nothing appended, for shared storage.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::push_words`].
+    #[inline]
+    pub unsafe fn push_unshared(&mut self, src: *const u64) -> Option<(usize, usize)> {
+        let stride = self.stride();
+        let words = self.words.unshared_mut()?;
+        if words.capacity() == 0 {
+            words.reserve(INSTANCES_FIRST_ROOM * stride);
+        } else {
+            words.reserve(stride);
+        }
+        let len = words.len();
+        // SAFETY: the caller's contract, and the storage has room for one
+        // more element past its length.
+        unsafe {
+            std::ptr::copy_nonoverlapping(src, words.as_mut_ptr().add(len), stride);
+            words.set_len(len + stride);
+        }
+        Some((words.as_ptr() as usize, (len + stride) / stride))
+    }
+
+    /// Swaps elements `first` and `second`, which are in range, words,
+    /// boxes and all.
+    fn swap(&mut self, first: usize, second: usize) {
+        if first == second {
+            return;
+        }
+        let stride = self.stride();
+        let words = self.words_mut();
+        let (low, high) = (first.min(second), first.max(second));
+        let (head, tail) = words.split_at_mut(high * stride);
+        head[low * stride..(low + 1) * stride].swap_with_slice(&mut tail[..stride]);
+    }
+
+    /// Reverses the order of the elements.
+    fn reverse(&mut self) {
+        let len = self.len();
+        for index in 0..len / 2 {
+            self.swap(index, len - 1 - index);
+        }
+    }
+
+    /// The instances, moved out of storage no other handle shares or
+    /// copied out of shared storage.
+    fn into_values(mut self) -> Vec<Value> {
+        if self.words.is_shared() {
+            // The copies leave the shared storage to its other handles.
+            return (0..self.len()).map(|index| self.decode(index)).collect();
+        }
+        let layout = self.layout;
+        let stride = self.stride();
+        let words = std::mem::take(&mut self.words)
+            .into_last()
+            .expect("an unshared handle is the last one");
+        words
+            .chunks_exact(stride)
+            .map(|element| {
+                // SAFETY: each chunk holds one live instance's bytes, which
+                // move into the block and are not read again.
+                instance_value(layout, unsafe {
+                    TypedFields::from_element(layout, element.as_ptr().cast(), false)
+                })
+            })
+            .collect()
+    }
+}
+
+/// The value of an instance whose fields `typed` holds.
+fn instance_value(layout: &'static ClassLayout, typed: TypedFields) -> Value {
+    Value::Instance(InstanceValue {
+        class_name: layout.runtime_name(),
+        fields: InstanceFields::Typed(typed),
+    })
+}
+
 /// A scalar one of the forms keeps unboxed.
 trait Element: Copy + PartialEq {
     /// The value this element stands for.
@@ -453,10 +691,16 @@ fn unsigned(value: u128, kind: IntegerKind) -> IntegerValue {
 
 /// Matches `$list` against every form, binding the storage to `$values`.
 /// `$body` runs once per form that keeps a `SharedVec`, with `$values` a
-/// `SharedVec` of that form's element type, and `$typed_body` runs for the
-/// typed form, with `$typed` its [`TypedElements`].
+/// `SharedVec` of that form's element type, `$typed_body` runs for the
+/// typed form, with `$typed` its [`TypedElements`], and `$instances_body`
+/// for the instance form, with `$instances` its [`InstanceElements`].
 macro_rules! each_form {
-    ($list:expr, $values:ident => $body:expr, $typed:ident => $typed_body:expr) => {
+    (
+        $list:expr,
+        $values:ident => $body:expr,
+        $typed:ident => $typed_body:expr,
+        $instances:ident => $instances_body:expr
+    ) => {
         match $list {
             ListElements::Values($values) => $body,
             ListElements::Int64($values) => $body,
@@ -472,6 +716,7 @@ macro_rules! each_form {
             ListElements::Float32($values) => $body,
             ListElements::Boxes($values) => $body,
             ListElements::Typed($typed) => $typed_body,
+            ListElements::Instances($instances) => $instances_body,
         }
     };
 }
@@ -522,6 +767,22 @@ macro_rules! same_scalar_forms {
             $($other $(if $guard)? => $fallback,)+
         }
     };
+}
+
+/// Appends a copy of the scalars `more` to `values`, reserving the room
+/// first so that running out of memory is an error, not an abort.
+#[inline]
+fn try_extend_scalars<T: Copy>(values: &mut Vec<T>, more: &[T]) -> Result<(), TryReserveError> {
+    let (len, count) = (values.len(), more.len());
+    values.try_reserve(count)?;
+    // SAFETY: `values` has room for `count` more elements past `len`, the
+    // elements are plain scalars, and `more` is borrowed apart from the
+    // storage `values` owns alone.
+    unsafe {
+        std::ptr::copy_nonoverlapping(more.as_ptr(), values.as_mut_ptr().add(len), count);
+        values.set_len(len + count);
+    }
+    Ok(())
 }
 
 #[inline]
@@ -595,7 +856,7 @@ fn keeps(form: ListForm, value: &Value) -> bool {
         ListForm::Uint64 => u64::of(value).is_some(),
         ListForm::Float32 => f32::equal_to(value).is_some(),
         ListForm::Boxes => true,
-        ListForm::Typed(_) => false,
+        ListForm::Typed(_) | ListForm::Instances(_) => false,
     }
 }
 
@@ -611,6 +872,59 @@ fn collect_form<T: Element>(values: &[Value]) -> Option<SharedVec<T>> {
 impl ListElements {
     pub fn new() -> Self {
         Self::Values(SharedVec::new())
+    }
+
+    /// Field `name` of element `index` of a list that keeps instances in
+    /// place, read without copying the element: `Some(None)` when `index`
+    /// is out of range. `None` for any other list, or a name the class
+    /// lacks.
+    pub fn instance_field(&self, index: usize, name: &str) -> Option<Option<Cow<'_, Value>>> {
+        match self {
+            Self::Instances(kept) => kept.field(index, name),
+            _ => None,
+        }
+    }
+
+    /// Moves a list that keeps instances in place to the `Value` form,
+    /// which every edit other than an append of a new instance starts
+    /// from. Any other list keeps its form.
+    #[inline]
+    pub fn leave_instances(&mut self) {
+        if matches!(self, Self::Instances(_)) {
+            self.values_mut();
+        }
+    }
+
+    /// Appends the instance of `layout` whose block bytes lie at `src`,
+    /// which the list takes over. An empty list starts to keep instances
+    /// in place, and a list that keeps them in place appends the bytes.
+    /// Any other list builds the instance and appends it as [`Self::push`]
+    /// does.
+    ///
+    /// # Safety
+    ///
+    /// `layout` [`ClassLayout::keeps_in_list`], and `src` is aligned for
+    /// `u64` and holds its stride of words, which hold a live instance of
+    /// it that nothing else drops or reads.
+    pub unsafe fn push_instance(&mut self, layout: &'static ClassLayout, src: *const u64) {
+        match self {
+            Self::Instances(instances) if std::ptr::eq(instances.layout, layout) => {
+                // SAFETY: the caller's contract.
+                unsafe { instances.push_words(src) }
+            }
+            list if list.is_empty() && !matches!(list, Self::Float32(_)) => {
+                let mut instances = InstanceElements::new(layout);
+                // SAFETY: the caller's contract.
+                unsafe { instances.push_words(src) };
+                *list = Self::Instances(Box::new(instances));
+            }
+            list => {
+                // SAFETY: the caller's contract; the bytes move into the
+                // instance's block.
+                let typed = unsafe { TypedFields::from_element(layout, src.cast(), false) };
+                list.push(instance_value(layout, typed));
+            }
+        }
     }
 
     /// A `list[uint8]` that keeps `bytes` unboxed.
@@ -731,7 +1045,7 @@ impl ListElements {
             ListForm::Uint64 => Self::Uint64(collect_form(values)?),
             ListForm::Float32 => Self::Float32(collect_form(values)?),
             ListForm::Boxes => Self::Boxes(values.iter().cloned().map(ElementBox::new).collect()),
-            ListForm::Typed(_) => return None,
+            ListForm::Typed(_) | ListForm::Instances(_) => return None,
         })
     }
 
@@ -776,6 +1090,9 @@ impl ListElements {
             Self::Float32(_) => ListForm::Float32,
             Self::Boxes(_) => ListForm::Boxes,
             Self::Typed(typed) => ListForm::Typed(typed.layout.access()),
+            Self::Instances(instances) => {
+                ListForm::Instances(instances.layout.instance_list_access())
+            }
         }
     }
 
@@ -786,7 +1103,12 @@ impl ListElements {
         if let Self::Typed(typed) = self {
             return typed.len();
         }
-        each_form!(self, values => values.len(), typed => typed.len())
+        each_form!(
+            self,
+            values => values.len(),
+            typed => typed.len(),
+            instances => instances.len()
+        )
     }
 
     #[inline]
@@ -834,6 +1156,7 @@ impl ListElements {
                 (form, boxes.as_ptr() as usize, boxes.len(), room)
             }
             Self::Typed(typed) => typed.view(),
+            Self::Instances(instances) => instances.view(),
         }
     }
 
@@ -852,13 +1175,21 @@ impl ListElements {
             self,
             values => unsafe { adopt_appended(values, len) },
             Self::Values(_) | Self::Boxes(_) => {},
-            Self::Typed(typed) => unsafe { typed.adopt_appended(len) }
+            Self::Typed(typed) => unsafe { typed.adopt_appended(len) },
+            // The form's view has no room, so generated code appends
+            // nothing in place.
+            Self::Instances(_) => {}
         )
     }
 
     /// Whether another handle shares this storage.
     pub fn is_shared(&self) -> bool {
-        each_form!(self, values => values.is_shared(), typed => typed.words.is_shared())
+        each_form!(
+            self,
+            values => values.is_shared(),
+            typed => typed.words.is_shared(),
+            instances => instances.words.is_shared()
+        )
     }
 
     /// The address of the first element. Two lists with the same address
@@ -868,7 +1199,8 @@ impl ListElements {
         each_form!(
             self,
             values => values.as_ptr() as usize,
-            typed => typed.words.as_ptr() as usize
+            typed => typed.words.as_ptr() as usize,
+            instances => instances.words.as_ptr() as usize
         )
     }
 
@@ -880,6 +1212,7 @@ impl ListElements {
             Self::Values(values) => values.get(index).map(Cow::Borrowed),
             Self::Boxes(boxes) => boxes.get(index).map(|element| Cow::Borrowed(element.value())),
             Self::Typed(typed) => typed.get(index),
+            Self::Instances(instances) => instances.get(index),
         )
     }
 
@@ -925,6 +1258,10 @@ impl ListElements {
             Self::Typed(typed) => Iter::Typed {
                 layout: typed.layout,
                 words: &typed.words,
+            },
+            Self::Instances(instances) => Iter::Instances {
+                layout: instances.layout,
+                words: &instances.words,
             },
         }
     }
@@ -1010,6 +1347,7 @@ impl ListElements {
         match self {
             Self::Values(values) => values.into_vec(),
             Self::Boxes(boxes) => boxes.into_iter().map(ElementBox::into_value).collect(),
+            Self::Instances(instances) => instances.into_values(),
             other => other.to_vec(),
         }
     }
@@ -1035,6 +1373,14 @@ impl ListElements {
             // Another list shares the boxes, so this one takes boxes of
             // its own, which only it reaches.
             Self::Boxes(boxes) if boxes.is_shared() => *boxes = boxes.iter().cloned().collect(),
+            Self::Instances(_) => {
+                let boxes = std::mem::take(self)
+                    .into_vec()
+                    .into_iter()
+                    .map(ElementBox::new)
+                    .collect();
+                *self = Self::Boxes(boxes);
+            }
             _ => {}
         }
         match self {
@@ -1060,6 +1406,7 @@ impl ListElements {
             boxes.push(ElementBox::new(value));
             return;
         }
+        self.leave_instances();
         let pushed = each_scalar_form!(
             &mut *self,
             values => match Element::of(&value) {
@@ -1069,7 +1416,7 @@ impl ListElements {
                 }
                 None => false,
             },
-            Self::Values(_) | Self::Boxes(_) => false,
+            Self::Values(_) | Self::Boxes(_) | Self::Instances(_) => false,
             Self::Typed(typed) => {
                 let fits = typed.layout.fits(&value);
                 if fits {
@@ -1200,12 +1547,14 @@ impl ListElements {
     }
 
     pub fn pop(&mut self) -> Option<Value> {
+        self.leave_instances();
         each_scalar_form!(
             self,
             values => values.pop().map(Element::value),
             Self::Values(values) => values.pop(),
             Self::Boxes(boxes) => boxes.pop().map(ElementBox::into_value),
             Self::Typed(typed) => typed.pop(),
+            Self::Instances(_) => unreachable!("the list left the instance form"),
         )
     }
 
@@ -1232,6 +1581,7 @@ impl ListElements {
                 .layout
                 .fits(&value)
                 .then(|| typed.replace(index, &value)),
+            Self::Instances(_) => None,
         );
         match replaced {
             Some(previous) => previous,
@@ -1259,7 +1609,7 @@ impl ListElements {
                 }
                 None => false,
             },
-            Self::Values(_) => false,
+            Self::Values(_) | Self::Instances(_) => false,
             Self::Boxes(boxes) => {
                 boxes.insert(index, ElementBox::new(value));
                 return;
@@ -1293,15 +1643,19 @@ impl ListElements {
             index < len,
             "list remove index {index} is out of range for length {len}"
         );
+        self.leave_instances();
         each_scalar_form!(
             self,
             values => values.remove(index).value(),
             Self::Values(values) => values.remove(index),
             Self::Boxes(boxes) => boxes.remove(index).into_value(),
             Self::Typed(typed) => typed.remove(index),
+            Self::Instances(_) => unreachable!("the list left the instance form"),
         )
     }
 
+    /// Swaps two elements. A list that keeps instances in place swaps
+    /// their words, so a sort keeps the form.
     pub fn swap(&mut self, first: usize, second: usize) {
         each_form!(
             self,
@@ -1313,6 +1667,14 @@ impl ListElements {
                     typed.len()
                 );
                 typed.swap(first, second)
+            },
+            instances => {
+                assert!(
+                    first.max(second) < instances.len(),
+                    "list swap index is out of range for length {}",
+                    instances.len()
+                );
+                instances.swap(first, second)
             }
         )
     }
@@ -1321,12 +1683,14 @@ impl ListElements {
         each_form!(
             self,
             values => values.reverse(),
-            typed => **typed = typed.permuted((0..typed.len()).rev())
+            typed => **typed = typed.permuted((0..typed.len()).rev()),
+            instances => instances.reverse()
         )
     }
 
     /// Keeps the elements at positions `0, stride, 2 * stride, ...`.
     pub fn keep_every(&mut self, stride: usize) {
+        self.leave_instances();
         let len = self.len();
         each_form!(
             self,
@@ -1338,7 +1702,8 @@ impl ListElements {
                     keep
                 })
             },
-            typed => **typed = typed.permuted((0..len).step_by(stride))
+            typed => **typed = typed.permuted((0..len).step_by(stride)),
+            _instances => unreachable!("the list left the instance form")
         )
     }
 
@@ -1351,7 +1716,13 @@ impl ListElements {
         if len >= self.len() {
             return;
         }
-        each_form!(self, values => values.truncate(len), typed => typed.truncate(len))
+        self.leave_instances();
+        each_form!(
+            self,
+            values => values.truncate(len),
+            typed => typed.truncate(len),
+            _instances => unreachable!("the list left the instance form")
+        )
     }
 
     /// Appends every element of `other`.
@@ -1377,6 +1748,25 @@ impl ListElements {
         )
     }
 
+    /// Appends a copy of every element of `other` when both lists hold the
+    /// same scalar form and this one is not empty, and returns whether it
+    /// did. `other` keeps its elements and its storage. The room is
+    /// reserved first, as [`Self::try_append`] reserves it, so that a list
+    /// too large for the memory left is an error, not an abort.
+    pub fn append_scalars_from(&mut self, other: &ListElements) -> Result<bool, TryReserveError> {
+        if self.is_empty() {
+            return Ok(false);
+        }
+        same_scalar_forms!(
+            (&mut *self, other),
+            (values, more) => {
+                try_extend_scalars(values, more)?;
+                Ok(true)
+            },
+            _ => Ok(false)
+        )
+    }
+
     /// [`Self::append`], with the room for `other` reserved first so that
     /// a list too large for the memory left is an error, not an abort.
     pub fn try_append(&mut self, other: ListElements) -> Result<(), TryReserveError> {
@@ -1398,6 +1788,7 @@ impl ListElements {
             "list range {start}..{end} is out of range for length {}",
             self.len()
         );
+        self.leave_instances();
         match self {
             Self::Values(values) => Self::from(values.drain(start..end).collect::<Vec<_>>()),
             Self::Int64(values) => Self::Int64(values.drain(start..end).collect()),
@@ -1419,6 +1810,7 @@ impl ListElements {
                     words: typed.words.drain(start * stride..end * stride).collect(),
                 }))
             }
+            Self::Instances(_) => unreachable!("the list left the instance form"),
         }
     }
 
@@ -1464,7 +1856,8 @@ impl ListElements {
         each_form!(
             self,
             values => values.capacity(),
-            typed => typed.words.capacity() / typed.layout.stride()
+            typed => typed.words.capacity() / typed.layout.stride(),
+            instances => instances.words.capacity() / instances.stride()
         )
     }
 
@@ -1475,12 +1868,19 @@ impl ListElements {
             typed => {
                 let stride = typed.stride();
                 typed.words.try_reserve(additional.saturating_mul(stride))
+            },
+            instances => {
+                let stride = instances.stride();
+                instances
+                    .words_mut()
+                    .try_reserve(additional.saturating_mul(stride))
             }
         )
     }
 
     /// Shuffles the elements in place with `rng`.
     pub fn shuffle(&mut self, rng: &mut DeterministicRng) {
+        self.leave_instances();
         each_form!(
             self,
             values => rng.shuffle(values),
@@ -1489,7 +1889,8 @@ impl ListElements {
                 let mut order = (0..typed.len()).collect::<Vec<_>>();
                 rng.shuffle(&mut order);
                 **typed = typed.permuted(order.into_iter());
-            }
+            },
+            _instances => unreachable!("the list left the instance form")
         )
     }
 
@@ -1497,7 +1898,7 @@ impl ListElements {
         let found = each_scalar_form!(
             self,
             values => Element::equal_to(needle).map(|element| values.contains(&element)),
-            Self::Values(_) | Self::Boxes(_) | Self::Typed(_) => None,
+            Self::Values(_) | Self::Boxes(_) | Self::Typed(_) | Self::Instances(_) => None,
         );
         found.unwrap_or_else(|| self.iter().any(|element| *element == *needle))
     }
@@ -1636,6 +2037,21 @@ pub enum Iter<'a> {
         layout: &'static PlainLayout,
         words: &'a [u64],
     },
+    /// The words of the instances left, whole elements only.
+    Instances {
+        layout: &'static ClassLayout,
+        words: &'a [u64],
+    },
+}
+
+/// A copy of the instance one element's words hold, out of line as
+/// [`decode_typed`] is.
+#[inline(never)]
+fn decode_instance(layout: &'static ClassLayout, words: &[u64]) -> Value {
+    // SAFETY: an instance list's words hold whole live instances.
+    instance_value(layout, unsafe {
+        TypedFields::from_element(layout, words.as_ptr().cast(), true)
+    })
 }
 
 /// The value one typed element's words hold. Decoding builds a `Value`, so
@@ -1685,6 +2101,14 @@ impl<'a> Iterator for Iter<'a> {
                 let (first, rest) = words.split_at(layout.stride_words());
                 *words = rest;
                 Some(Cow::Owned(decode_typed(layout, first)))
+            },
+            Self::Instances { layout, words } => {
+                if words.is_empty() {
+                    return None;
+                }
+                let (first, rest) = words.split_at(layout.stride_words());
+                *words = rest;
+                Some(Cow::Owned(decode_instance(layout, first)))
             }
         )
     }
@@ -1699,6 +2123,11 @@ impl<'a> Iterator for Iter<'a> {
             Self::Values(values) => values.nth(n).map(Cow::Borrowed),
             Self::Boxes(boxes) => boxes.nth(n).map(|element| Cow::Borrowed(element.value())),
             Self::Typed { layout, words } => {
+                let skipped = n.saturating_mul(layout.stride_words()).min(words.len());
+                *words = &words[skipped..];
+                self.next()
+            },
+            Self::Instances { layout, words } => {
                 let skipped = n.saturating_mul(layout.stride_words()).min(words.len());
                 *words = &words[skipped..];
                 self.next()
@@ -1730,6 +2159,14 @@ impl DoubleEndedIterator for Iter<'_> {
                 let (rest, last) = words.split_at(words.len() - layout.stride_words());
                 *words = rest;
                 Some(Cow::Owned(decode_typed(layout, last)))
+            },
+            Self::Instances { layout, words } => {
+                if words.is_empty() {
+                    return None;
+                }
+                let (rest, last) = words.split_at(words.len() - layout.stride_words());
+                *words = rest;
+                Some(Cow::Owned(decode_instance(layout, last)))
             }
         )
     }
@@ -1741,6 +2178,11 @@ impl DoubleEndedIterator for Iter<'_> {
             Self::Values(values) => values.nth_back(n).map(Cow::Borrowed),
             Self::Boxes(boxes) => boxes.nth_back(n).map(|element| Cow::Borrowed(element.value())),
             Self::Typed { layout, words } => {
+                let skipped = n.saturating_mul(layout.stride_words()).min(words.len());
+                *words = &words[..words.len() - skipped];
+                self.next_back()
+            },
+            Self::Instances { layout, words } => {
                 let skipped = n.saturating_mul(layout.stride_words()).min(words.len());
                 *words = &words[..words.len() - skipped];
                 self.next_back()
@@ -1758,6 +2200,7 @@ impl ExactSizeIterator for Iter<'_> {
             Self::Values(values) => values.len(),
             Self::Boxes(boxes) => boxes.len(),
             Self::Typed { layout, words } => words.len() / layout.stride(),
+            Self::Instances { layout, words } => words.len() / layout.stride_words(),
         )
     }
 }
@@ -1865,11 +2308,38 @@ pub struct StrView {
 /// The auxiliary views a list keeps once the native runtime builds them.
 /// Their entries describe the current elements only while the box's access
 /// code selects them. A copy of the list starts without cached entries.
+///
+/// Until a view is made, the word may count misses instead (see
+/// [`Self::note_miss`]): an odd word holds the count shifted left by one,
+/// which no view's address is.
 #[derive(Default)]
 pub struct StrViewCache(std::sync::atomic::AtomicPtr<StrView>);
 
+/// The low bit of a [`StrViewCache`] word that holds a count of view misses
+/// instead of the address of a view: a list read a few times never makes a
+/// view, so counting its misses allocates nothing.
+const MISS_COUNT_TAG: usize = 1;
+
 impl StrViewCache {
-    /// The view, made empty on first use.
+    /// Whether no view was ever made and no miss counted.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed).is_null()
+    }
+
+    /// The address of the view, or null when there is none yet.
+    #[inline]
+    fn view(&self) -> *mut StrView {
+        let word = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        if word as usize & MISS_COUNT_TAG != 0 {
+            std::ptr::null_mut()
+        } else {
+            word
+        }
+    }
+
+    /// The view, made empty on first use, with the misses counted before
+    /// it was made.
     ///
     /// # Safety
     ///
@@ -1878,14 +2348,51 @@ impl StrViewCache {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_or_create(&self) -> &mut StrView {
         use std::sync::atomic::Ordering;
-        let mut view = self.0.load(Ordering::Relaxed);
+        let mut view = self.view();
         if view.is_null() {
-            view = Box::into_raw(Box::default());
+            let word = self.0.load(Ordering::Relaxed) as usize;
+            view = Box::into_raw(Box::new(StrView {
+                misses: word >> 1,
+                ..StrView::default()
+            }));
             self.0.store(view, Ordering::Relaxed);
         }
         // SAFETY: the box is this cache's, and the caller holds the only
         // reference.
         unsafe { &mut *view }
+    }
+
+    /// Counts one more miss of the `str` view and returns the count, in
+    /// the view when there is one and otherwise in the cache's own word.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::get_or_create`].
+    pub unsafe fn note_miss(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        let view = self.view();
+        if !view.is_null() {
+            // SAFETY: the caller's contract.
+            let view = unsafe { &mut *view };
+            view.misses += 1;
+            return view.misses;
+        }
+        let misses = (self.0.load(Ordering::Relaxed) as usize >> 1).saturating_add(1);
+        match misses.checked_mul(2) {
+            Some(word) => {
+                self.0.store(
+                    std::ptr::without_provenance_mut(word | MISS_COUNT_TAG),
+                    Ordering::Relaxed,
+                );
+                misses
+            }
+            None => {
+                // SAFETY: the caller's contract.
+                let view = unsafe { self.get_or_create() };
+                view.misses = view.misses.saturating_add(1);
+                view.misses
+            }
+        }
     }
 }
 
@@ -1897,7 +2404,7 @@ impl Clone for StrViewCache {
 
 impl Drop for StrViewCache {
     fn drop(&mut self) {
-        let view = *self.0.get_mut();
+        let view = self.view();
         if !view.is_null() {
             // SAFETY: `get_or_create` leaked this box for the cache.
             drop(unsafe { Box::from_raw(view) });

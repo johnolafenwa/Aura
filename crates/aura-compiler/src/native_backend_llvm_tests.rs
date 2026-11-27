@@ -182,6 +182,282 @@ fn only_calls_since_allows_the_named_callees_in_the_current_block() {
 }
 
 #[test]
+fn a_test_holds_where_it_dominates_and_only_kept_calls_follow_it() {
+    let mut module = module();
+    let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let retain = module
+        .declare_function("retain", Linkage::Import, &unary)
+        .unwrap();
+    let other = module
+        .declare_function("other", Linkage::Import, &unary)
+        .unwrap();
+    let indirect = unary.clone();
+    define(
+        &mut module,
+        "holds",
+        Linkage::Export,
+        &unary,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let boxed = builder.block_params(entry)[0];
+            let (retain, other) = (
+                builder.import_function(retain),
+                builder.import_function(other),
+            );
+            let (held, reset) = (Var(0), Var(1));
+            builder.declare_var(held, types::I64);
+            builder.declare_var(reset, types::I64);
+            builder.def_var(held, boxed);
+            builder.def_var(reset, boxed);
+            // The test, with a kept call where it holds and another call where
+            // it fails, which sets one variable.
+            let (fast, slow, join) = (
+                builder.create_block(),
+                builder.create_block(),
+                builder.create_block(),
+            );
+            builder.brif(boxed, fast, &[], slow, &[]);
+            builder.switch_to_block(fast);
+            builder.seal_block(fast);
+            builder.call(retain, &[boxed]);
+            assert!(builder.only_calls_in(fast, &[retain]));
+            assert!(!builder.only_calls_in(entry, &[retain]));
+            builder.jump(join, &[]);
+            builder.switch_to_block(slow);
+            builder.seal_block(slow);
+            let other_box = builder.call(other, &[boxed]).results[0];
+            builder.def_var(reset, other_box);
+            builder.jump(join, &[]);
+            builder.switch_to_block(join);
+            assert!(!builder.holds_since(entry, fast, boxed, boxed, &[retain]));
+            // Every predecessor it will get is there, though it is not
+            // sealed.
+            builder.note_complete(join);
+            let read = builder.use_var(held);
+            let reread = builder.use_var(reset);
+            assert!(builder.holds_since(entry, fast, boxed, boxed, &[retain]));
+            assert!(builder.holds_since(entry, fast, boxed, read, &[retain]));
+            assert!(!builder.holds_since(entry, fast, boxed, read, &[]));
+            assert!(!builder.holds_since(entry, fast, boxed, reread, &[retain]));
+            assert!(!builder.holds_since(entry, fast, boxed, other_box, &[retain]));
+            assert!(!builder.holds_since(fast, join, boxed, boxed, &[retain]));
+            // A test of a variable's read in the block that reads it.
+            let (again, after) = (builder.create_block(), builder.create_block());
+            builder.brif(read, again, &[], after, &[]);
+            builder.switch_to_block(again);
+            builder.seal_block(again);
+            let address = builder.func_addr(types::I64, other);
+            let indirect = builder.import_signature(indirect);
+            builder.call_indirect(indirect, address, &[read]);
+            assert!(!builder.only_calls_in(again, &[retain, other]));
+            builder.jump(after, &[]);
+            builder.switch_to_block(after);
+            builder.seal_block(after);
+            let last = builder.use_var(held);
+            assert!(builder.holds_since(join, after, read, last, &[]));
+            assert!(!builder.holds_since(join, again, read, last, &[retain, other]));
+            // A test in a loop does not hold after it.
+            let (header, body, exit) = (
+                builder.create_block(),
+                builder.create_block(),
+                builder.create_block(),
+            );
+            builder.jump(header, &[]);
+            builder.switch_to_block(header);
+            builder.brif(boxed, body, &[], exit, &[]);
+            builder.switch_to_block(body);
+            builder.seal_block(body);
+            builder.jump(header, &[]);
+            builder.seal_block(header);
+            builder.switch_to_block(exit);
+            builder.seal_block(exit);
+            assert!(!builder.holds_since(header, body, boxed, boxed, &[]));
+            // Walks too long give up.
+            let mut last_link = exit;
+            for _ in 0..70 {
+                let link = builder.create_block();
+                builder.jump(link, &[]);
+                builder.switch_to_block(link);
+                builder.seal_block(link);
+                last_link = link;
+            }
+            assert!(!builder.holds_since(exit, exit, boxed, boxed, &[]));
+            let open = builder.create_block();
+            builder.jump(open, &[]);
+            builder.switch_to_block(open);
+            builder.seal_block(open);
+            assert!(!builder.holds_since(last_link, open, boxed, boxed, &[]));
+            builder.seal_block(join);
+            builder.return_(&[boxed]);
+        },
+    );
+    assert!(ir(&module).contains("define"));
+}
+
+#[test]
+fn a_call_on_a_way_that_ends_in_a_trap_leaves_the_frame_deferred() {
+    let mut module = module();
+    let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let enter = module
+        .declare_function("enter", Linkage::Import, &unary)
+        .unwrap();
+    let fail = module
+        .declare_function("fail", Linkage::Import, &unary)
+        .unwrap();
+    define(
+        &mut module,
+        "trapping",
+        Linkage::Export,
+        &unary,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let param = builder.block_params(entry)[0];
+            let (enter, fail) = (
+                builder.import_function(enter),
+                builder.import_function(fail),
+            );
+            let framed = Var(0);
+            builder.declare_var(framed, types::I64);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(framed, zero);
+            builder.defer_frame(framed, param, enter, &[]);
+            let (failing, done) = (builder.create_block(), builder.create_block());
+            builder.brif(param, failing, &[], done, &[]);
+            builder.switch_to_block(failing);
+            builder.seal_block(failing);
+            builder.call(fail, &[param]);
+            builder.trap(TrapCode::User(1));
+            builder.switch_to_block(done);
+            builder.seal_block(done);
+            // The failing way is not cold, but it ends in the trap.
+            assert!(!builder.calls_when_warm(&[enter]));
+            builder.return_(&[param]);
+        },
+    );
+    let deferred = ir(&module);
+    assert_eq!(deferred.matches("call i64 @enter").count(), 1, "{deferred}");
+    assert_eq!(deferred.matches("call i64 @fail").count(), 1, "{deferred}");
+}
+
+#[test]
+fn a_deferred_frame_is_pushed_before_the_calls_that_need_it() {
+    let mut module = module();
+    let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let enter = module
+        .declare_function("enter", Linkage::Import, &unary)
+        .unwrap();
+    let free = module
+        .declare_function("free", Linkage::Import, &unary)
+        .unwrap();
+    let other = module
+        .declare_function("other", Linkage::Import, &unary)
+        .unwrap();
+    let indirect = unary.clone();
+    let indirect_again = unary.clone();
+    // Unoptimized, the body is the one built, which has no slow-path copy.
+    crate::native_backend::without_optimization(|| {
+        define(
+            &mut module,
+            "cold",
+            Linkage::Export,
+            &unary,
+            move |builder| {
+                let entry = builder.create_block();
+                builder.append_block_params_for_function_params(entry);
+                builder.switch_to_block(entry);
+                builder.seal_block(entry);
+                let param = builder.block_params(entry)[0];
+                let (enter, free, other) = (
+                    builder.import_function(enter),
+                    builder.import_function(free),
+                    builder.import_function(other),
+                );
+                let framed = Var(0);
+                builder.declare_var(framed, types::I64);
+                let zero = builder.iconst(types::I64, 0);
+                builder.def_var(framed, zero);
+                let defers = builder.iconst(types::I64, 1);
+                builder.defer_frame(framed, param, enter, &[free]);
+                builder.call(free, &[param]);
+                let (slow, done) = (builder.create_block(), builder.create_block());
+                builder.set_cold_block(slow);
+                builder.brif(defers, slow, &[], done, &[]);
+                builder.switch_to_block(slow);
+                builder.seal_block(slow);
+                builder.call(other, &[param]);
+                let address = builder.func_addr(types::I64, other);
+                let signature = builder.import_signature(indirect);
+                builder.call_indirect(signature, address, &[param]);
+                builder.jump(done, &[]);
+                builder.switch_to_block(done);
+                builder.seal_block(done);
+                assert!(!builder.calls_when_warm(&[free, enter]));
+                let warm = builder.create_block();
+                builder.jump(warm, &[]);
+                builder.switch_to_block(warm);
+                builder.seal_block(warm);
+                let signature = builder.import_signature(indirect_again);
+                builder.call_indirect(signature, address, &[param]);
+                assert!(builder.calls_when_warm(&[free, enter, other]));
+                builder.call(other, &[param]);
+                assert!(builder.calls_when_warm(&[free, enter]));
+                builder.return_(&[param]);
+            },
+        );
+    });
+    let deferred = ir(&module);
+    assert_eq!(deferred.matches("call i64 @enter").count(), 4, "{deferred}");
+    assert_eq!(deferred.matches("call i64 @free").count(), 1, "{deferred}");
+
+    // Settled, each test of the record and each frame branch is a jump.
+    let mut module = super::tests::module();
+    let enter = module
+        .declare_function("enter", Linkage::Import, &unary)
+        .unwrap();
+    let indirect = unary.clone();
+    define(
+        &mut module,
+        "settled",
+        Linkage::Export,
+        &unary,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let param = builder.block_params(entry)[0];
+            let enter = builder.import_function(enter);
+            let framed = Var(0);
+            builder.declare_var(framed, types::I64);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(framed, zero);
+            builder.defer_frame(framed, param, enter, &[]);
+            let address = builder.func_addr(types::I64, enter);
+            let signature = builder.import_signature(indirect);
+            builder.call_indirect(signature, address, &[param]);
+            let (taken, other) = (builder.create_block(), builder.create_block());
+            builder.frame_branch(param, taken, other);
+            builder.switch_to_block(other);
+            builder.seal_block(other);
+            builder.return_(&[zero]);
+            builder.switch_to_block(taken);
+            builder.seal_block(taken);
+            builder.settle_frame();
+            builder.return_(&[param]);
+        },
+    );
+    let ir = ir(&module);
+    assert!(!ir.contains("br i1"), "{ir}");
+    assert!(ir.contains("call i64 @enter"), "{ir}");
+}
+
+#[test]
 fn rewrites_turn_calls_into_other_calls_copies_and_nothing() {
     let mut module = module();
     let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
@@ -816,6 +1092,61 @@ fn frame_stack_accesses_of_different_classes_never_overlap() {
 }
 
 #[test]
+fn box_header_words_class_fields_and_list_elements_never_overlap() {
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    let classes = [
+        AliasClass::BoxAccess,
+        AliasClass::BoxElements,
+        AliasClass::BoxLen,
+        AliasClass::BoxRoom,
+        AliasClass::ClassFields,
+        AliasClass::ListElements,
+    ];
+    for (index, kept) in classes.into_iter().enumerate() {
+        let other = classes[(index + 1) % classes.len()];
+        let name = format!("kept_{index}");
+        define(&mut module, &name, Linkage::Export, &sig, move |builder| {
+            let entry_block = builder.create_block();
+            builder.append_block_params_for_function_params(entry_block);
+            builder.switch_to_block(entry_block);
+            let first = builder.block_params(entry_block)[0];
+            let second = builder.block_params(entry_block)[1];
+            let kept = MemFlags::trusted_in(kept);
+            let word = builder.iconst(types::I64, 7);
+            builder.store(kept, word, first, 0);
+            let other_word = builder.iconst(types::I64, 9);
+            builder.store(MemFlags::trusted_in(other), other_word, second, 0);
+            let reloaded = builder.load(types::I64, kept, first, 0);
+            builder.return_(&[reloaded]);
+        });
+    }
+
+    let ir = ir(&module);
+    for name in [
+        "aura box access code",
+        "aura box element address",
+        "aura box length",
+        "aura box room",
+        "aura class fields",
+        "aura list elements",
+    ] {
+        assert!(ir.contains(name), "{ir}");
+    }
+    let optimized = optimized_ir(&module);
+    for index in 0..classes.len() {
+        let start = optimized
+            .find(&format!("@kept_{index}("))
+            .expect("the function is defined");
+        let end = optimized[start..].find("\n}").expect("the body ends") + start;
+        assert!(
+            optimized[start..end].contains("ret i64 7"),
+            "a store of another class cannot change the word: {optimized}"
+        );
+    }
+}
+
+#[test]
 fn branches_to_cold_blocks_carry_branch_weights() {
     let mut module = module();
     let effect = signature(CallConv::C, &[], &[]);
@@ -1152,6 +1483,66 @@ fn units_reach_each_other_through_hidden_symbols_and_copy_small_code() {
 }
 
 #[test]
+fn a_function_nothing_reaches_weighs_nothing_in_the_split() {
+    let mut module = module();
+    let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let chain = |length: usize| {
+        move |builder: &mut dyn FunctionBackend| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let mut value = builder.block_params(entry)[0];
+            for _ in 0..length {
+                value = builder.iadd_imm(value, 1);
+            }
+            builder.return_(&[value]);
+        }
+    };
+    let callee = module
+        .declare_function("callee", Linkage::Local, &unary)
+        .expect("the callee should declare");
+    define(
+        &mut module,
+        "caller",
+        Linkage::Export,
+        &unary,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let callee = builder.import_function(callee);
+            let value = builder.block_params(entry)[0];
+            let result = builder.call(callee, &[value]).results[0];
+            builder.return_(&[result]);
+        },
+    );
+    // A body every caller left for its twin sits between the two.
+    define(
+        &mut module,
+        "unreached",
+        Linkage::Local,
+        &unary,
+        chain(super::units::UNIT_WEIGHT * 3),
+    );
+    module
+        .define_function(
+            callee,
+            &unary,
+            Box::new(move |builder| {
+                chain(10)(builder);
+                builder.verify()
+            }),
+        )
+        .expect("the callee should define");
+    let partition = Partition::split(&module);
+    assert_eq!(partition.units(), 1);
+    assert_eq!(
+        defining_unit(&partition, &module, "caller"),
+        defining_unit(&partition, &module, "callee")
+    );
+}
+
+#[test]
 fn an_import_without_a_call_ties_no_units_together() {
     let LargeModule { mut module, count } = large_module(40, 250);
     let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
@@ -1484,6 +1875,429 @@ fn a_select_of_blocks_already_copied_keeps_its_false_side_in_the_copy_too() {
     assert!(!ir.contains("select"), "{ir}");
     assert!(!ir.contains(", 9\n"), "{ir}");
     assert!(ir.contains(", 7\n"), "{ir}");
+}
+
+#[test]
+fn blocks_copied_for_a_weaker_condition_are_copied_again_for_a_stronger_one() {
+    // A loop reads two views. It gets a copy for while the first holds,
+    // and then one for while both hold, which the entry tries first.
+    let mut module = module();
+    let sig = signature(
+        CallConv::C,
+        &[types::I64, types::I64, types::I64, types::I64],
+        &[types::I64],
+    );
+    let copied = std::rc::Rc::new(std::cell::Cell::new((false, true)));
+    let result = std::rc::Rc::clone(&copied);
+    define(
+        &mut module,
+        "shared",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let [count, flag, other_flag, address] = builder.block_params(entry)[..] else {
+                unreachable!("four parameters")
+            };
+            let total = Var(0);
+            builder.declare_var(total, types::I64);
+            let header = builder.create_block();
+            let index = builder.append_block_param(header, types::I64);
+            let body = builder.create_block();
+            let exit = builder.create_block();
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(total, zero);
+            let both = builder.band(flag, other_flag);
+            builder.jump(header, &[zero]);
+
+            builder.switch_to_block(header);
+            let more = builder.icmp(IntCC::SignedLessThan, index, count);
+            builder.brif(more, body, &[], exit, &[]);
+
+            builder.switch_to_block(body);
+            builder.seal_block(body);
+            let seven = builder.iconst(types::I64, 7);
+            let nine = builder.iconst(types::I64, 9);
+            let loaded = builder.load(types::I64, MemFlags::trusted(), address, 0);
+            let holds = builder.icmp_imm(IntCC::NotEqual, flag, 0);
+            let first = builder.select(holds, seven, loaded);
+            let other_holds = builder.icmp_imm(IntCC::NotEqual, other_flag, 0);
+            let second = builder.select(other_holds, nine, loaded);
+            let sum = builder.use_var(total);
+            let added = builder.iadd(sum, first);
+            let added = builder.iadd(added, second);
+            builder.def_var(total, added);
+            let next = builder.iadd_imm(index, 1);
+            builder.jump(header, &[next]);
+            builder.seal_block(header);
+
+            builder.switch_to_block(exit);
+            builder.seal_block(exit);
+            let returned = builder.use_var(total);
+            builder.return_(&[returned]);
+            let weaker =
+                builder.version_blocks(&[header, body], &[(first, None)], &[(entry, flag, None)]);
+            let stronger = builder.version_blocks(
+                &[header, body],
+                &[(first, None), (second, None)],
+                &[(entry, both, None)],
+            );
+            result.set((weaker, stronger));
+        },
+    );
+    let ir = ir(&module);
+    assert_eq!(copied.get(), (true, true), "{ir}");
+    // The copy for both conditions adds both constants, the copy for the
+    // first reads memory for the second, and nothing tests a condition
+    // inside the loop.
+    assert!(!ir.contains("select"), "{ir}");
+    assert!(ir.contains(", 9\n"), "{ir}");
+    assert_eq!(ir.matches(", 7\n").count(), 2, "{ir}");
+}
+
+#[test]
+fn a_loop_copied_before_the_loop_around_it_has_each_version_in_each_copy() {
+    // An inner loop gets a copy for its own view. The loop around it then
+    // gets a copy for its first view and one for both its views. Each
+    // holds both versions of the inner loop and the branch between them,
+    // and no select is left in any of them.
+    let mut module = module();
+    let sig = signature(
+        CallConv::C,
+        &[types::I64, types::I64, types::I64, types::I64, types::I64],
+        &[types::I64],
+    );
+    let copied = std::rc::Rc::new(std::cell::Cell::new((false, false, false)));
+    let result = std::rc::Rc::clone(&copied);
+    define(
+        &mut module,
+        "nested",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let [count, inner_flag, flag, other_flag, address] = builder.block_params(entry)[..]
+            else {
+                unreachable!("five parameters")
+            };
+            let total = Var(0);
+            builder.declare_var(total, types::I64);
+            let outer = builder.create_block();
+            let index = builder.append_block_param(outer, types::I64);
+            let outer_body = builder.create_block();
+            let inner_pad = builder.create_block();
+            let inner = builder.create_block();
+            let inner_index = builder.append_block_param(inner, types::I64);
+            let inner_body = builder.create_block();
+            let latch = builder.create_block();
+            let exit = builder.create_block();
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(total, zero);
+            let both = builder.band(flag, other_flag);
+            builder.jump(outer, &[zero]);
+
+            builder.switch_to_block(outer);
+            let more = builder.icmp(IntCC::SignedLessThan, index, count);
+            builder.brif(more, outer_body, &[], exit, &[]);
+
+            builder.switch_to_block(outer_body);
+            builder.seal_block(outer_body);
+            let seven = builder.iconst(types::I64, 7);
+            let loaded = builder.load(types::I64, MemFlags::trusted(), address, 0);
+            let holds = builder.icmp_imm(IntCC::NotEqual, flag, 0);
+            let first = builder.select(holds, seven, loaded);
+            let sum = builder.use_var(total);
+            let added = builder.iadd(sum, first);
+            builder.def_var(total, added);
+            builder.jump(inner_pad, &[]);
+
+            builder.switch_to_block(inner_pad);
+            builder.seal_block(inner_pad);
+            builder.jump(inner, &[zero]);
+
+            builder.switch_to_block(inner);
+            let inner_more = builder.icmp(IntCC::UnsignedLessThan, inner_index, count);
+            builder.brif(inner_more, inner_body, &[], latch, &[]);
+
+            builder.switch_to_block(inner_body);
+            builder.seal_block(inner_body);
+            let nine = builder.iconst(types::I64, 9);
+            let five = builder.iconst(types::I64, 5);
+            let inner_loaded = builder.load(types::I64, MemFlags::trusted(), address, 8);
+            let inner_holds = builder.icmp_imm(IntCC::NotEqual, inner_flag, 0);
+            let own = builder.select(inner_holds, nine, inner_loaded);
+            let other_holds = builder.icmp_imm(IntCC::NotEqual, other_flag, 0);
+            let second = builder.select(other_holds, five, loaded);
+            let sum = builder.use_var(total);
+            let added = builder.iadd(sum, own);
+            let added = builder.iadd(added, second);
+            builder.def_var(total, added);
+            let inner_next = builder.iadd_imm(inner_index, 1);
+            builder.jump(inner, &[inner_next]);
+            builder.seal_block(inner);
+
+            builder.switch_to_block(latch);
+            builder.seal_block(latch);
+            let next = builder.iadd_imm(index, 1);
+            builder.jump(outer, &[next]);
+            builder.seal_block(outer);
+
+            builder.switch_to_block(exit);
+            builder.seal_block(exit);
+            let returned = builder.use_var(total);
+            builder.return_(&[returned]);
+
+            let inner_copied = builder.version_blocks(
+                &[inner, inner_body],
+                &[(own, None)],
+                &[(inner_pad, inner_flag, None)],
+            );
+            builder.seal_versions();
+            let blocks = [outer, outer_body, inner_pad, inner, inner_body, latch];
+            let weaker = builder.version_blocks(&blocks, &[(first, None)], &[(entry, flag, None)]);
+            let stronger = builder.version_blocks(
+                &blocks,
+                &[(first, None), (second, None)],
+                &[(entry, both, None)],
+            );
+            builder.seal_versions();
+            result.set((inner_copied, weaker, stronger));
+        },
+    );
+    let ir = ir(&module);
+    assert_eq!(copied.get(), (true, true, true), "{ir}");
+    assert!(!ir.contains("select"), "{ir}");
+    // The outer loop in three versions, the inner one in two inside each.
+    assert_eq!(ir.matches("icmp slt i64").count(), 3, "{ir}");
+    assert_eq!(ir.matches("icmp ult i64").count(), 6, "{ir}");
+    // The inner loop's own copy in each, the first view kept in both outer
+    // copies, and the second in the copy for both views alone.
+    assert_eq!(ir.matches(", 9\n").count(), 3, "{ir}");
+    assert_eq!(ir.matches(", 7\n").count(), 2, "{ir}");
+    assert_eq!(ir.matches(", 5\n").count(), 2, "{ir}");
+}
+
+#[test]
+fn loops_that_share_all_but_one_block_are_both_copied_through_one_entry() {
+    // One view's loop leaves out a block that another's takes in, as a
+    // loop whose call writes one list but not the other does. The first
+    // loop's copy stays inside the second's, and the entry picks among
+    // the four versions.
+    let mut module = module();
+    let sig = signature(
+        CallConv::C,
+        &[types::I64, types::I64, types::I64, types::I64],
+        &[types::I64],
+    );
+    let copied = std::rc::Rc::new(std::cell::Cell::new((false, false)));
+    let result = std::rc::Rc::clone(&copied);
+    define(
+        &mut module,
+        "overlap",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let [count, flag, other_flag, address] = builder.block_params(entry)[..] else {
+                unreachable!("four parameters")
+            };
+            let total = Var(0);
+            let index = Var(1);
+            builder.declare_var(total, types::I64);
+            builder.declare_var(index, types::I64);
+            let header = builder.create_block();
+            let body = builder.create_block();
+            let side = builder.create_block();
+            let exit = builder.create_block();
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(total, zero);
+            builder.def_var(index, zero);
+            builder.jump(header, &[]);
+
+            builder.switch_to_block(header);
+            let at = builder.use_var(index);
+            let more = builder.icmp(IntCC::SignedLessThan, at, count);
+            builder.brif(more, body, &[], exit, &[]);
+
+            builder.switch_to_block(body);
+            builder.seal_block(body);
+            let seven = builder.iconst(types::I64, 7);
+            let nine = builder.iconst(types::I64, 9);
+            let loaded = builder.load(types::I64, MemFlags::trusted(), address, 0);
+            let holds = builder.icmp_imm(IntCC::NotEqual, flag, 0);
+            let first = builder.select(holds, seven, loaded);
+            let other_holds = builder.icmp_imm(IntCC::NotEqual, other_flag, 0);
+            let second = builder.select(other_holds, nine, loaded);
+            let sum = builder.use_var(total);
+            let added = builder.iadd(sum, first);
+            let added = builder.iadd(added, second);
+            builder.def_var(total, added);
+            let next = builder.iadd_imm(at, 1);
+            builder.def_var(index, next);
+            let rare = builder.icmp_imm(IntCC::Equal, next, 5);
+            builder.brif(rare, side, &[], header, &[]);
+
+            // The side block reads the total from memory, so the first loop
+            // leaves no value to it.
+            builder.switch_to_block(side);
+            let sum = builder.use_var(total);
+            builder.seal_block(side);
+            let added = builder.iadd_imm(sum, 12345);
+            builder.def_var(total, added);
+            builder.jump(header, &[]);
+            builder.seal_block(header);
+
+            builder.switch_to_block(exit);
+            builder.seal_block(exit);
+            let returned = builder.use_var(total);
+            builder.return_(&[returned]);
+
+            let narrow =
+                builder.version_blocks(&[header, body], &[(first, None)], &[(entry, flag, None)]);
+            builder.seal_versions();
+            let wide = builder.version_blocks(
+                &[header, body, side],
+                &[(second, None)],
+                &[(entry, other_flag, None)],
+            );
+            builder.seal_versions();
+            result.set((narrow, wide));
+        },
+    );
+    let ir = ir(&module);
+    assert_eq!(copied.get(), (true, true), "{ir}");
+    assert!(!ir.contains("select"), "{ir}");
+    assert_eq!(ir.matches("icmp slt i64").count(), 4, "{ir}");
+    assert_eq!(ir.matches(", 12345\n").count(), 2, "{ir}");
+    assert_eq!(ir.matches(", 7\n").count(), 2, "{ir}");
+    assert_eq!(ir.matches(", 9\n").count(), 2, "{ir}");
+    // The entry tests the second view, then the first both where the
+    // second holds and where it does not, each in a block of its own.
+    assert_eq!(ir.matches("icmp ne i64 %5, 0\n  br i1").count(), 2, "{ir}");
+}
+
+#[test]
+fn copies_stop_when_the_body_would_outgrow_its_budget() {
+    // Each copy of blocks copied before doubles them, so copies of the
+    // same loop stop after a few, and the function still verifies.
+    let mut module = module();
+    let copies = std::rc::Rc::new(std::cell::Cell::new(0));
+    let result = std::rc::Rc::clone(&copies);
+    let sig = signature(
+        CallConv::C,
+        &[types::I64, types::I64, types::I64],
+        &[types::I64],
+    );
+    define(
+        &mut module,
+        "budget",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let [count, flag, address] = builder.block_params(entry)[..] else {
+                unreachable!("three parameters")
+            };
+            let header = builder.create_block();
+            let index = builder.append_block_param(header, types::I64);
+            let body = builder.create_block();
+            let exit = builder.create_block();
+            let zero = builder.iconst(types::I64, 0);
+            builder.jump(header, &[zero]);
+
+            builder.switch_to_block(header);
+            let more = builder.icmp(IntCC::SignedLessThan, index, count);
+            builder.brif(more, body, &[], exit, &[]);
+
+            builder.switch_to_block(body);
+            builder.seal_block(body);
+            let loaded = builder.load(types::I64, MemFlags::trusted(), address, 0);
+            let holds = builder.icmp_imm(IntCC::NotEqual, flag, 0);
+            let picked = builder.select(holds, index, loaded);
+            builder.store(MemFlags::trusted(), picked, address, 8);
+            let next = builder.iadd_imm(index, 1);
+            builder.jump(header, &[next]);
+            builder.seal_block(header);
+
+            builder.switch_to_block(exit);
+            builder.seal_block(exit);
+            builder.return_(&[zero]);
+            for _ in 0..16 {
+                if !builder.version_blocks(
+                    &[header, body],
+                    &[(picked, None)],
+                    &[(entry, flag, None)],
+                ) {
+                    break;
+                }
+                builder.seal_versions();
+                result.set(result.get() + 1);
+            }
+        },
+    );
+    let ir = ir(&module);
+    assert!(
+        (2..16).contains(&copies.get()),
+        "{} copies\n{ir}",
+        copies.get()
+    );
+}
+
+#[test]
+fn an_entry_that_does_not_end_in_a_jump_into_the_blocks_copies_nothing() {
+    let mut module = module();
+    let copied = std::rc::Rc::new(std::cell::Cell::new((true, true)));
+    let result = std::rc::Rc::clone(&copied);
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(
+        &mut module,
+        "entries",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let [count, flag] = builder.block_params(entry)[..] else {
+                unreachable!("two parameters")
+            };
+            let header = builder.create_block();
+            let index = builder.append_block_param(header, types::I64);
+            let exit = builder.create_block();
+            let zero = builder.iconst(types::I64, 0);
+            // The entry leaves for the exit where its flag fails.
+            builder.brif(flag, header, &[zero], exit, &[]);
+
+            builder.switch_to_block(header);
+            let more = builder.icmp(IntCC::SignedLessThan, index, count);
+            let next = builder.iadd_imm(index, 1);
+            builder.brif(more, header, &[next], exit, &[]);
+            builder.seal_block(header);
+
+            builder.switch_to_block(exit);
+            builder.seal_block(exit);
+            builder.return_(&[zero]);
+            let branch = builder.version_blocks(&[header], &[], &[(entry, flag, None)]);
+            // The exit returns.
+            let returns = builder.version_blocks(&[header], &[], &[(exit, flag, None)]);
+            result.set((branch, returns));
+        },
+    );
+    let ir = ir(&module);
+    assert_eq!(copied.get(), (false, false), "{ir}");
 }
 
 #[test]

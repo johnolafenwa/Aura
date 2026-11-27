@@ -35,6 +35,9 @@ pub(super) struct ResultSlotPlan {
     pub(super) slots: HashMap<String, Vec<String>>,
     /// The functions that get a twin.
     pub(super) twins: HashSet<String>,
+    /// The functions that get a view twin, each with the `str` parameters
+    /// the twin takes as words (see `str_slots`).
+    pub(super) views: HashMap<String, Vec<str_slots::ViewParam>>,
 }
 
 /// One result slot: where its tag and its payloads are kept.
@@ -51,7 +54,8 @@ pub(super) struct ResultSlot {
 }
 
 /// The direct types of the payloads of the `Result` type `ty` when a slot
-/// can hold them: each a scalar, `None`, or one box.
+/// can hold them: each a scalar, `None`, one box, or an inline union of
+/// those, such as `Item | None`, which keeps its tag and payload words.
 pub(super) fn slot_parts(
     ty: &Type,
     classes: &HashMap<String, MirClass>,
@@ -66,8 +70,16 @@ pub(super) fn slot_parts(
         return None;
     }
     let part = |ty: &Type| {
-        direct_type(ty, classes)
-            .filter(|direct| matches!(direct, DirectType::Scalar(_) | DirectType::Opaque(_)))
+        direct_type(ty, classes).filter(|direct| match direct {
+            DirectType::Scalar(_) | DirectType::Opaque(_) => true,
+            // A callable member's words need its descriptor to release,
+            // and the slot's empty words name none.
+            DirectType::Union(union) => union
+                .members
+                .iter()
+                .all(|member| matches!(member.ty, DirectType::Scalar(_) | DirectType::Opaque(_))),
+            _ => false,
+        })
     };
     Some((part(ok)?, part(err)?))
 }
@@ -300,6 +312,7 @@ pub(super) fn plan(
     if module.ownership != MirOwnership::Explicit {
         return plan;
     }
+    plan.views = str_slots::plan_views(module);
     let return_types = module
         .functions
         .iter()
@@ -416,6 +429,9 @@ impl FunctionCompiler<'_> {
     /// The words a value of a payload's type goes into a slot as: the
     /// scalar, or a box the slot owns.
     fn result_part_words(&mut self, value: ValueRef) -> std::result::Result<Vec<Val>, String> {
+        if value.ty.owned_union().is_some() {
+            return Ok(self.transfer_union_words(&value));
+        }
         if !matches!(value.ty, DirectType::Opaque(_)) {
             return Ok(value.values);
         }
@@ -705,7 +721,19 @@ impl FunctionCompiler<'_> {
             return Ok(false);
         };
         for root in [&slot.ok, &slot.err] {
-            if !layout_owns_handles(&self.part_type(root)) {
+            let ty = self.part_type(root);
+            if !layout_owns_handles(&ty) {
+                continue;
+            }
+            if ty.owned_union().is_some() {
+                // The tag of the union names its active member, and the
+                // empty words of the variant the slot does not hold hold a
+                // null handle, which releases nothing.
+                self.release_root_words(root)?;
+                let zeros = ty.zero_values(&mut *self.builder);
+                for (var, zero) in self.part_vars(root).into_iter().zip(zeros) {
+                    self.builder.def_var(var, zero);
+                }
                 continue;
             }
             // Only one of the two holds a box, and which one is known only

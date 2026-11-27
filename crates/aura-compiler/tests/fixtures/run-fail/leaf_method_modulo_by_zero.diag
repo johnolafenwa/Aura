@@ -1,0 +1,6 @@
+error[AU4004]: division by zero
+ --> crates/aura-compiler/tests/fixtures/run-fail/leaf_method_modulo_by_zero.au:6:27
+  |
+6 |         self.state = self.state * 48271 % self.modulus
+  |                           ^
+  = note: Aura call chain (innermost first): Rng.next at 5:5 -> main at 10:1

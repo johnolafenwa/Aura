@@ -1,0 +1,38 @@
+# The list a split with a literal separator makes already names its type,
+# `list[str]`, so it is not tagged again: it is read, stored, printed,
+# matched in a union, copied and passed on as any `list[str]` is.
+
+class Row:
+    cells: list[str]
+
+def describe(value: list[str] | int64) -> str:
+    match value:
+        case list[str] as cells:
+            return f"cells {cells.len()}"
+        case int64 as number:
+            return f"number {number}"
+
+def first(cells: list[str]) -> str:
+    return cells[0].clone()
+
+def main():
+    line = "a b  c"
+    parts = line.split(" ")
+    print(parts)
+    print(parts.len())
+    print(describe(parts.copy()))
+    print(describe(4))
+    mut rows: list[Row] = []
+    for text in ["x,y", "z", ""]:
+        rows.append(Row(cells=text.split(",")))
+    for row in rows:
+        print(f"{row.cells} {row.cells.len()}")
+    mut by_key: dict[str, list[str]] = {}
+    by_key["k"] = "1-2-3".split("-")
+    print(by_key)
+    mut grown = "p q".split(" ")
+    grown.append("r")
+    print(grown)
+    print(first("m;n".split(";")))
+    words = rows[0].cells[1].split("y")
+    print(words)

@@ -1,0 +1,25 @@
+find apple: apple 3
+count apple: 3
+find plum: none
+count plum: -1
+find : err empty name
+count : err empty name
+first pear
+first apple
+first none
+first err empty name
+label -3: err 3
+Result.Err(3)
+label 0: None
+Result.Ok(None)
+label 4: label 4
+Result.Ok(label 4)
+[label 1, -, label 2]
+labels err 7
+halves 5
+halves err too big 200
+[Result.Ok(2), Result.Ok(None), Result.Err(too big 500)]
+ok 7
+trapped trap with label 2
+ok 0
+ok 4

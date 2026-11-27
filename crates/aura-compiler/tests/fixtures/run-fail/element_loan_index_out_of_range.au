@@ -1,0 +1,12 @@
+def shout(text: str) -> str:
+    return text.to_upper()
+
+
+def pick(names: list[str], index: int64) -> str:
+    return shout(names[index])
+
+
+def main():
+    names = ["ada", "grace"]
+    print(pick(names, 1))
+    print(pick(names, 2))

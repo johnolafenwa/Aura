@@ -4421,6 +4421,18 @@ pub fn slice_vec_owned(
         ListElements::Float32(values) => ListElements::Float32(copy_scalars(&values[start..end])?),
         ListElements::Bool(values) => ListElements::Bool(copy_scalars(&values[start..end])?),
         ListElements::Typed(typed) => ListElements::Typed(Box::new(typed.slice(start, end))),
+        ListElements::Instances(_) => {
+            let mut elements = try_array_buffer(end - start, "Array-containing Vec slice")?;
+            elements.extend(
+                vector
+                    .elements
+                    .iter()
+                    .skip(start)
+                    .take(end - start)
+                    .map(Cow::into_owned),
+            );
+            ListElements::from(elements)
+        }
         ListElements::Int8(values) => ListElements::Int8(copy_scalars(&values[start..end])?),
         ListElements::Int16(values) => ListElements::Int16(copy_scalars(&values[start..end])?),
         ListElements::Int32(values) => ListElements::Int32(copy_scalars(&values[start..end])?),
@@ -4976,6 +4988,8 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
         }
     }
     match value {
+        // The most common element, a `str`, copies its text.
+        Value::String(text) => return Ok(Value::String(text.clone())),
         // A variant kept in its layout copies its block, and each payload
         // box it copies shares its collection's storage.
         Value::EnumVariant(EnumVariantValue {
@@ -5851,7 +5865,7 @@ struct TaskGroupState {
     cancel_flag: Arc<RuntimeWakeSignal>,
     failure_wake_flag: Arc<RuntimeWakeSignal>,
     completion_wake_flag: Arc<RuntimeWakeSignal>,
-    parent_flags: Vec<Arc<RuntimeWakeSignal>>,
+    parent_flags: Arc<[Arc<RuntimeWakeSignal>]>,
 }
 
 struct FileState {
@@ -6658,9 +6672,11 @@ enum TaskHandle {
     Completed(TaskExecutionResult),
 }
 
+/// The flags whose setting cancels a task. They are shared, so a copy of
+/// the context, which every blocking operation takes, is one count.
 #[derive(Clone, Default)]
 pub struct CancellationContext {
-    flags: Vec<Arc<RuntimeWakeSignal>>,
+    flags: Arc<[Arc<RuntimeWakeSignal>]>,
 }
 
 struct ReactorRecvSubscription {
@@ -7036,7 +7052,7 @@ struct LightweightTaskScheduler {
     next_wait_epoch: u64,
     spawn_requests: Rc<RefCell<VecDeque<PreparedLightweightTask>>>,
     ready: VecDeque<(u64, RuntimeSchedulerWakeReason)>,
-    waiting: BTreeMap<u64, LightweightTaskWait>,
+    waiting: IdHashMap<u64, LightweightTaskWait>,
     tasks: BTreeMap<u64, LightweightTaskRecord>,
     reactor: RuntimeReactor,
     reactor_failure: Option<Diagnostic>,
@@ -10313,7 +10329,7 @@ impl LightweightTaskScheduler {
             next_wait_epoch: 1,
             spawn_requests: Rc::new(RefCell::new(VecDeque::new())),
             ready: VecDeque::new(),
-            waiting: BTreeMap::new(),
+            waiting: IdHashMap::default(),
             tasks: BTreeMap::new(),
             reactor: RuntimeReactor::new()
                 .expect("the Aura lightweight-task reactor must initialize"),
@@ -10347,7 +10363,7 @@ impl LightweightTaskScheduler {
             next_wait_epoch: 1,
             spawn_requests: Rc::new(RefCell::new(VecDeque::new())),
             ready: VecDeque::new(),
-            waiting: BTreeMap::new(),
+            waiting: IdHashMap::default(),
             tasks: BTreeMap::new(),
             reactor,
             reactor_failure: None,
@@ -10506,7 +10522,14 @@ impl LightweightTaskScheduler {
 
     /// Takes tasks that have not run from another worker's inbox.
     fn steal_worker_requests(&mut self) -> bool {
-        let Some(workers) = self.workers.clone() else {
+        // A request is counted before it enters an inbox and after it
+        // leaves one, so no count means no inbox holds one.
+        let Some(workers) = self
+            .workers
+            .as_ref()
+            .filter(|workers| workers.pending_requests.load(Ordering::SeqCst) != 0)
+            .cloned()
+        else {
             return false;
         };
         let mut stolen = workers.steal(self.worker_index).into_iter();
@@ -10549,10 +10572,19 @@ impl LightweightTaskScheduler {
     }
 
     fn resume_task(&mut self, task_id: u64, reason: RuntimeSchedulerWakeReason) {
-        let Some(mut record) = self.tasks.remove(&task_id) else {
+        // The record stays in the table while its task runs, and leaves it
+        // only when the task ends. Nothing the turn does reads it there: the
+        // coroutine never reaches the scheduler, retiring the wait only
+        // clears what the lines below clear, and the admissions after the
+        // turn insert other tasks.
+        // A task the reactor woke has left the wait table already, so the
+        // record is looked up once.
+        if self.waiting.contains_key(&task_id) && self.tasks.contains_key(&task_id) {
+            self.disarm_wait(task_id);
+        }
+        let Some(record) = self.tasks.get_mut(&task_id) else {
             return;
         };
-        self.disarm_wait(task_id);
         record
             .state
             .waits_without_deadline
@@ -10571,7 +10603,6 @@ impl LightweightTaskScheduler {
         }
         match outcome {
             CoroutineResult::Yield(TaskYield::Wait(wait)) => {
-                self.tasks.insert(task_id, record);
                 if let Some(reason) = wait.ready_reason(false) {
                     self.ready.push_back((task_id, reason));
                 } else {
@@ -10579,11 +10610,11 @@ impl LightweightTaskScheduler {
                 }
             }
             CoroutineResult::Yield(TaskYield::YieldNow) => {
-                self.tasks.insert(task_id, record);
                 self.ready
                     .push_back((task_id, RuntimeSchedulerWakeReason::Ready));
             }
             CoroutineResult::Yield(TaskYield::Exit) => {
+                let mut record = self.take_ended_task(task_id);
                 record.context.yielder.set(std::ptr::null());
                 let result = CURRENT_LIGHTWEIGHT_TASK_EXIT
                     .with(|slot| slot.borrow_mut().take())
@@ -10615,12 +10646,20 @@ impl LightweightTaskScheduler {
                 retire_lightweight_task_record(record);
             }
             CoroutineResult::Return(result) => {
+                let record = self.take_ended_task(task_id);
                 record.context.yielder.set(std::ptr::null());
                 sync_host::holder_ended(&record.context.sync_holder);
                 self.complete_task(task_id, &record.state, result);
                 retire_lightweight_task_record(record);
             }
         }
+    }
+
+    /// The record of a task whose turn ended it, out of the table.
+    fn take_ended_task(&mut self, task_id: u64) -> LightweightTaskRecord {
+        self.tasks
+            .remove(&task_id)
+            .expect("a task stays in the table until it ends")
     }
 
     fn arm_wait(&mut self, task_id: u64, registration: TaskWaitRegistration) {
@@ -10942,7 +10981,9 @@ impl LightweightTaskScheduler {
     }
 
     fn retire_all_tasks(&mut self) {
-        let task_ids: Vec<_> = self.waiting.keys().copied().collect();
+        // In task order, as the tasks retire below.
+        let mut task_ids: Vec<_> = self.waiting.keys().copied().collect();
+        task_ids.sort_unstable();
         for task_id in task_ids {
             self.disarm_wait(task_id);
         }
@@ -13097,6 +13138,13 @@ pub fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
 }
 
 fn register_current_task_queue_handles(value: &Value) {
+    // A scalar or a `str` holds no queue, so the task is not looked up.
+    if matches!(
+        value,
+        Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::String(_) | Value::Unit
+    ) {
+        return;
+    }
     let Some(task) = current_lightweight_task() else {
         return;
     };
@@ -14321,21 +14369,53 @@ where
     R: Read,
 {
     let max_bytes = validate_requested_read_size("read_bytes(...)", max_bytes)?;
-    let mut buffer = vec![0u8; max_bytes.max(1)];
     loop {
         check_deadline_and_cancellation(deadline, cancellation)?;
-        match reader.read(&mut buffer) {
-            Ok(0) => return Ok(None),
-            Ok(bytes) => {
-                buffer.truncate(bytes);
-                return Ok(Some(buffer));
-            }
+        match read_some_once(reader, max_bytes) {
             Err(error) if is_retryable_network_error(&error) => {
                 wait_for_fd_event(fd, readiness_events, deadline, cancellation)?;
             }
-            Err(error) => return Err(error),
+            read => return read,
         }
     }
+}
+
+/// One read of at most `max_bytes`: the bytes, or `None` at the end of
+/// the stream. A bounded read is usually far shorter than its bound, so
+/// it reads into this thread's zeroed scratch and copies out only the
+/// bytes it got, rather than zeroing a buffer of the bound for each read.
+/// The scratch is back in place before a wait, which may run another
+/// task's read on this thread.
+fn read_some_once<R>(reader: &mut R, max_bytes: usize) -> io::Result<Option<Vec<u8>>>
+where
+    R: Read,
+{
+    if max_bytes > READ_SCRATCH_BYTES {
+        let mut buffer = vec![0u8; max_bytes];
+        return reader.read(&mut buffer).map(|bytes| {
+            (bytes > 0).then(|| {
+                buffer.truncate(bytes);
+                buffer
+            })
+        });
+    }
+    let mut scratch = READ_SCRATCH.take();
+    if scratch.len() < max_bytes {
+        scratch.resize(max_bytes, 0);
+    }
+    let read = reader
+        .read(&mut scratch[..max_bytes])
+        .map(|bytes| (bytes > 0).then(|| scratch[..bytes].to_vec()));
+    READ_SCRATCH.set(scratch);
+    read
+}
+
+/// The largest bound [`read_some_with_fd_deadline`] reads into its
+/// thread's scratch; a larger one reads into a buffer of its own.
+const READ_SCRATCH_BYTES: usize = 64 * 1024;
+
+thread_local! {
+    static READ_SCRATCH: std::cell::Cell<Vec<u8>> = const { std::cell::Cell::new(Vec::new()) };
 }
 
 fn read_some_with_deadline<R>(
@@ -18615,8 +18695,12 @@ pub fn io_read_line() -> io::Result<Option<String>> {
 
 impl CancellationContext {
     pub fn merged(&self, other: &CancellationContext) -> CancellationContext {
-        let mut flags = self.flags.clone();
-        flags.extend(other.flags.iter().cloned());
+        let flags = self
+            .flags
+            .iter()
+            .chain(other.flags.iter())
+            .cloned()
+            .collect();
         CancellationContext { flags }
     }
 
@@ -18625,13 +18709,13 @@ impl CancellationContext {
     }
 
     fn subscribe_reactor(&self, subscription: &ReactorSubscription) {
-        for flag in &self.flags {
+        for flag in self.flags.iter() {
             flag.subscribe(subscription);
         }
     }
 
     fn unsubscribe_reactor(&self, subscription: &ReactorSubscription) {
-        for flag in &self.flags {
+        for flag in self.flags.iter() {
             flag.unsubscribe(subscription);
         }
     }
@@ -18659,18 +18743,23 @@ impl TaskGroupValue {
     }
 
     pub fn child_cancellation(&self) -> CancellationContext {
-        let mut flags = self.inner.parent_flags.clone();
-        flags.push(self.inner.cancel_flag.clone());
+        let flags = self
+            .inner
+            .parent_flags
+            .iter()
+            .chain([&self.inner.cancel_flag])
+            .cloned()
+            .collect();
         CancellationContext { flags }
     }
 
     pub fn queue_iteration_signal(&self) -> CancellationContext {
         CancellationContext {
-            flags: vec![
+            flags: Arc::new([
                 self.inner.cancel_flag.clone(),
                 self.inner.failure_wake_flag.clone(),
                 self.inner.completion_wake_flag.clone(),
-            ],
+            ]),
         }
     }
 

@@ -1,0 +1,48 @@
+# Functions that can only trap are called without the caller's frame
+# record: each call lends a link naming the caller instead.
+copy class Stamp:
+    seconds: int64
+    offset: int64
+
+    def local(self) -> int64:
+        return self.seconds + self.offset * 60
+
+    def days(self) -> int64:
+        return self.local() // 86400
+
+
+def era_day(days: int64) -> int64:
+    shifted = days + 719468
+    return shifted - shifted // 146097 * 146097
+
+
+def year_of(days: int64) -> int64:
+    day = era_day(days)
+    year = (day - day // 1460 + day // 36524 - day // 146096) // 365
+    return year + (days + 719468) // 146097 * 400
+
+
+def weekday(stamp: Stamp) -> int64:
+    return (stamp.days() + 3) % 7 + 1
+
+
+def describe(stamp: Stamp, label: str) -> str:
+    return f"{label}: day {stamp.days()} of year {year_of(stamp.days())}, weekday {weekday(stamp)}"
+
+
+def sum_years(count: int64) -> int64:
+    mut total = 0
+    for i in range(count):
+        stamp = Stamp(seconds=i * 86400 * 37, offset=i % 60)
+        total += year_of(stamp.days()) + weekday(stamp)
+    return total
+
+
+def main():
+    print(year_of(738000))
+    print(sum_years(1000))
+    print(describe(Stamp(seconds=1700000000, offset=60), "now"))
+    print(describe(Stamp(seconds=-62135596800, offset=0), "first"))
+    labels = ["x", "y"]
+    for label in labels:
+        print(describe(Stamp(seconds=253402300799, offset=-60), label))

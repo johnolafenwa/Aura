@@ -94,6 +94,19 @@ in this file.
   without a box (`interpreter` runs a third fewer instructions), a `for`
   over a short literal of numbers builds no list, and lists cost less to
   create and grow.
+- Speed: a local `str` is kept as its pointer and length instead of a
+  box, and reads of a `str` field, list element or dictionary key take
+  the text where it lies. `markdown_render` runs a quarter of the
+  instructions it did, and `http_stream` and `file_io` under half.
+- Speed: chains of `str` `+`, `x = x + y`, splits, number parses and
+  stream reads make fewer copies, and a sort of `str` compares a prefix
+  first. `sort_records` runs a third of the instructions it did.
+- Speed: a list element or field of a copy type is lent in place, a
+  callee that only reads an element's scalar fields gets no copy, and a
+  function's slow paths no longer rejoin its hot loop. `order_book` and
+  `lzw_compress` run about 40% fewer instructions. Across
+  `benchmarks/cross_language/` the median program runs 1.8 times Rust's
+  instructions, down from 2.4.
 - Pure module constants are evaluated during compilation. Write `const` to require a build-time result. Freestanding code can read computed constant tables.
 - The `build` module exposes target properties and features. Conditional suites select imports, foreign declarations, class members and functions. Pass `--cfg` on the command line or set defaults in `[build.cfg]`. `aura check --all-targets` checks the supported targets.
 - The editor dims inactive suites and provides navigation for identifiable declarations in them.

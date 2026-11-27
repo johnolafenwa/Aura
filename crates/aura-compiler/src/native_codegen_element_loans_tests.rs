@@ -131,3 +131,153 @@ fn an_entry_loan_that_reads_or_changes_its_list_another_way_walks_its_path() {
         assert_eq!(push_loans(name), 0, "{name}");
     }
 }
+
+const CLONE_SOURCE: &str = r#"
+def lookup(name: str, context: dict[str, str]) -> str:
+    return context[name].clone()
+
+def pick(names: list[str], index: int64) -> str:
+    return names[index].clone()
+
+def main():
+    mut context: dict[str, str] = {}
+    context["a"] = "b"
+    print(lookup("a", context))
+    print(pick(["x"], 0))
+"#;
+
+#[test]
+fn a_clone_of_a_dict_entry_loan_reads_it_where_it_lies() {
+    let mir = lower_source_to_mir(CLONE_SOURCE).expect("the source should lower");
+    let function = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should exist")
+    };
+    let dict = |source: &str| source == "context";
+    // The clone is the loan's one read, later in its block, and it only
+    // borrows the found value while it copies it.
+    let copies = super::entry_copy_loans(function("lookup"), dict);
+    assert_eq!(copies.values().collect::<Vec<_>>(), [&true], "{copies:?}");
+    let shadows = super::shadow_entry_copy_loans(
+        function("lookup"),
+        &copies,
+        &std::collections::HashSet::new(),
+        |_| Vec::new(),
+    );
+    assert_eq!(shadows.len(), 1, "{shadows:?}");
+    // A list element's clone keeps its own path, as does a dict's when the
+    // caller does not say the source is a dict.
+    assert!(super::entry_copy_loans(function("pick"), dict).is_empty());
+    assert!(super::entry_copy_loans(function("lookup"), |_| false).is_empty());
+}
+
+const BLOCK_SOURCE: &str = r#"
+class Job:
+    id: int64
+    rank: int64
+    done: bool
+    title: str
+
+def priority(job: Job) -> int64:
+    return job.rank * 1000 + job.id
+
+def done(job: Job) -> bool:
+    if job.done:
+        return true
+    return job.done
+
+def length(job: Job) -> int64:
+    return job.title.byte_len()
+
+def relay(job: Job) -> int64:
+    return priority(job)
+
+def rank_of(job: Job) -> int64:
+    return job.rank
+
+def main():
+    mut jobs: list[Job] = []
+    for i in range(4):
+        jobs.append(Job(id=i, rank=i % 2, done=false, title="t"))
+    jobs.sort(key=priority)
+    mut total = 0
+    for i in range(jobs.len()):
+        total += priority(jobs[i]) + length(jobs[i])
+    if done(jobs[0]):
+        total += rank_of(jobs[1])
+    print(total)
+"#;
+
+/// A parameter whose function reads only its scalar fields, in an
+/// assignment, a branch, or a return, takes an element's bytes; one read
+/// for a text field, or passed on, does not. A loan passed only to such
+/// parameters is lent the element's bytes, with the fields they read.
+#[test]
+fn block_params_read_only_scalar_fields() {
+    use super::{block_params, block_passed_loans, native_element_loans, BlockParam};
+    use crate::mir::{Instruction, Rvalue};
+    let module = lower_source_to_mir(BLOCK_SOURCE).expect("the source should lower");
+    let classes = module
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect();
+    let params = block_params(&module, &classes);
+    let param = |fields: &[&str]| BlockParam {
+        class: "Job".to_string(),
+        fields: fields.iter().map(|field| field.to_string()).collect(),
+    };
+    assert_eq!(
+        params.get(&("priority".to_string(), 0)),
+        Some(&param(&["id", "rank"]))
+    );
+    assert_eq!(
+        params.get(&("done".to_string(), 0)),
+        Some(&param(&["done"]))
+    );
+    assert_eq!(
+        params.get(&("rank_of".to_string(), 0)),
+        Some(&param(&["rank"]))
+    );
+    for name in ["length", "relay", "main"] {
+        assert!(
+            !params.keys().any(|(function, _)| function == name),
+            "{name}"
+        );
+    }
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let (uses, _) = native_element_loans(
+        main,
+        // Every parameter here is borrowed.
+        |instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { args, .. },
+                ..
+            } => args.iter().map(|arg| &arg.value).collect(),
+            _ => Vec::new(),
+        },
+        |_| true,
+    );
+    let mut passed = block_passed_loans(main, &uses, &params)
+        .into_values()
+        .map(|param| param.fields)
+        .collect::<Vec<_>>();
+    passed.sort();
+    // The key sort's loan and `priority(jobs[i])`, `done(jobs[0])`, and
+    // `rank_of(jobs[1])`; the loan passed to `length` is not.
+    assert_eq!(
+        passed,
+        [
+            vec!["done".to_string()],
+            vec!["id".to_string(), "rank".to_string()],
+            vec!["id".to_string(), "rank".to_string()],
+            vec!["rank".to_string()],
+        ]
+    );
+}

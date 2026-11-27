@@ -1,0 +1,35 @@
+def expand(start: int64) -> list[uint8]:
+    mut bytes: list[uint8] = []
+    mut code = start
+    while code > 0:
+        bytes.append((code % 7) as uint8)
+        code = code // 7
+    bytes.reverse()
+    return bytes
+
+
+def main() -> int32:
+    mut out: list[uint8] = []
+    mut floats: list[float32] = [0.5]
+    mut kept: list[list[uint8]] = []
+    for code in range(1, 40):
+        mut entry: list[uint8] = []
+        if code % 3 == 0:
+            entry.append(code as uint8)
+        else:
+            entry = expand(code * 11)
+            entry.append(9)
+        if code % 10 == 0:
+            # A copy shares its storage, so its box is freed as before.
+            kept.append(entry)
+            out.extend(kept[kept.len() - 1].copy())
+        else:
+            out.extend(entry)
+        mut more: list[float32] = []
+        more.append(code as float32)
+        floats.extend(more)
+    mut total = 0
+    for byte in out:
+        total = total * 31 % 1000003 + byte as int64
+    print(f"{out.len()} {total} {kept.len()} {floats.len()} {floats[39]}")
+    return 0

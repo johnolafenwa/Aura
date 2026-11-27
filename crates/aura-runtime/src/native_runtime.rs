@@ -153,6 +153,7 @@ pub use typed_layout::{
 use class_layouts::{celled_class_layout, registered_class_layout};
 pub use class_layouts::{
     register_class_layout, ClassLayout, ClassLayoutCell, TypedFields, FIRST_CLASS_ACCESS,
+    FIRST_INSTANCE_LIST_ACCESS,
 };
 pub use element_boxes::{ElementBox, ElementMut};
 use enum_layouts::{celled_enum_layout, registered_enum_layout};
@@ -692,6 +693,23 @@ impl DirectReturnedViewStack {
     fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// The deepest depth whose exit changes a record: the innermost
+    /// record's own depth, or the depth of its child while it holds a view
+    /// a child handed over, which the next exit there replaces. An exit
+    /// deeper than that finds no record of its own and hands its parent
+    /// nothing, so it has no work here. Zero when no record is held.
+    fn pop_guard(&self) -> usize {
+        match self.entries.last() {
+            Some((depth, frame))
+                if frame.pending_child.is_some() || !frame.pending_child_selectors.is_empty() =>
+            {
+                depth + 1
+            }
+            Some((depth, _)) => *depth,
+            None => 0,
+        }
+    }
 }
 
 enum DirectPendingMutableSinks {
@@ -821,7 +839,8 @@ impl DirectTaskRuntimeState {
         if !self.returned_views.is_empty() {
             flags |= DIRECT_FRAME_FLAG_RETURNED_VIEWS;
         }
-        self.frames_mut().set_runtime_flags(flags);
+        let pop_guard = self.returned_views.pop_guard();
+        self.frames_mut().set_runtime_flags(flags, pop_guard);
     }
 }
 
@@ -1763,6 +1782,45 @@ impl OpaqueValue {
         }
     }
 
+    /// Records where every element of a confined `list[str]` lies and
+    /// switches the view to [`DirectListAccess::Str`] now, as
+    /// [`Self::note_str_view_miss`] does once reads have missed the view
+    /// often enough: for a list of literals, which a program builds to read.
+    fn build_str_view(&self) {
+        if self.list_access.load(Ordering::Relaxed) != DirectListAccess::Values as u32 {
+            return;
+        }
+        let _access = self.access(false);
+        if self.shared_lock().is_some() {
+            return;
+        }
+        // SAFETY: the access holds.
+        let Value::Vec(vector) = (unsafe { &*self.value.get() }) else {
+            return;
+        };
+        let ListElements::Values(values) = &vector.elements else {
+            return;
+        };
+        // SAFETY: the value is confined to this thread, and nothing else
+        // holds its view.
+        let view = unsafe { vector.str_view.get_or_create() };
+        view.misses = 0;
+        view.entries.clear();
+        for element in values.iter() {
+            let Value::String(text) = element else {
+                view.entries.clear();
+                return;
+            };
+            view.entries.push(DirectStrViewEntry {
+                ptr: text.as_ptr() as usize,
+                len: text.len(),
+            });
+        }
+        self.list_elements.set(view.entries.as_ptr() as usize);
+        self.list_access
+            .store(DirectListAccess::Str as u32, Ordering::Relaxed);
+    }
+
     /// Counts one element read of a confined `list[str]` that missed the
     /// list view. Once the misses since the last build reach an eighth of
     /// the length, it records where every element lies and switches the
@@ -1786,15 +1844,95 @@ impl OpaqueValue {
         let ListElements::Values(values) = &vector.elements else {
             return;
         };
+        // SAFETY: the value is confined to this thread, and the access
+        // holds.
+        unsafe { self.note_str_view_miss_in(vector, values) };
+    }
+
+    /// [`Self::note_str_view_miss`] for a caller that already holds an
+    /// access to the list and checked its view and form.
+    ///
+    /// # Safety
+    ///
+    /// The list is confined to this thread, the caller holds an access to
+    /// it, `vector` is its value, and `values` its elements.
+    #[inline]
+    unsafe fn note_str_view_miss_in(&self, vector: &VecValue, values: &[Value]) {
+        // SAFETY: the value is confined to this thread, and nothing else
+        // holds its view.
+        let misses = unsafe { vector.str_view.note_miss() };
+        if misses < STR_VIEW_MIN_MISSES
+            || misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len()
+        {
+            return;
+        }
+        // SAFETY: as for `note_miss`.
+        let view = unsafe { vector.str_view.get_or_create() };
+        view.misses = 0;
+        self.fill_str_view(values, view);
+    }
+
+    /// Switches the view of a confined `list[str]` back to the `Str` view
+    /// it had before a store of a `str` at `position`, which landed in place,
+    /// with that element's words brought up to date. Every other element
+    /// lies where the view recorded it.
+    fn keep_str_view(&self, position: usize) {
+        // A shared list has no view, so the list is confined.
+        let _access = self.access(false);
+        // SAFETY: the access holds.
+        let Value::Vec(vector) = (unsafe { &*self.value.get() }) else {
+            return;
+        };
+        let (Some(values), false) = (vector.elements.as_values(), vector.str_view.is_empty())
+        else {
+            return;
+        };
         // SAFETY: the value is confined to this thread, and nothing else
         // holds its view.
         let view = unsafe { vector.str_view.get_or_create() };
-        view.misses += 1;
-        if view.misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len() {
+        let whole = view.entries.len() == values.len();
+        if let (Some(Value::String(text)), Some(entry), true) =
+            (values.get(position), view.entries.get_mut(position), whole)
+        {
+            *entry = DirectStrViewEntry {
+                ptr: text.as_ptr() as usize,
+                len: text.len(),
+            };
+            self.list_elements.set(view.entries.as_ptr() as usize);
+            self.list_access
+                .store(DirectListAccess::Str as u32, Ordering::Relaxed);
+        }
+    }
+
+    /// Makes the `Str` view of a list of `str` values that nothing else
+    /// holds, as enough misses would, so generated code reads its elements'
+    /// words from the first read on.
+    fn make_str_view(&self) {
+        if self.list_access.load(Ordering::Relaxed) != DirectListAccess::Values as u32 {
             return;
         }
-        view.misses = 0;
+        let _access = self.access(false);
+        if self.shared_lock().is_some() {
+            return;
+        }
+        // SAFETY: the access holds.
+        let Value::Vec(vector) = (unsafe { &*self.value.get() }) else {
+            return;
+        };
+        let ListElements::Values(values) = &vector.elements else {
+            return;
+        };
+        // SAFETY: the value is confined to this thread, and nothing else
+        // holds its view.
+        let view = unsafe { vector.str_view.get_or_create() };
+        self.fill_str_view(values, view);
+    }
+
+    /// Fills `view` with the words of `values` and makes it the list's
+    /// view, unless some value is not a `str`.
+    fn fill_str_view(&self, values: &[Value], view: &mut crate::list_elements::StrView) {
         view.entries.clear();
+        view.entries.reserve(values.len());
         for element in values.iter() {
             let Value::String(text) = element else {
                 view.entries.clear();
@@ -2906,10 +3044,10 @@ pub(crate) struct RuntimeTypeTag {
     /// For a list type, its element type, shared once so that each new
     /// list of the type takes a reference to it instead of a copy.
     pub(crate) list_element: Option<SharedType>,
-    /// For a dict type, its key and value types, shared once so that a
-    /// dict of the type is compared with them by address and takes a
-    /// reference to each instead of a copy.
-    pub(crate) dict_types: Option<(SharedType, SharedType)>,
+    /// For a `list`, `set`, or `dict` type, its type arguments, shared once
+    /// so that retagging a collection takes references to them instead of
+    /// copies.
+    pub(crate) collection_args: Vec<SharedType>,
 }
 
 /// The name of a variant of enum `base` tagged with `runtime_type_name`.
@@ -3017,12 +3155,16 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         }
         _ => None,
     };
-    let dict_types = match &parsed {
-        Type::Named(name, args) if name == "dict" && args.len() == 2 => Some((
-            SharedType::from(args[0].clone()),
-            SharedType::from(args[1].clone()),
-        )),
-        _ => None,
+    let collection_args = match &parsed {
+        Type::Named(name, args)
+            if matches!(
+                (name.as_str(), args.len()),
+                ("list", 1) | ("set", 1) | ("dict", 2)
+            ) =>
+        {
+            args.iter().cloned().map(SharedType::from).collect()
+        }
+        _ => Vec::new(),
     };
     let tag = Arc::new(RuntimeTypeTag {
         name: RuntimeName::from_static(Box::leak(name.to_owned().into_boxed_str())),
@@ -3033,7 +3175,7 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         descriptor,
         tagged_enum_name,
         list_element,
-        dict_types,
+        collection_args,
     });
     let mut registry = registry
         .lock()
@@ -3108,19 +3250,23 @@ fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
     match (value, &*tag.parsed) {
         (Value::Vec(vector), Type::Named(name, args)) => match args.as_slice() {
             [element] if name == "list" => {
-                vector.element_type != *element || is_float32_element(element)
+                !same_type(&vector.element_type, tag.collection_args.first(), element)
+                    || is_float32_element(element)
             }
             _ => true,
         },
         (Value::Set(set), Type::Named(name, args)) => match args.as_slice() {
-            [element] if name == "set" => set.element_type != *element,
+            [element] if name == "set" => {
+                !same_type(&set.element_type, tag.collection_args.first(), element)
+            }
             _ => true,
         },
-        (Value::Map(map), _) => match &tag.dict_types {
-            Some((key_type, value_type)) => {
-                map.key_type != *key_type || map.value_type != *value_type
+        (Value::Map(map), Type::Named(name, args)) => match args.as_slice() {
+            [key_type, value_type] if name == "dict" => {
+                !same_type(&map.key_type, tag.collection_args.first(), key_type)
+                    || !same_type(&map.value_type, tag.collection_args.get(1), value_type)
             }
-            None => true,
+            _ => true,
         },
         (Value::Tuple(tuple), Type::Tuple(element_types)) => {
             element_types.len() == tuple.elements.len() && tuple.element_types != *element_types
@@ -3136,6 +3282,16 @@ fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
     }
 }
 
+/// Whether `slot` is the type `ty`, which the tag shares as `shared` when it
+/// keeps a copy: one shared copy is the same type without comparing it.
+#[inline]
+fn same_type(slot: &SharedType, shared: Option<&SharedType>, ty: &Type) -> bool {
+    match shared {
+        Some(shared) => slot == shared,
+        None => *slot == *ty,
+    }
+}
+
 /// Gives `value` the shape a tag records: integer kinds, element types,
 /// and the type arguments of a generic class or enum. Both callers inline
 /// it, so tagging a box of a type with no shape stays a few compares.
@@ -3148,16 +3304,27 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
             *slot = ty.clone();
         }
     }
-    fn assign_shared_type(slot: &mut SharedType, ty: &Type) {
-        if *slot != *ty {
-            *slot = match ty {
-                // A common name, such as `str`, has one shared copy, so
-                // tagging a new `dict[str, str]` allocates nothing.
-                Type::Named(name, args) if args.is_empty() => SharedType::named(name),
-                _ => ty.clone().into(),
-            };
+    // The tag's shared copy of the argument, when it keeps one.
+    fn assign_shared_type(slot: &mut SharedType, ty: &Type, shared: Option<&SharedType>) {
+        match shared {
+            Some(shared) => {
+                if *slot != *shared {
+                    *slot = shared.clone();
+                }
+            }
+            None => {
+                if *slot != *ty {
+                    *slot = match ty {
+                        // A common name, such as `str`, has one shared copy,
+                        // so tagging a new `dict[str, str]` allocates nothing.
+                        Type::Named(name, args) if args.is_empty() => SharedType::named(name),
+                        _ => ty.clone().into(),
+                    };
+                }
+            }
         }
     }
+    let shared_arg = |index: usize| tag.collection_args.get(index);
     match value {
         Value::Int(integer) => {
             if let Some(kind) = tag.integer_kind {
@@ -3169,7 +3336,7 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         Value::Vec(vector) => {
             if let Type::Named(name, args) = parsed {
                 if name == "list" && args.len() == 1 {
-                    assign_shared_type(&mut vector.element_type, &args[0]);
+                    assign_shared_type(&mut vector.element_type, &args[0], shared_arg(0));
                     if is_float32_element(&args[0]) {
                         vector.elements.narrow_to_float32();
                     }
@@ -3179,17 +3346,15 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         Value::Set(set) => {
             if let Type::Named(name, args) = parsed {
                 if name == "set" && args.len() == 1 {
-                    assign_shared_type(&mut set.element_type, &args[0]);
+                    assign_shared_type(&mut set.element_type, &args[0], shared_arg(0));
                 }
             }
         }
         Value::Map(map) => {
-            if let Some((key_type, value_type)) = &tag.dict_types {
-                if map.key_type != *key_type {
-                    map.key_type = key_type.clone();
-                }
-                if map.value_type != *value_type {
-                    map.value_type = value_type.clone();
+            if let Type::Named(name, args) = parsed {
+                if name == "dict" && args.len() == 2 {
+                    assign_shared_type(&mut map.key_type, &args[0], shared_arg(0));
+                    assign_shared_type(&mut map.value_type, &args[1], shared_arg(1));
                 }
             }
         }
@@ -3615,6 +3780,11 @@ pub const DIRECT_STR_VIEW_LEN_OFFSET: i32 = std::mem::offset_of!(DirectStrViewEn
 /// A string or callable list builds its lookup table once the number of
 /// misses times this factor reaches its length.
 const LIST_VIEW_MISSES_PER_ELEMENT: usize = 8;
+
+/// A string list also waits for this many misses, so a short list read
+/// once or twice before it is dropped, such as the fields of one `split`,
+/// never pays for a table.
+const STR_VIEW_MIN_MISSES: usize = 4;
 
 /// Where generated code finds the list view in a boxed value. The offsets
 /// hold for one build of the runtime, so the compiler records
@@ -5172,6 +5342,14 @@ fn expect_string_value(value: &Value, label: &str) -> String {
 
 fn expect_bytes_value(value: &Value, label: &str) -> Vec<u8> {
     match value {
+        // A list that keeps its bytes unboxed is copied as it is.
+        Value::Vec(vector)
+            if vector.elements.as_uint8().is_some()
+                && (vector.element_type == Type::named("uint8")
+                    || is_unknown_runtime_type(&vector.element_type)) =>
+        {
+            vector.elements.as_uint8().unwrap_or_default().to_vec()
+        }
         Value::Vec(vector)
             if (vector.element_type == Type::named("uint8")
                 || is_unknown_runtime_type(&vector.element_type))
@@ -6715,6 +6893,35 @@ pub unsafe extern "C-unwind" fn aura_direct_enter_call_with_frame(
     );
 }
 
+/// Enters the frame records a trap path of a function that runs without
+/// its record finds in `chain`, outermost first: each link is two words, a
+/// caller's descriptor, or 0 for a caller that pushed its own record, and
+/// the address of the next link out, or 0 at the end. A caller that defers
+/// its record lends such a link to a call of a function whose only failures
+/// are its own traps, so the call needs no push of its own.
+///
+/// # Safety
+///
+/// `chain` is null or the first of links generated code keeps on its stack
+/// for the call, each naming a descriptor as `aura_direct_enter_frame`
+/// requires.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_enter_caller_chain(chain: *const [usize; 2]) {
+    let mut descriptors = Vec::new();
+    let mut link = chain;
+    // SAFETY: the caller's contract.
+    while let Some([descriptor, next]) = unsafe { link.as_ref() } {
+        if *descriptor != 0 {
+            descriptors.push(*descriptor as *const DirectFrameDescriptor);
+        }
+        link = *next as *const [usize; 2];
+    }
+    for descriptor in descriptors.into_iter().rev() {
+        // SAFETY: the caller's contract.
+        unsafe { aura_direct_enter_frame(descriptor) };
+    }
+}
+
 /// Enters one generated Aura call frame described by static metadata.
 ///
 /// # Safety
@@ -7524,17 +7731,27 @@ fn frozen_program_value_slots() -> &'static Mutex<Vec<&'static std::sync::atomic
     SLOTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn clear_direct_module_constants() {
-    for slot in frozen_program_value_slots()
+/// The words of the program's data that keep a shared variant box for
+/// generated code (see [`aura_direct_enum_unit_cell`]). The box belongs to
+/// its layout's slot, so the program's end only empties them.
+fn unit_variant_cells() -> &'static Mutex<Vec<&'static AtomicUsize>> {
+    static CELLS: OnceLock<Mutex<Vec<&'static AtomicUsize>>> = OnceLock::new();
+    CELLS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Empties every word [`aura_direct_enum_unit_cell`] filled.
+fn empty_unit_variant_cells() {
+    for cell in unit_variant_cells()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .drain(..)
     {
-        let shared = slot.swap(0, Ordering::AcqRel);
-        // SAFETY: the slot held a frozen box, and the program reads no
-        // value once it ends.
-        unsafe { free_frozen_direct_value(shared as *mut OpaqueValue) };
+        cell.store(0, Ordering::Release);
     }
+}
+
+fn clear_direct_module_constants() {
+    empty_unit_variant_cells();
     let mut states = lock_direct_module_constants();
     let mut order = direct_module_constant_order()
         .lock()
@@ -7551,6 +7768,20 @@ fn clear_direct_module_constants() {
         }
     }
     states.clear();
+    drop(order);
+    drop(states);
+    // A constant may hold a literal's frozen box, so the literals' boxes
+    // go after every constant.
+    for slot in frozen_program_value_slots()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .drain(..)
+    {
+        let shared = slot.swap(0, Ordering::AcqRel);
+        // SAFETY: the slot held a frozen box, and the program reads no
+        // value once it ends.
+        unsafe { free_frozen_direct_value(shared as *mut OpaqueValue) };
+    }
 }
 
 /// Frees a frozen module constant when the program ends.
@@ -7642,11 +7873,18 @@ pub unsafe extern "C-unwind" fn aura_direct_module_constant(
         }
         let guard = FailedInitialization(key.clone());
         let thunk: NativeThunk = unsafe { std::mem::transmute(initializer_thunk as usize) };
-        let value = unsafe { thunk(std::ptr::null(), 0) };
+        let mut value = unsafe { thunk(std::ptr::null(), 0) };
         if value.is_null() {
             runtime_error(format!(
                 "module constant `{key}` initializer returned a null value"
             ));
+        }
+        // A frozen box the initializer returned, such as a `str` literal's
+        // one box or another constant, has an owner that frees it already,
+        // so the constant keeps a box of its own.
+        if direct_value_is_frozen(value) {
+            // SAFETY: a frozen box stays live until the program ends.
+            value = boxed_value(unsafe { value_ref(value) });
         }
         // The constant keeps the tag of its declared type, since a frozen
         // value takes no other.
@@ -7771,7 +8009,7 @@ pub unsafe extern "C-unwind" fn aura_direct_release_last_owned_value(value: *mut
                 // SAFETY: the ledger held the last reference, and
                 // `remove_last` unlinked the value and found it confined.
                 unsafe {
-                    if !free_unlinked_str_box(value) {
+                    if !keep_spare_list(value) && !free_unlinked_str_box(value) {
                         free_direct_value(value);
                     }
                 }
@@ -7855,6 +8093,42 @@ pub unsafe extern "C-unwind" fn aura_direct_string_literal_cell(
     };
     frozen_program_value(cell, || {
         boxed_value(Value::String(literal_str(ptr, len).into()))
+    })
+}
+
+/// The one frozen list of a literal of `str` literals that a function
+/// binds to a local it only reads by index, kept in `cell`, a word of the
+/// program's data for that literal: the first call makes it as
+/// `aura_direct_vec_empty_tagged` and `aura_direct_vec_push_str_literals`
+/// would, with the view of its elements' words that generated code reads
+/// them through, and every later call returns it without allocating. As
+/// for a `str` literal's cell, the caller's release does nothing, and
+/// anything that would change the list copies it first.
+///
+/// # Safety
+///
+/// `cell` is a word of the program's data that only this function writes;
+/// the other arguments are those of the two calls it stands for.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_str_literal_list_cell(
+    cell: *const std::sync::atomic::AtomicUsize,
+    tag_cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
+    texts: *const u8,
+    lens: *const u8,
+    count: usize,
+) -> *mut OpaqueValue {
+    // SAFETY: the caller's contract.
+    let Some(cell) = (unsafe { cell.as_ref() }) else {
+        runtime_error("direct runtime received a null literal list cell");
+    };
+    frozen_program_value(cell, || {
+        let list = aura_direct_vec_empty_tagged(tag_cell, type_ptr, type_len);
+        aura_direct_vec_push_str_literals(list, texts, lens, count);
+        // SAFETY: the list was just made and nothing else holds it.
+        unsafe { &*list }.make_str_view();
+        list
     })
 }
 
@@ -8075,6 +8349,59 @@ pub extern "C-unwind" fn aura_direct_format_append_str(
         let builder = unsafe { format_append_builder(text) };
         let (part, ascii) = literal_part(unsafe { slice::from_raw_parts(ptr, len) });
         push_format_text_with(builder, part, ascii);
+        builder
+    })
+}
+
+/// `text = text + other` on a `str` local, where the caller owns `text`'s
+/// box and passes the words of `other`, which is not `text`: the only
+/// reference to a confined box comes back with `other` appended in place,
+/// as `text += other` does, and any other box goes for a copy. A result
+/// over the string limit stops the program at `line` and `column`, as the
+/// `+` does.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_str_append_words(
+    text: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let other = literal_str(ptr, len);
+        // SAFETY: the caller owns a reference to the live box `text`.
+        let (current, inside) = unsafe {
+            with_value(text, |value| match value {
+                Value::String(current) => {
+                    let bytes = current.as_str().as_bytes().as_ptr_range();
+                    (current.len(), bytes.contains(&ptr) && len != 0)
+                }
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
+        };
+        if current.saturating_add(len) > crate::runtime_value::MAX_STRING_BYTES {
+            // SAFETY: as above.
+            let error = unsafe {
+                with_value(text, |value| match value {
+                    Value::String(current) => concat_text_checked(current.clone(), other)
+                        .expect_err("a text over the limit does not concatenate"),
+                    _ => unreachable!("checked above"),
+                })
+            };
+            runtime_diagnostic_error_at(error, runtime_span(line, column));
+        }
+        // SAFETY: the caller's contract.
+        let builder = unsafe { format_append_builder(text) };
+        if inside {
+            // Bytes of the text itself move when it grows: copy them first.
+            let other = other.to_owned();
+            push_format_text(builder, &other);
+        } else {
+            push_format_text(builder, other);
+        }
         builder
     })
 }
@@ -8432,6 +8759,21 @@ pub extern "C-unwind" fn aura_direct_string_len(value: *mut OpaqueValue) -> i64 
     })
 }
 
+/// The address of the UTF-8 bytes of the `str` in `value`. They stay where
+/// they are while the box lives.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_bytes(value: *mut OpaqueValue) -> *const u8 {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => text.as_str().as_ptr(),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_byte_len(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| unsafe {
@@ -8660,6 +9002,46 @@ pub extern "C-unwind" fn aura_direct_string_split_literal(
     separator_len: usize,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| split_value(value, literal_str(separator_ptr, separator_len)))
+}
+
+/// A new `list[str]` box of the parts of the `len` UTF-8 bytes at `ptr`
+/// between occurrences of the literal `separator`: a `str` generated code
+/// holds as words, such as a list element read where the list keeps it,
+/// split with no box of its own.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_split_literal_words(
+    ptr: *const u8,
+    len: usize,
+    separator_ptr: *const u8,
+    separator_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: generated code passes the bytes of a `str`.
+        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+        // SAFETY: the bytes of a `str` are UTF-8.
+        let text = unsafe { str::from_utf8_unchecked(bytes) };
+        let separator = literal_str(separator_ptr, separator_len);
+        let part = |part: &str| Value::String(crate::text::Text::from(part));
+        // The parts are made as `split_text` makes them from a `Text`.
+        let parts: Vec<Value> = match separator.as_bytes() {
+            [byte] => {
+                let mut parts = Vec::with_capacity(memchr::memchr_iter(*byte, bytes).count() + 1);
+                let mut start = 0;
+                for position in memchr::memchr_iter(*byte, bytes) {
+                    parts.push(part(&text[start..position]));
+                    start = position + 1;
+                }
+                parts.push(part(&text[start..]));
+                parts
+            }
+            _ => text.split(separator).map(part).collect(),
+        };
+        boxed_value(Value::Vec(VecValue {
+            element_type: SharedType::named("str"),
+            elements: parts.into(),
+            str_view: Default::default(),
+        }))
+    })
 }
 
 /// A new `list[str]` box of the parts of the `str` box `value` between
@@ -9351,6 +9733,39 @@ pub extern "C-unwind" fn aura_direct_parse_number_ok(
     })
 }
 
+/// `parse_int64` of the `len` UTF-8 bytes at `bytes` for a `Result` slot
+/// that keeps the number as a word: 1 with the number at `out[0]`, or 0
+/// where the parse would give `Err`. No box, `Result` or error text is
+/// built.
+///
+/// # Safety
+///
+/// `bytes` points to `len` bytes of valid UTF-8, and `out` to one
+/// writable word.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_parse_int64_word(
+    bytes: *const u8,
+    len: usize,
+    out: *mut i64,
+) -> i64 {
+    let bytes: &[u8] = if len == 0 {
+        &[]
+    } else {
+        // SAFETY: the caller hands over the bytes of a `str`.
+        unsafe { slice::from_raw_parts(bytes, len) }
+    };
+    // SAFETY: the bytes of a `str` are UTF-8.
+    let text = unsafe { str::from_utf8_unchecked(bytes) };
+    match text.parse::<i64>() {
+        Ok(value) => {
+            // SAFETY: the caller hands over one writable word.
+            unsafe { out.write(value) };
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_range_new(start: i64, end: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
@@ -9641,6 +10056,129 @@ pub extern "C-unwind" fn aura_direct_vec_empty() -> *mut OpaqueValue {
     })
 }
 
+/// The most elements a spare list keeps room for (see [`SpareList`]).
+const SPARE_LIST_MAX_ROOM: usize = 4096;
+
+/// The box of the last confined list of unboxed scalars this thread freed,
+/// emptied but keeping its storage, or null. A loop that builds a fresh
+/// list each pass and drops the last one (`following = []` ...
+/// `current = following`) then takes the same box and storage again
+/// instead of allocating a box, and its first appends go in place.
+struct SpareList(std::cell::Cell<*mut OpaqueValue>);
+
+impl Drop for SpareList {
+    fn drop(&mut self) {
+        let spare = self.0.replace(std::ptr::null_mut());
+        if !spare.is_null() {
+            // SAFETY: the slot owns the box, which `keep_spare_list` counted
+            // as freed already.
+            drop(unsafe { Box::from_raw(spare) });
+        }
+    }
+}
+
+thread_local! {
+    static SPARE_LIST: SpareList = const { SpareList(std::cell::Cell::new(std::ptr::null_mut())) };
+}
+
+/// Keeps `value`, a list box whose last reference was just dropped, as the
+/// thread's spare list instead of freeing it, when it is a confined list
+/// whose unshared storage holds unboxed scalars, freeing the spare it
+/// replaces. `false`, with the box untouched, for any other value; the
+/// caller frees it.
+///
+/// # Safety
+///
+/// `value` is live and confined to this thread, its count has reached
+/// zero, and no ledger links it.
+// Inlined into each caller: as a call of its own, it costs every release
+// of the last reference more than it saves.
+#[inline(always)]
+unsafe fn keep_spare_list(value: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller's contract.
+    let header = unsafe { &*value };
+    let access = header.list_access.load(Ordering::Relaxed);
+    if !(crate::list_elements::ListForm::Int64.access()
+        ..=crate::list_elements::ListForm::Float32.access())
+        .contains(&access)
+        || !header.shared_lock.load(Ordering::Relaxed).is_null()
+    {
+        return false;
+    }
+    SPARE_LIST
+        .try_with(|spare| {
+            // SAFETY: the caller holds the only reference.
+            let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+                return false;
+            };
+            // Room means the storage is unshared. Any form the list holds
+            // is one an empty list of its type may hold too: popping every
+            // element leaves it so.
+            let (_, _, _, room) = vector.elements.view();
+            if room == 0 || room > SPARE_LIST_MAX_ROOM {
+                return false;
+            }
+            // Elements generated code appended in place past the stored
+            // length are scalars too, so dropping the length forgets them.
+            vector.elements.truncate(0);
+            if !vector.str_view.is_empty() {
+                vector.str_view = Default::default();
+            }
+            // The newest list wins: a loop's lists are freed last.
+            let older = spare.0.replace(value);
+            if !older.is_null() {
+                // SAFETY: the slot owned the older spare, counted as freed.
+                drop(unsafe { Box::from_raw(older) });
+            }
+            crate::runtime_value::representation_stats::note_box_freed();
+            #[cfg(coverage)]
+            DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
+            true
+        })
+        .unwrap_or(false)
+}
+
+/// The thread's spare list (see [`SpareList`]) as a new empty list of the
+/// type `tag` names, registered as `boxed_value_with_type` registers a new
+/// box, or `None` when there is no spare of that type.
+fn take_spare_list(tag: &RuntimeTypeTag) -> Option<*mut OpaqueValue> {
+    let element_type = tag.list_element.as_ref()?;
+    SPARE_LIST
+        .try_with(|spare| {
+            let boxed = spare.0.get();
+            if boxed.is_null() {
+                return None;
+            }
+            // SAFETY: the slot owns the box, and nothing else reaches it.
+            let header = unsafe { &*boxed };
+            let Value::Vec(vector) = (unsafe { &*header.value.get() }) else {
+                return None;
+            };
+            if !std::ptr::eq::<Type>(&*vector.element_type, &**element_type)
+                || !unsafe { &*header.runtime_type_name.get() }
+                    .as_ref()
+                    .is_some_and(|name| {
+                        std::ptr::eq(name.as_str(), tag.name.as_str()) || *name == tag.name
+                    })
+            {
+                return None;
+            }
+            spare.0.set(std::ptr::null_mut());
+            header.ref_count.store(1, Ordering::Relaxed);
+            header.refresh_list_view();
+            header
+                .shape_tag
+                .store(std::ptr::from_ref(tag).cast_mut(), Ordering::Relaxed);
+            #[cfg(coverage)]
+            DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
+            crate::runtime_value::representation_stats::note_opaque_box();
+            register_direct_owned_value(boxed);
+            Some(boxed)
+        })
+        .ok()
+        .flatten()
+}
+
 /// An empty list of the list type the tag in `cell` names, as
 /// `aura_direct_vec_empty` and then `aura_direct_tag_value_type_cell` with
 /// the same cell would make it, in one call and with one copy of the
@@ -9656,6 +10194,9 @@ pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
             runtime_error("direct runtime received a null type tag cell");
         };
         let tag = celled_runtime_type_tag(cell, slice::from_raw_parts(type_ptr, type_len));
+        if let Some(boxed) = take_spare_list(tag) {
+            return boxed;
+        }
         let Some(element_type) = tag.list_element.clone() else {
             runtime_error(format!("an empty list cannot take the type `{}`", tag.name));
         };
@@ -9675,6 +10216,31 @@ pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
             .store(std::ptr::from_ref(tag).cast_mut(), Ordering::Relaxed);
         boxed
     })
+}
+
+/// [`aura_direct_vec_empty_tagged`] with storage for `room` elements, which
+/// its view offers to generated code, so a list literal's elements go in
+/// place with no further allocation, as appends do once one has grown the
+/// storage.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_empty_tagged_with_room(
+    cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
+    room: usize,
+) -> *mut OpaqueValue {
+    let boxed = aura_direct_vec_empty_tagged(cell, type_ptr, type_len);
+    // SAFETY: the box is new and live.
+    let header = unsafe { &*boxed };
+    let shape = header.shape_tag.load(Ordering::Relaxed);
+    // Storage that cannot be had is left for the first append to ask for,
+    // which reports it. The write refreshes the view, which then offers
+    // the room, and forgets the shape, which the room keeps.
+    with_vector_mut(boxed, |vector| {
+        let _ = vector.elements.try_reserve(room);
+    });
+    header.shape_tag.store(shape, Ordering::Relaxed);
+    boxed
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -9809,10 +10375,10 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
         if unsafe { push_only_str_box(vec, value) } {
             return;
         }
-        // An instance kept in its class's layout, or a collection, joins
-        // the list in its own box, which then needs no copy for generated
-        // code to lend it or change it in place (see
-        // `aura_direct_element_path_probe`).
+        // An instance kept in its class's layout, a variant kept in its
+        // enum's layout, or a collection, joins the list in its own box,
+        // which then needs no copy for generated code to lend it or change
+        // it in place (see `aura_direct_element_path_probe`).
         // SAFETY: generated code passes a live box it owns.
         if unsafe { holds_element_box_value(value) } {
             if let Some(element) = unsafe { adopt_only_box(value) } {
@@ -9843,6 +10409,111 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
             vector.elements.push(value);
         });
     })
+}
+
+/// Appends a new instance of the class whose layout `cell` holds, built
+/// from the words at `words`: the instance's block bytes, with the box the
+/// running task owns of each field that lies in a box at its offset, which
+/// the call hands over. It is `list.append(Class(...))` without the
+/// instance's own box: a confined list that is empty or keeps instances of
+/// the class in place keeps the bytes (see
+/// [`crate::list_elements::ListElements::Instances`]), and any other list
+/// takes an instance built as [`aura_direct_instance_new_typed`] builds one,
+/// appended as [`aura_direct_vec_push_in_place`] appends it.
+///
+/// # Safety
+///
+/// `cell` is one of the cells the program registered as a class layout,
+/// `words` is aligned for `u64` and holds the layout's stride of words, and
+/// `vec` is as for [`aura_direct_vec_push_in_place`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_vec_push_instance(
+    vec: *mut OpaqueValue,
+    cell: *const ClassLayoutCell,
+    words: *mut u64,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout =
+            unsafe { registered_class_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
+        let bytes = words.cast::<u8>();
+        for offset in layout.box_offsets() {
+            // SAFETY: each offset is a box slot of the words, which holds a
+            // box the caller hands over.
+            unsafe {
+                let slot = bytes.add(*offset).cast::<*mut OpaqueValue>();
+                let field = *slot;
+                if field.is_null() {
+                    runtime_error("direct runtime received a null field value");
+                }
+                *slot = std::mem::ManuallyDrop::new(adopt_field_box(field)).as_ptr();
+            }
+        }
+        // SAFETY: the words now hold a live instance's bytes.
+        if unsafe { push_kept_instance(vec, layout, words) } {
+            return;
+        }
+        let boxed = aura_direct_instance_new_typed(cell);
+        // SAFETY: the box is new, and its block's bytes are dead, so they
+        // take the instance's bytes, field boxes and all.
+        unsafe {
+            if let Value::Instance(instance) = &*(*boxed).value.get() {
+                let typed = instance.fields.typed().expect("a new typed instance");
+                std::ptr::copy_nonoverlapping(bytes, typed.data(), layout.size());
+            }
+        }
+        aura_direct_vec_push_in_place(vec, boxed);
+    })
+}
+
+/// Appends the instance whose bytes lie at `words` to a confined list that
+/// is empty or keeps instances of `layout` in place, and knows its element
+/// type, and returns whether it did. Any other list is left alone.
+///
+/// # Safety
+///
+/// `vec` is null or a live box, and a confined one is confined to the
+/// calling thread with no access to it in progress; `words` holds a live
+/// instance of `layout`, which the list takes over when this returns true.
+#[inline]
+unsafe fn push_kept_instance(
+    vec: *mut OpaqueValue,
+    layout: &'static ClassLayout,
+    words: *const u64,
+) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return false;
+    };
+    if !layout.keeps_in_list() || !header.shared_lock.load(Ordering::Acquire).is_null() {
+        return false;
+    }
+    if header.list_capacity.load(Ordering::Relaxed) != 0 {
+        header.adopt_appended_elements();
+    }
+    // SAFETY: the value is confined to this thread and no access to it is
+    // in progress, so this is the only reference to it.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return false;
+    };
+    match &mut vector.elements {
+        ListElements::Instances(instances) if std::ptr::eq(instances.layout(), layout) => {
+            // SAFETY: the caller's contract.
+            if let Some((elements, len)) = unsafe { instances.push_unshared(words) } {
+                // The same class's instances keep the list's shape, and its
+                // view only moves.
+                header.list_elements.set(elements);
+                header.list_len.set(len);
+                return true;
+            }
+        }
+        elements if elements.is_empty() && !is_unknown_runtime_type(&vector.element_type) => {}
+        _ => return false,
+    }
+    // SAFETY: the caller's contract.
+    unsafe { vector.elements.push_instance(layout, words) };
+    header.refresh_list_view();
+    true
 }
 
 /// The whole of an append of `element` for a confined list that already
@@ -9916,8 +10587,20 @@ unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> b
     if !matches!(cell, Value::String(_)) || named.is_some() {
         return false;
     }
-    let text = std::mem::replace(cell, Value::Unit);
-    push_str_value(vec, text);
+    // The text moves out of the box where the list takes it, so its words
+    // are copied once instead of through each call on the way.
+    with_vector_mut(vec, |vector| {
+        if is_unknown_runtime_type(&vector.element_type) {
+            let inferred = inferred_collection_type(cell);
+            if !is_unknown_runtime_type(&inferred) {
+                vector.element_type = SharedType::from(inferred);
+            }
+        }
+        match &mut vector.elements {
+            ListElements::Values(values) => values.push(std::mem::replace(cell, Value::Unit)),
+            elements => elements.push(std::mem::replace(cell, Value::Unit)),
+        }
+    });
     // SAFETY: the caller's reference, which this function took.
     unsafe {
         if !free_emptied_box(value) {
@@ -9925,42 +10608,6 @@ unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> b
         }
     }
     true
-}
-
-/// Appends `text`, a `str`, to the list `vec`, which learns its element
-/// type from it when it has none.
-#[inline]
-fn push_str_value(vec: *mut OpaqueValue, text: Value) {
-    with_vector_mut(vec, |vector| {
-        if is_unknown_runtime_type(&vector.element_type) {
-            let inferred = inferred_collection_type(&text);
-            if !is_unknown_runtime_type(&inferred) {
-                vector.element_type = SharedType::from(inferred);
-            }
-        }
-        match &mut vector.elements {
-            ListElements::Values(values) => values.push(text),
-            elements => elements.push(text),
-        }
-    });
-}
-
-/// Appends a copy of the text at `ptr`, an element of a `list[str]` read
-/// in place, to the list `vec`: `out.append(texts[i].clone())` with no box
-/// for the copy. The text is copied before `vec` is touched, so `vec` may
-/// be the list the text lies in.
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_vec_push_str_view(
-    vec: *mut OpaqueValue,
-    ptr: *const u8,
-    len: usize,
-) {
-    task_runtime_boundary(|| {
-        // SAFETY: generated code read `ptr` and `len` from a live list's
-        // view of its `str` elements, which are UTF-8.
-        let text = unsafe { str::from_utf8_unchecked(slice::from_raw_parts(ptr, len)) };
-        push_str_value(vec, Value::String(text.into()));
-    })
 }
 
 /// Appends a `str` literal of a list literal, read where the program keeps
@@ -9973,8 +10620,143 @@ pub extern "C-unwind" fn aura_direct_vec_push_str_literal(
 ) {
     task_runtime_boundary(|| {
         let value = Value::String(literal_str(ptr, len).into());
-        with_vector_mut(vec, |vector| vector.elements.push(value));
+        with_vector_mut(vec, |vector| push_str_element(&mut vector.elements, value));
     })
+}
+
+/// Appends the `count` `str` literals of a list literal, read where the
+/// program keeps them, in one call: their texts one after another at
+/// `texts`, and their lengths at `lens`, four little-endian bytes each.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_push_str_literals(
+    vec: *mut OpaqueValue,
+    texts: *const u8,
+    lens: *const u8,
+    count: usize,
+) {
+    task_runtime_boundary(|| {
+        let mut values = Vec::with_capacity(count);
+        let mut at = 0;
+        for index in 0..count {
+            // SAFETY: generated code passes `count` lengths, and texts that
+            // add up to them.
+            let len = unsafe { slice::from_raw_parts(lens.add(index * 4), 4) };
+            let len = u32::from_le_bytes([len[0], len[1], len[2], len[3]]) as usize;
+            let text = literal_str(unsafe { texts.add(at) }, len);
+            values.push(Value::String(text.into()));
+            at += len;
+        }
+        with_vector_mut(vec, |vector| {
+            vector.elements.append(ListElements::from(values))
+        });
+        // SAFETY: generated code passes a live list box.
+        if let Some(header) = unsafe { vec.as_ref() } {
+            header.build_str_view();
+        }
+    })
+}
+
+/// `left + right` on two `str` values generated code holds as words, such
+/// as an element it reads where its list keeps it, in a new box. A result
+/// over the string limit stops the program as `+` on boxes does.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_concat_str_words(
+    left_ptr: *const u8,
+    left_len: usize,
+    right_ptr: *const u8,
+    right_len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let left = literal_str(left_ptr, left_len);
+        let right = literal_str(right_ptr, right_len);
+        let len = left.len().saturating_add(right.len());
+        if len > crate::runtime_value::MAX_STRING_BYTES {
+            let error = concat_text_checked(left.into(), right)
+                .expect_err("a text over the limit does not concatenate");
+            runtime_diagnostic_error_at(error, runtime_span(line, column));
+        }
+        let text = if len <= crate::text::INLINE_CAPACITY {
+            let mut bytes = [0_u8; crate::text::INLINE_CAPACITY];
+            bytes[..left.len()].copy_from_slice(left.as_bytes());
+            bytes[left.len()..len].copy_from_slice(right.as_bytes());
+            // SAFETY: two UTF-8 texts joined are UTF-8.
+            crate::text::Text::from(unsafe { str::from_utf8_unchecked(&bytes[..len]) })
+        } else {
+            let mut text = String::with_capacity(len);
+            text.push_str(left);
+            text.push_str(right);
+            text.into()
+        };
+        boxed_value(Value::String(text))
+    })
+}
+
+/// `+` along a chain of `str`s, such as `a + ", " + b`, in one new box:
+/// `parts` holds `count` pairs of a text's bytes and length, in order. The
+/// first `+` whose result is over the string limit stops the program at
+/// `line` and `column`, as the chain's own steps would.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_concat_str_parts(
+    parts: *const usize,
+    count: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller passes `count` pairs of words.
+        let words = unsafe { slice::from_raw_parts(parts, count * 2) };
+        let texts = words
+            .chunks_exact(2)
+            .map(|pair| literal_str(pair[0] as *const u8, pair[1]));
+        let len = texts
+            .clone()
+            .fold(0_usize, |len, text| len.saturating_add(text.len()));
+        let mut joined = String::with_capacity(len.min(crate::runtime_value::MAX_STRING_BYTES));
+        for text in texts {
+            if joined.len() + text.len() > crate::runtime_value::MAX_STRING_BYTES {
+                let error = concat_text_checked(joined.into(), text)
+                    .expect_err("a text over the limit does not concatenate");
+                runtime_diagnostic_error_at(error, runtime_span(line, column));
+            }
+            joined.push_str(text);
+        }
+        boxed_value(Value::String(joined.into()))
+    })
+}
+
+/// Appends a copy of the `str` whose bytes are at `ptr` to a list, as
+/// `append` of a copy in a box does, with no box made for the copy.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_push_str_view(
+    vec: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) {
+    task_runtime_boundary(|| {
+        crate::runtime_value::representation_stats::note_clone();
+        with_vector_mut(vec, |vector| {
+            // The copy is made before the list changes, since the bytes may
+            // be an element of the same list. Made here, it is moved once.
+            let value = Value::String(literal_str(ptr, len).into());
+            if is_unknown_runtime_type(&vector.element_type) {
+                vector.element_type = SharedType::from(inferred_collection_type(&value));
+            }
+            push_str_element(&mut vector.elements, value);
+        });
+    })
+}
+
+/// Appends the `str` `value` to `elements`. A list of `Value`s takes it
+/// with no walk of the other forms, as [`ListElements::push`] would push
+/// it there too: a `str` has no scalar or typed form.
+#[inline(always)]
+fn push_str_element(elements: &mut ListElements, value: Value) {
+    match elements {
+        ListElements::Values(values) => values.push(value),
+        elements => elements.push(value),
+    }
 }
 
 /// The scalar a list write passes as `bits`, of the
@@ -10402,21 +11184,22 @@ pub extern "C-unwind" fn aura_direct_vec_insert_in_place(
     })
 }
 
+/// `list.clear()`. It returns 1 rather than a box of `None`, which
+/// generated code would only free.
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_vec_clear_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
+pub extern "C-unwind" fn aura_direct_vec_clear_in_place(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
         with_vector_mut(vec, |vector| vector.elements.clear());
-        boxed_value(Value::Unit)
+        1
     })
 }
 
+/// `list.reverse()`, which returns 1 as `clear` does.
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_vec_reverse_in_place(
-    vec: *mut OpaqueValue,
-) -> *mut OpaqueValue {
+pub extern "C-unwind" fn aura_direct_vec_reverse_in_place(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
         with_vector_mut(vec, |vector| vector.elements.reverse());
-        boxed_value(Value::Unit)
+        1
     })
 }
 
@@ -10632,49 +11415,173 @@ pub extern "C-unwind" fn aura_direct_collection_operation(
     })
 }
 
+/// `list.extend(other)`, which consumes `other` and returns 1 as `clear`
+/// does.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
     vec: *mut OpaqueValue,
     other: *mut OpaqueValue,
-) -> *mut OpaqueValue {
+) -> i64 {
     task_runtime_boundary(|| {
+        // SAFETY: the caller owns its reference to `other`.
+        if unsafe { extend_keeping_spare(vec, other) } {
+            return 1;
+        }
         let other = unsafe { consume_owned_value(other) };
         let Value::Vec(other) = other else {
             runtime_error("`extend` requires another `list[T]` value");
         };
         let appended = with_vector_mut(vec, |vector| vector.elements.try_append(other.elements));
         if appended.is_err() {
-            runtime_diagnostic_error(Diagnostic::coded(
-                "AU4005",
-                "list capacity allocation failed",
-            ));
+            list_allocation_failed();
         }
-        boxed_value(Value::Unit)
+        1
     })
 }
 
-/// `vec.extend(text.to_bytes())` in one call: the bytes of the `str` box
-/// `text` go onto the end of the `list[uint8]` box `vec` from where they
-/// lie, with no list made for them in between. Building output as bytes
-/// appends a piece of text this way at every step.
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_vec_extend_str_bytes(
-    vec: *mut OpaqueValue,
-    text: *mut OpaqueValue,
-) {
-    task_runtime_boundary(|| unsafe {
-        with_value(text, |text| {
-            let Value::String(bytes) = text else {
-                runtime_error(format!("expected `str`, found `{}`", value_type_name(text)));
-            };
-            // A `str` is far below the size `to_bytes` refuses, so every
-            // text has bytes to give.
-            with_vector_mut(vec, |vector| match &mut vector.elements {
-                ListElements::Uint8(elements) => elements.extend_from_slice(bytes.as_bytes()),
-                elements => elements.append(ListElements::from_uint8(bytes.as_bytes().to_vec())),
-            });
+/// Stops the program when a list has no memory left to grow into.
+#[cold]
+fn list_allocation_failed() -> ! {
+    runtime_diagnostic_error(Diagnostic::coded(
+        "AU4005",
+        "list capacity allocation failed",
+    ))
+}
+
+/// `extend` of a non-empty `vec` by `other`, a confined list of unboxed
+/// scalars its caller holds the only reference to: the elements are copied,
+/// and `other`'s emptied box becomes the thread's spare list (see
+/// [`SpareList`]) instead of being freed, so the next empty list a loop
+/// makes (`entry = []` ... `out.extend(entry)`) takes the same box and
+/// storage. `false`, with nothing changed, for any other pair; the caller
+/// then consumes `other`.
+///
+/// # Safety
+///
+/// The caller owns a reference to each of `vec` and `other`.
+unsafe fn extend_keeping_spare(vec: *mut OpaqueValue, other: *mut OpaqueValue) -> bool {
+    if std::ptr::eq(vec, other) {
+        return false;
+    }
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { other.as_ref() }) else {
+        return false;
+    };
+    let access = header.list_access.load(Ordering::Relaxed);
+    if header.ref_count.load(Ordering::Acquire) != 1
+        || !header.shared_lock.load(Ordering::Acquire).is_null()
+        || !(crate::list_elements::ListForm::Int64.access()
+            ..=crate::list_elements::ListForm::Float32.access())
+            .contains(&access)
+    {
+        return false;
+    }
+    let copied = {
+        // Takes in the elements generated code appended in place.
+        let _access = header.access(false);
+        // SAFETY: the caller holds the only reference, and nothing writes
+        // `other` while `vec`, a different box, changes.
+        let Value::Vec(more) = (unsafe { &*header.value.get() }) else {
+            return false;
+        };
+        with_vector_mut(vec, |vector| {
+            vector.elements.append_scalars_from(&more.elements)
         })
+    };
+    match copied {
+        Ok(true) => {}
+        Ok(false) => return false,
+        Err(_) => list_allocation_failed(),
+    }
+    crate::runtime_value::representation_stats::note_release();
+    let owned = unregister_direct_owned_value(other);
+    check_released_value_is_owned(other, owned);
+    header.ref_count.store(0, Ordering::Relaxed);
+    // SAFETY: the count reached zero, the value is confined, and the
+    // ledger no longer links it.
+    unsafe {
+        if !keep_spare_list(other) {
+            free_direct_value(other);
+        }
+    }
+    true
+}
+
+/// Appends the `len` bytes at `ptr`, the UTF-8 of a `str`, to the
+/// `list[uint8]` `vec`, as `vec.extend(text.to_bytes())` does, with no
+/// list made for the bytes in between. A text `to_bytes` cannot copy stops
+/// the program as `to_bytes` does.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_extend_utf8(
+    vec: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) {
+    if len == 0 {
+        return;
+    }
+    // SAFETY: generated code passes the words of a live `str`.
+    let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+    // SAFETY: generated code passes a live list box.
+    if len <= crate::bytes_codec::MAX_CODEC_OUTPUT_LEN && unsafe { grow_uint8_list(vec, bytes) } {
+        return;
+    }
+    task_runtime_boundary(|| {
+        // SAFETY: the bytes of a `str` are UTF-8.
+        let text = unsafe { str::from_utf8_unchecked(bytes) };
+        let copied = match crate::runtime_value::evaluate_string_to_bytes_host_ref(text) {
+            Ok(Value::Vec(copied)) => copied,
+            Ok(_) => runtime_error("`to_bytes` made no `list[uint8]`"),
+            Err(error) => runtime_diagnostic_error(error),
+        };
+        with_vector_mut(vec, |vector| vector.elements.append(copied.elements));
     })
+}
+
+/// Appends `bytes` to a confined `list[uint8]` that keeps its bytes in
+/// storage no other list shares, and keeps the length and room generated
+/// code reads in step, as [`grow_scalar_list`] does for one element.
+/// Any other list, or storage that cannot grow, gets `false`.
+unsafe fn grow_uint8_list(vec: *mut OpaqueValue, bytes: &[u8]) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return false;
+    };
+    if !header.shared_lock.load(Ordering::Acquire).is_null() {
+        return false;
+    }
+    // SAFETY: as in `grow_scalar_list`, the value is confined to this
+    // thread and no access to it is in progress.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return false;
+    };
+    let ListElements::Uint8(values) = &mut vector.elements else {
+        return false;
+    };
+    let Some(values) = values.unshared_mut() else {
+        return false;
+    };
+    if header.list_capacity.load(Ordering::Relaxed) != 0 {
+        let len = header.list_len.get();
+        if len > values.len() && len <= values.capacity() {
+            // SAFETY: generated code wrote each element up to `len`
+            // before it raised the length.
+            unsafe { values.set_len(len) };
+        } else {
+            values.truncate(len);
+        }
+    }
+    if values.try_reserve(bytes.len()).is_err() {
+        return false;
+    }
+    values.extend_from_slice(bytes);
+    header.list_elements.set(values.as_ptr() as usize);
+    header.list_len.set(values.len());
+    header.list_capacity.store(
+        u32::try_from(values.capacity()).unwrap_or(u32::MAX),
+        Ordering::Relaxed,
+    );
+    true
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -10846,6 +11753,44 @@ fn with_vec_element<T>(
     })
 }
 
+/// `text.to_bytes()` of the `str` whose `len` bytes are at `ptr`, which
+/// generated code holds as words, with no box made for the text. A text
+/// `to_bytes` cannot copy stops the program as `to_bytes` does.
+///
+/// # Safety
+///
+/// The bytes are the text of a live `str`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_string_to_bytes_view(
+    ptr: *const u8,
+    len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let bytes = match len {
+            0 => &[][..],
+            // SAFETY: the caller's contract.
+            _ => unsafe { slice::from_raw_parts(ptr, len) },
+        };
+        // A list of the size any codec may make takes the bytes in one
+        // copy, with the program's one copy of its element type.
+        if bytes.len() <= crate::bytes_codec::MAX_CODEC_OUTPUT_LEN {
+            static UINT8: OnceLock<SharedType> = OnceLock::new();
+            let element_type = UINT8.get_or_init(|| SharedType::from(Type::named("uint8")));
+            return boxed_value(Value::Vec(VecValue {
+                element_type: element_type.clone(),
+                elements: ListElements::from_uint8(bytes.to_vec()),
+                str_view: Default::default(),
+            }));
+        }
+        // SAFETY: the bytes of a `str` are UTF-8.
+        let text = unsafe { str::from_utf8_unchecked(bytes) };
+        match crate::runtime_value::evaluate_string_to_bytes_host_ref(text) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
 /// A new `str` box holding the `len` bytes at `ptr`, which generated code
 /// read out of a list's [`DirectListAccess::Str`] view.
 ///
@@ -10865,6 +11810,93 @@ pub unsafe extern "C-unwind" fn aura_direct_string_from_view(
     })
 }
 
+/// The address of the bytes of the `str` `value`, with their length
+/// stored at `len`. They stay valid while `value` lives unchanged.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_words(
+    value: *mut OpaqueValue,
+    len: *mut i64,
+) -> *const u8 {
+    // A `str` box confined to this thread, or frozen, is read where it
+    // lies: it is no list, so it has no appended elements to take in, and
+    // no other thread can be writing it.
+    // SAFETY: generated code passes a live box and a slot for one word.
+    if let Some(text) = unsafe { unlocked_str(value) } {
+        unsafe { len.write(text.len() as i64) };
+        return text.as_ptr();
+    }
+    string_words_locked(value, len)
+}
+
+/// The text of `value` when it is a `str` box that needs no lock to read:
+/// confined to this thread or frozen. `None` for any other value, which
+/// the caller reads through [`with_value`].
+///
+/// # Safety
+///
+/// `value` is null or a live box, and the caller reads the text before
+/// anything can change the box.
+#[inline(always)]
+unsafe fn unlocked_str<'a>(value: *mut OpaqueValue) -> Option<&'a str> {
+    // SAFETY: the caller's contract.
+    let header = unsafe { value.as_ref() }?;
+    let lock = header.shared_lock.load(Ordering::Acquire);
+    if !(lock.is_null() || std::ptr::eq(lock, &FROZEN_VALUE_LOCK)) {
+        return None;
+    }
+    #[cfg(all(debug_assertions, not(test)))]
+    if lock.is_null() {
+        assert!(
+            header.owner_thread == LIST_ELEMENT_THREAD
+                || header.owner_thread == direct_value_thread_identity(),
+            "direct runtime value reached another thread without being shared"
+        );
+    }
+    // SAFETY: confined or frozen, so no `&mut Value` exists meanwhile.
+    match unsafe { &*header.value.get() } {
+        Value::String(text) => Some(text.as_str()),
+        _ => None,
+    }
+}
+
+/// [`aura_direct_string_words`] for a box another thread may share, or a
+/// value that is no `str`, which reports the type error.
+#[inline(never)]
+fn string_words_locked(value: *mut OpaqueValue, len: *mut i64) -> *const u8 {
+    task_runtime_boundary(|| unsafe {
+        let (ptr, bytes) = with_value(value, |value| match value {
+            Value::String(text) => (text.as_str().as_ptr(), text.as_str().len()),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        });
+        // SAFETY: generated code passes a slot for one word.
+        len.write(bytes as i64);
+        ptr
+    })
+}
+
+/// A copy of the `str` `value`, as `aura_direct_clone_value` makes one,
+/// without the walk that looks for what else a value holds.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_clone(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        crate::runtime_value::representation_stats::note_clone();
+        let runtime_type_name = unsafe { explicit_runtime_type_tag(value) };
+        let text = unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => text.clone(),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
+        };
+        boxed_value_with_type(Value::String(text), runtime_type_name)
+    })
+}
+
 /// A copy of element `index` of a `list[str]`, for a read that missed the
 /// list's view. It counts the miss, so a list read this way often enough
 /// gets a view generated code reads in place.
@@ -10881,6 +11913,82 @@ pub extern "C-unwind" fn aura_direct_vec_str_element(
         // SAFETY: `with_vec_element` checked the handle.
         unsafe { &*list }.note_str_view_miss();
         boxed_value(element)
+    })
+}
+
+/// The words of element `index` of a `list[str]` with no
+/// [`DirectListAccess::Str`] view: the address of its bytes, with their
+/// length at `out[0]` and 0 at `out[1]` when they are read where the list
+/// keeps them, as the view would give them, and otherwise those of a copy
+/// whose box is at `out[1]`, as [`aura_direct_vec_str_element`] makes. The
+/// read counts as a miss of the view.
+///
+/// # Safety
+///
+/// `out` points to two writable words.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_vec_str_element_words(
+    list: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+    out: *mut i64,
+) -> *const u8 {
+    task_runtime_boundary(|| {
+        // SAFETY: `with_vector` below checks the handle before any read of
+        // the header matters.
+        let confined =
+            unsafe { list.as_ref() }.is_some_and(|header| header.shared_lock().is_none());
+        let in_place = with_vector(list, |vector| {
+            let len = vector.elements.len();
+            let Some(position) = normalize_vec_index(index, len).filter(|position| *position < len)
+            else {
+                direct_vec_index_error(index, len, line, column)
+            };
+            match &vector.elements {
+                ListElements::Values(values) if confined => {
+                    let Value::String(text) = &values[position] else {
+                        return None;
+                    };
+                    let words = (text.as_ptr(), text.len());
+                    // The miss is counted under this access: the list is
+                    // confined, so nothing changes it in between.
+                    // SAFETY: `list` is the live, confined list read here.
+                    let header = unsafe { &*list };
+                    if header.list_access.load(Ordering::Relaxed) == DirectListAccess::Values as u32
+                    {
+                        // SAFETY: as above, under this access.
+                        unsafe { header.note_str_view_miss_in(vector, values) };
+                    }
+                    Some(words)
+                }
+                _ => None,
+            }
+        });
+        let (ptr, len, owner) = match in_place {
+            Some((ptr, len)) => (ptr, len, std::ptr::null_mut()),
+            None => {
+                crate::runtime_value::representation_stats::note_clone();
+                let copy = boxed_value(with_vec_element(list, index, line, column, Value::clone));
+                // SAFETY: the box was just made, and its text stays where it
+                // is while the box lives.
+                let (ptr, len) = unsafe {
+                    with_value(copy, |value| match value {
+                        Value::String(text) => (text.as_ptr(), text.len()),
+                        _ => (std::ptr::null(), 0),
+                    })
+                };
+                // SAFETY: `with_vector` checked the handle.
+                unsafe { &*list }.note_str_view_miss();
+                (ptr, len, copy)
+            }
+        };
+        // SAFETY: the caller's contract.
+        unsafe {
+            out.write(len as i64);
+            out.add(1).write(owner as i64);
+        }
+        ptr
     })
 }
 
@@ -11374,7 +12482,7 @@ pub extern "C-unwind" fn aura_direct_vec_element_len(
 ) -> i64 {
     task_runtime_boundary(|| {
         let len = with_vec_element(list, index, line, column, |element| match element {
-            Value::String(text) => text.chars().count(),
+            Value::String(text) => text.char_len(),
             Value::Vec(vector) => vector.elements.len(),
             Value::Map(map) => map.entries.len(),
             Value::Set(set) => set.elements.len(),
@@ -11477,6 +12585,22 @@ pub extern "C-unwind" fn aura_direct_vec_set_index_in_place(
     })
 }
 
+/// [`aura_direct_vec_set_index_in_place`] for a store whose `None` result
+/// nothing reads, so no box of it is made.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_set_index_discarded(
+    vec: *mut OpaqueValue,
+    index: i64,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) {
+    task_runtime_boundary(|| {
+        let value = unsafe { consume_owned_value(value) };
+        set_vec_element(vec, index, value, line, column);
+    })
+}
+
 /// Replaces element `index` of a scalar list with a scalar given as its
 /// bits, with no box. `kind` is as for [`aura_direct_vec_push_scalar`].
 /// Generated code stores in place when the list view allows it, so this
@@ -11504,6 +12628,13 @@ pub extern "C-unwind" fn aura_direct_vec_set_index_scalar(
 /// end. An index out of range traps with the list-index diagnostic at
 /// `line:column`.
 fn set_vec_element(vec: *mut OpaqueValue, index: i64, value: Value, line: i64, column: i64) {
+    // A `str` stored into a list read through its `str` view keeps the view
+    // when the store lands in place (see `OpaqueValue::keep_str_view`).
+    // SAFETY: generated code passes null or a live box.
+    let str_view = matches!(value, Value::String(_))
+        && unsafe { vec.as_ref() }.is_some_and(|header| {
+            header.list_access.load(Ordering::Relaxed) == DirectListAccess::Str as u32
+        });
     let result = with_vector_mut(vec, |vector| {
         let normalized = match normalize_vec_index(index, vector.elements.len())
             .filter(|normalized| *normalized < vector.elements.len())
@@ -11511,9 +12642,16 @@ fn set_vec_element(vec: *mut OpaqueValue, index: i64, value: Value, line: i64, c
             Some(normalized) => normalized,
             None => return Err(vector.elements.len()),
         };
+        // Storage no other list shares takes the value where the old one
+        // lay, so every other element keeps its place.
+        let in_place = str_view && !vector.elements.is_shared();
         vector.elements.replace(normalized, value);
-        Ok(())
+        Ok(in_place.then_some(normalized))
     });
+    if let Ok(Some(position)) = result {
+        // SAFETY: the write above found a live box.
+        unsafe { &*vec }.keep_str_view(position);
+    }
     if let Err(len) = result {
         let message = format!("list index `{index}` is out of bounds for length `{len}`");
         match runtime_span(line, column) {
@@ -14481,7 +15619,32 @@ fn direct_element_walk<'a>(
     selectors: &mut DirectElementSelectors<'_>,
 ) -> std::result::Result<Cow<'a, Value>, DirectElementPathError> {
     let mut current = Cow::Borrowed(value);
-    for step in steps {
+    let mut steps = steps.iter().peekable();
+    while let Some(step) = steps.next() {
+        // A field of an instance a list keeps in place is read where it
+        // lies, without a copy of the whole element.
+        let borrowed = match &current {
+            Cow::Borrowed(value) => Some(*value),
+            Cow::Owned(_) => None,
+        };
+        if let (
+            Some(Value::Vec(vector)),
+            DirectElementPathStep::Index,
+            Some(DirectElementPathStep::Projection(name)),
+        ) = (borrowed, step, steps.peek())
+        {
+            if vector.elements.instance_field(0, name).is_some() {
+                let index = selectors.next()?;
+                let len = vector.elements.len();
+                let field = normalize_vec_index(index, len)
+                    .and_then(|normalized| vector.elements.instance_field(normalized, name))
+                    .flatten()
+                    .ok_or(DirectElementPathError::OutOfBounds { index, len })?;
+                steps.next();
+                current = field;
+                continue;
+            }
+        }
         current = match current {
             Cow::Borrowed(value) => direct_element_step(value, step, selectors)?,
             Cow::Owned(value) => {
@@ -14680,6 +15843,7 @@ fn promote_element_path(value: &mut Value, steps: &[DirectElementPathStep<'_>], 
             let converts = match &vector.elements {
                 ListElements::Values(values) => lends_element(&values[position]),
                 ListElements::Boxes(_) => vector.elements.is_shared(),
+                ListElements::Instances(_) => true,
                 _ => return,
             };
             if converts {
@@ -14752,6 +15916,9 @@ fn path_promotes(value: &Value, steps: &[DirectElementPathStep<'_>], selectors: 
             };
             match &vector.elements {
                 ListElements::Values(values) => lends_element(&values[position]),
+                // An element a loan cannot read in place moves the list to
+                // boxes, which loans read.
+                ListElements::Instances(_) => true,
                 ListElements::Boxes(boxes) => {
                     vector.elements.is_shared()
                         || (!rest.is_empty()
@@ -17125,10 +18292,20 @@ pub unsafe extern "C-unwind" fn aura_direct_instance_new_typed(
         // SAFETY: the caller's contract.
         let layout =
             unsafe { registered_class_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
-        boxed_value(Value::Instance(InstanceValue {
-            class_name: crate::runtime_value::RuntimeName::from(layout.class_name().to_string()),
+        let boxed = boxed_value(Value::Instance(InstanceValue {
+            class_name: layout.runtime_name(),
             fields: InstanceFields::Typed(TypedFields::new(layout)),
-        }))
+        }));
+        // The box takes its class's tag as tagging it would: the name, and
+        // the shape the tag records.
+        let tag = layout.type_tag();
+        // SAFETY: the box is new and nothing else reads it yet.
+        let header = unsafe { &*boxed };
+        unsafe { *header.runtime_type_name.get() = Some(tag.name.clone()) };
+        header
+            .shape_tag
+            .store(std::ptr::from_ref(tag).cast_mut(), Ordering::Relaxed);
+        boxed
     })
 }
 
@@ -17207,6 +18384,189 @@ pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed(
     })
 }
 
+/// As [`aura_direct_enum_new_typed`], for a variant that takes payloads,
+/// with each payload kept in a box of its own already in its slot: `boxes`
+/// holds `count` boxes the running task owns, one for each such payload in
+/// order, and the variant takes each the way
+/// [`aura_direct_instance_put_field`] puts it. Generated code then stores
+/// each payload it keeps in place at its offset.
+///
+/// # Safety
+///
+/// As for [`aura_direct_enum_new_typed`], with `boxes` the address of
+/// `count` live boxes the caller hands over a reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed_boxes(
+    cell: *const EnumLayoutCell,
+    variant: i64,
+    boxes: *const *mut OpaqueValue,
+    count: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout =
+            unsafe { registered_enum_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
+        let Some(variant_name) = usize::try_from(variant)
+            .ok()
+            .and_then(|variant| layout.variant_name(variant))
+        else {
+            runtime_error("direct runtime received an invalid enum variant index");
+        };
+        let index = variant as usize;
+        let offsets = layout.box_offsets(index);
+        if offsets.is_empty() || offsets.len() != count {
+            runtime_error("direct runtime received the wrong number of payload boxes");
+        }
+        let boxed = boxed_value_with_type(
+            Value::EnumVariant(EnumVariantValue {
+                enum_name: layout.enum_name().clone(),
+                variant_name: variant_name.clone(),
+                payloads: VariantPayloads::Typed(TypedPayloads::new(layout, index)),
+            }),
+            Some(layout.runtime_type().clone()),
+        );
+        // SAFETY: `boxed_value_with_type` returns a live box, which is new
+        // and confined, so its view shows its block.
+        let header = unsafe { &*boxed };
+        header
+            .shape_tag
+            .store(layout.shape_tag(), Ordering::Relaxed);
+        let block = header.list_elements.get() as *mut u8;
+        for (position, &offset) in offsets.iter().enumerate() {
+            // SAFETY: the caller's contract.
+            let field = unsafe { *boxes.add(position) };
+            if field.is_null() {
+                runtime_error("direct runtime received a null field value");
+            }
+            // SAFETY: the caller hands over the reference, and the offset is
+            // a box slot of the new variant's block, which is null.
+            unsafe {
+                block
+                    .add(offset)
+                    .cast::<Option<ElementBox>>()
+                    .write(Some(adopt_field_box(field)));
+            }
+        }
+        boxed
+    })
+}
+
+/// As [`aura_direct_release_last_owned_value`], for a box generated code
+/// knows holds a variant of an enum the program defines: a variant that
+/// keeps its payloads in its layout is freed with [`free_typed_variant`].
+///
+/// # Safety
+///
+/// As for [`aura_direct_release_last_owned_value`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_release_last_owned_variant(value: *mut OpaqueValue) {
+    task_runtime_boundary(|| {
+        let removed = current_direct_frame_stack().is_some_and(|stack| {
+            // SAFETY: the stack belongs to the running task, and the caller
+            // passes a live box.
+            unsafe {
+                (*stack.as_ptr())
+                    .owned_values
+                    .remove_last(stack.as_ptr(), value)
+            }
+        });
+        if !removed {
+            // SAFETY: the caller's contract.
+            unsafe { release_direct_value(value) };
+            return;
+        }
+        // SAFETY: a value the ledger linked is live and confined to this
+        // thread, so no other thread changes its count.
+        let header = unsafe { &*value };
+        match header.ref_count.load(Ordering::Relaxed) {
+            0 => runtime_error("attempted to release an already-released direct runtime value"),
+            1 => {
+                header.ref_count.store(0, Ordering::Relaxed);
+                // SAFETY: the ledger held the last reference.
+                unsafe { free_typed_variant(value) };
+            }
+            count => header.ref_count.store(count - 1, Ordering::Relaxed),
+        }
+    })
+}
+
+/// Frees a value whose count reached zero, as [`free_direct_value`] does.
+/// A variant that keeps its payloads in its layout first releases each
+/// payload box itself, freeing in the same way a payload whose count
+/// reaches zero, so a tree of variants is freed without dropping each
+/// variant's payloads through its value. The boxes to free wait in a
+/// list, each variant's in payload order, so a chain of variants as long
+/// as a program builds it is freed without a call for each link.
+///
+/// # Safety
+///
+/// As for [`free_direct_value`].
+unsafe fn free_typed_variant(value: *mut OpaqueValue) {
+    let mut pending: Vec<*mut OpaqueValue> = Vec::new();
+    let mut next = Some(value);
+    while let Some(value) = next {
+        // SAFETY: the last reference to `value` was dropped, so nothing
+        // else reads the value.
+        if let Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Typed(payloads),
+            ..
+        }) = unsafe { &mut *(*value).value.get() }
+        {
+            let first = pending.len();
+            payloads.release_boxes(|boxed| {
+                // SAFETY: the variant's block held a reference to the box.
+                let header = unsafe { &*boxed };
+                if release_ref_count(&header.ref_count)
+                    .unwrap_or_else(|message| runtime_error(message))
+                {
+                    pending.push(boxed);
+                }
+            });
+            // The first payload's box is freed first, with all it holds.
+            pending[first..].reverse();
+        }
+        // SAFETY: the caller's contract, or the count reached zero above.
+        unsafe { free_direct_value(value) };
+        next = pending.pop();
+    }
+}
+
+/// The frozen box of variant `variant`, which takes no payloads, of the
+/// enum whose layout `cell` holds, as [`aura_direct_enum_new_typed`]
+/// builds it, kept in `slot`, a word of the program's data for that
+/// variant. Generated code reads the word and calls this only while it is
+/// zero, so building a variant with no payloads costs no call. The program's
+/// end empties the word before it frees the box.
+///
+/// # Safety
+///
+/// As for [`aura_direct_enum_new_typed`], with `slot` null or a word of the
+/// program's data that only this function writes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_enum_unit_cell(
+    cell: *const EnumLayoutCell,
+    variant: i64,
+    slot: *const AtomicUsize,
+) -> *mut OpaqueValue {
+    // SAFETY: the caller's contract.
+    let boxed = unsafe { aura_direct_enum_new_typed(cell, variant) };
+    // SAFETY: the caller's contract: the word lives as long as the program.
+    let slot: Option<&'static AtomicUsize> = unsafe { slot.as_ref() };
+    if let Some(slot) = slot {
+        if direct_value_is_frozen(boxed)
+            && slot
+                .compare_exchange(0, boxed as usize, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            unit_variant_cells()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(slot);
+        }
+    }
+    boxed
+}
+
 /// Whether `boxed` holds an instance kept in its class's layout. Its view
 /// carries the class's access code while the box is confined.
 ///
@@ -17227,9 +18587,32 @@ unsafe fn holds_typed_instance(boxed: *mut OpaqueValue) -> bool {
         )
 }
 
+/// Whether `boxed` holds a variant generated code built in its enum's
+/// layout, whose box carries the layout's access code.
+///
+/// # Safety
+///
+/// `boxed` is null or a live box the running task owns a reference to.
+unsafe fn holds_typed_variant(boxed: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { boxed.as_ref() }) else {
+        return false;
+    };
+    let access = header.list_access.load(Ordering::Relaxed);
+    // SAFETY: a box with an enum's access code is confined to this thread,
+    // and the running task owns a reference, so nothing changes it now.
+    access >= FIRST_ENUM_ACCESS
+        && access != UNREGISTERED_PLAIN_ACCESS
+        && matches!(
+            unsafe { &*header.value.get() },
+            Value::EnumVariant(variant) if variant.payloads.typed().is_some()
+        )
+}
+
 /// Whether `boxed` holds a value a list keeps in a box of its own when it
-/// is appended: an instance kept in its class's layout, or a list, dict or
-/// set, which generated code reads or changes in place through the box.
+/// is appended: an instance kept in its class's layout, a variant kept in
+/// its enum's layout, or a list, dict or set, which generated code reads,
+/// lends, or changes in place through the box.
 ///
 /// # Safety
 ///
@@ -17238,6 +18621,7 @@ unsafe fn holds_element_box_value(boxed: *mut OpaqueValue) -> bool {
     // SAFETY: the caller's contract.
     unsafe {
         holds_typed_instance(boxed)
+            || holds_typed_variant(boxed)
             || boxed.as_ref().is_some_and(|header| {
                 header.shared_lock().is_none()
                     && matches!(
@@ -19190,6 +20574,25 @@ pub extern "C-unwind" fn aura_direct_channel_send_discarded(
     })
 }
 
+/// [`aura_direct_channel_send_discarded`] for an `int64` item, which
+/// generated code passes as the integer, so no box is made for it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_channel_send_discarded_i64(
+    channel: *mut OpaqueValue,
+    value: i64,
+) {
+    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => {
+            let value = Value::Int(IntegerValue::from_i64(value));
+            let _ = channel.send_with_cancellation(value, Some(&current_cancellation()));
+        }
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_channel_send_timeout_value(
     channel: *mut OpaqueValue,
@@ -20700,25 +22103,40 @@ pub extern "C-unwind" fn aura_direct_file_write_all(
     file: *mut OpaqueValue,
     text: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let text = match unsafe { value_ref(text) } {
-            Value::String(text) => text,
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        };
-        match unsafe { value_ref(file) } {
-            Value::File(file) => match file.write_all(&text) {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(error) => boxed_value(result_err(io_error(error))),
-            },
-            other => runtime_error(format!(
-                "expected `fs.File`, found `{}`",
-                value_type_name(other)
-            )),
-        }
+    task_runtime_boundary(|| match direct_file_write_all(file, text) {
+        Ok(()) => boxed_value(result_ok(Value::Unit)),
+        Err(error) => boxed_value(result_err(io_error(error))),
     })
+}
+
+/// `try file.write_all(text)`: null when the write succeeds, so no
+/// `Result` is built, and otherwise the `Result.Err` to return.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_file_write_all_try(
+    file: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match direct_file_write_all(file, text) {
+        Ok(()) => std::ptr::null_mut(),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    })
+}
+
+fn direct_file_write_all(file: *mut OpaqueValue, text: *mut OpaqueValue) -> io::Result<()> {
+    let text = match unsafe { value_ref(text) } {
+        Value::String(text) => text,
+        other => runtime_error(format!(
+            "expected `str`, found `{}`",
+            value_type_name(other)
+        )),
+    };
+    match unsafe { value_ref(file) } {
+        Value::File(file) => file.write_all(&text),
+        other => runtime_error(format!(
+            "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -21888,22 +23306,89 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_read_line(
     stream: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match direct_tcp_stream_read_line(stream, timeout) {
+        Ok(Some(line)) => boxed_value(result_ok(optional_str_value(Some(line)))),
+        Ok(None) => boxed_value(result_ok(optional_str_value(None))),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    })
+}
+
+/// `try http.__aura_read_event(stream)` in one call: the five fields of
+/// the tuple the builtin returns go into `words` (found, event, data, id,
+/// retry_ms), each `str` as a box the caller owns, and no `Result` or tuple
+/// is made. A failed read leaves `words` alone and writes the `Result.Err`
+/// the `try` returns to `failure`, which the caller set to null.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_http_read_event_try(
+    stream: *mut OpaqueValue,
+    words: *mut i64,
+    failure: *mut *mut OpaqueValue,
+) {
     task_runtime_boundary(|| {
-        let timeout = io_timeout_or_return!(timeout, "read_line(timeout=...)");
-        match unsafe { value_ref(stream) } {
-            Value::TcpStream(stream) => {
-                match stream.read_line(timeout, Some(&current_cancellation())) {
-                    Ok(Some(line)) => boxed_value(result_ok(optional_str_value(Some(line)))),
-                    Ok(None) => boxed_value(result_ok(optional_str_value(None))),
-                    Err(error) => boxed_value(result_err(io_error(error))),
-                }
+        let read = match unsafe { value_ref(stream) } {
+            Value::HttpResponse(stream) => {
+                crate::runtime_value::http_client::read_stream_event(&stream)
             }
             other => runtime_error(format!(
-                "expected `net.TcpStream`, found `{}`",
+                "expected `http.Stream`, found `{}`",
                 value_type_name(other)
             )),
+        };
+        match read {
+            Ok(event) => {
+                let found = event.is_some();
+                let event = event.unwrap_or_default();
+                let fields = [
+                    i64::from(found),
+                    boxed_value(Value::string(event.event)) as i64,
+                    boxed_value(Value::string(event.data)) as i64,
+                    boxed_value(Value::string(event.id)) as i64,
+                    if found { event.retry_ms } else { -1 },
+                ];
+                for (index, word) in fields.into_iter().enumerate() {
+                    // SAFETY: the caller passes five writable words.
+                    unsafe { words.add(index).write(word) };
+                }
+            }
+            // SAFETY: the caller passes one writable word.
+            Err(error) => unsafe { failure.write(boxed_value(result_err(io_error(error)))) },
         }
     })
+}
+
+/// `try stream.read_line()` in one call, as
+/// [`aura_direct_file_read_line_try`] reads a file's line: the line's
+/// `str`, or null at the end of the stream while `failure` stays null, or
+/// null with the `Result.Err` the `try` returns left in `failure`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_tcp_stream_read_line_try(
+    stream: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+    failure: *mut *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match direct_tcp_stream_read_line(stream, timeout) {
+        Ok(Some(line)) => boxed_value(Value::string(line)),
+        Ok(None) => std::ptr::null_mut(),
+        Err(error) => {
+            // SAFETY: the caller passes one writable word.
+            unsafe { failure.write(boxed_value(result_err(io_error(error)))) };
+            std::ptr::null_mut()
+        }
+    })
+}
+
+fn direct_tcp_stream_read_line(
+    stream: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> io::Result<Option<String>> {
+    let timeout = optional_timeout_result_from_ptr(timeout, "read_line(timeout=...)")?;
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => stream.read_line(timeout, Some(&current_cancellation())),
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -21968,28 +23453,50 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_write_all(
     text: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let text = match unsafe { value_ref(text) } {
-            Value::String(text) => text.clone(),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        };
-        let timeout = io_timeout_or_return!(timeout, "write_all(timeout=...)");
-        match unsafe { value_ref(stream) } {
-            Value::TcpStream(stream) => {
-                match stream.write_all(&text, timeout, Some(&current_cancellation())) {
-                    Ok(()) => boxed_value(result_ok(Value::Unit)),
-                    Err(error) => boxed_value(result_err(io_error(error))),
-                }
-            }
-            other => runtime_error(format!(
-                "expected `net.TcpStream`, found `{}`",
-                value_type_name(other)
-            )),
-        }
-    })
+    task_runtime_boundary(
+        || match direct_tcp_stream_write_all(stream, text, timeout) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+    )
+}
+
+/// `try stream.write_all(text)`: null when the write succeeds, so no
+/// `Result` is built, and otherwise the `Result.Err` to return.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_tcp_stream_write_all_try(
+    stream: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(
+        || match direct_tcp_stream_write_all(stream, text, timeout) {
+            Ok(()) => std::ptr::null_mut(),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+    )
+}
+
+fn direct_tcp_stream_write_all(
+    stream: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> io::Result<()> {
+    let text = match unsafe { value_ref(text) } {
+        Value::String(text) => text,
+        other => runtime_error(format!(
+            "expected `str`, found `{}`",
+            value_type_name(other)
+        )),
+    };
+    let timeout = optional_timeout_result_from_ptr(timeout, "write_all(timeout=...)")?;
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => stream.write_all(&text, timeout, Some(&current_cancellation())),
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

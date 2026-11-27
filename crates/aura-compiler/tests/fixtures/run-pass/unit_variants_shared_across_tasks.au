@@ -1,0 +1,72 @@
+# Variants with no payloads are one shared box per type, which a word of
+# the program's data keeps: built in several tasks, in a generic enum at
+# two types, and inside other variants.
+
+enum Tree:
+    Leaf
+    Node(left: indirect Tree, right: indirect Tree)
+
+
+enum Slot[T]:
+    Vacant
+    Held(item: T)
+
+
+def make(depth: int64) -> Tree:
+    if depth == 0:
+        return Tree.Leaf
+    return Tree.Node(left=make(depth - 1), right=make(depth - 1))
+
+
+def leaves(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf:
+            return 1
+        case Tree.Node(left, right):
+            return leaves(left) + leaves(right)
+
+
+def grow(depth: int64) -> int64:
+    return leaves(make(depth))
+
+
+def vacant_ints(count: int64) -> int64:
+    mut slots: list[Slot[int64]] = []
+    for index in range(count):
+        if index % 2 == 0:
+            slots.append(Slot.Vacant)
+        else:
+            slots.append(Slot.Held(item=index))
+    mut found = 0
+    for slot in slots:
+        match slot:
+            case Slot.Vacant:
+                found += 1
+            case Slot.Held(item):
+                found += item * 0
+    return found
+
+
+def label(slot: Slot[str]) -> str:
+    match slot:
+        case Slot.Vacant:
+            return "vacant"
+        case Slot.Held(item):
+            return item.clone()
+
+
+def main() -> int32:
+    with TaskGroup() as group:
+        first = group.start(grow, 4)
+        second = group.start(grow, 3)
+        third = group.start(vacant_ints, 9)
+        print(first.result_or(0, timeout=5s))
+        print(second.result_or(0, timeout=5s))
+        print(third.result_or(0, timeout=5s))
+    print(grow(3))
+    text: Slot[str] = Slot.Vacant
+    print(label(text))
+    print(label(Slot.Held(item="kept")))
+    print(vacant_ints(4))
+    print(Tree.Leaf == Tree.Leaf)
+    return 0

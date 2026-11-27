@@ -372,7 +372,19 @@ impl FunctionCompiler<'_> {
         }
         let cell = self.builder.import_data(record.cell);
         let cell = self.builder.symbol_value(types::I64, cell);
+        if payload_count == 0 {
+            return self.unit_variant_from_cell(cell, ty, variant).map(Some);
+        }
         let index = self.builder.iconst(types::I64, variant as i64);
+        let handles = slots
+            .iter()
+            .filter(|(_, slot)| matches!(slot.kind, SlotKind::Handle))
+            .count();
+        if handles > 0 {
+            return self
+                .construct_variant_with_boxes(ty, cell, index, slots, handles, payload)
+                .map(Some);
+        }
         let init = self
             .builder
             .call(self.runtime[RuntimeFn::EnumNewTyped], &[cell, index]);
@@ -412,6 +424,108 @@ impl FunctionCompiler<'_> {
         Ok(Some(built))
     }
 
+    /// As `construct_variant_in_place_with`, for a variant `index` in the
+    /// layout in `cell` that keeps `handles` of its payloads in boxes of
+    /// their own: the payloads are read first, and one call makes the block
+    /// and puts each box into its slot. Then each scalar payload is stored
+    /// at its offset.
+    fn construct_variant_with_boxes(
+        &mut self,
+        ty: &Type,
+        cell: Val,
+        index: Val,
+        slots: Vec<(DirectType, ClassSlot)>,
+        handles: usize,
+        mut payload: impl FnMut(&mut Self, usize, &DirectType) -> std::result::Result<ValueRef, String>,
+    ) -> std::result::Result<ValueRef, String> {
+        let boxes = self
+            .builder
+            .create_sized_stack_slot((8 * handles) as u32, 3);
+        let mut leaves = Vec::new();
+        let mut position = 0;
+        for (index, (direct, slot)) in slots.into_iter().enumerate() {
+            let loaded = payload(self, index, &direct)?;
+            let loaded = self.coerce_value(loaded, &direct)?;
+            match slot.kind {
+                SlotKind::Leaves(slot_leaves) => leaves.push((slot_leaves, loaded)),
+                SlotKind::Handle => {
+                    let boxed = self.ensure_opaque(loaded)?;
+                    let boxed = self.transfer_owned_opaque_value(&boxed);
+                    let address = self.builder.stack_addr(types::I64, boxes, 8 * position);
+                    self.builder.store(MemFlags::trusted(), boxed, address, 0);
+                    position += 1;
+                }
+            }
+        }
+        let address = self.builder.stack_addr(types::I64, boxes, 0);
+        let count = self.builder.iconst(types::I64, handles as i64);
+        let init = self.builder.call(
+            self.runtime[RuntimeFn::EnumNewTypedBoxes],
+            &[cell, index, address, count],
+        );
+        let built = self.owned_opaque_result(init.results, ty.clone());
+        let object = built.values[0];
+        let block = self.class_block(object);
+        for (slot_leaves, loaded) in leaves {
+            for (leaf, word) in slot_leaves.iter().zip(&loaded.values) {
+                self.store_leaf(*leaf, *word, block);
+            }
+        }
+        // The box already carries the enum's type, so tagging it with that
+        // type again does nothing.
+        self.last_runtime_type_tag = Some((
+            init.inst,
+            object,
+            crate::native_runtime::canonical_runtime_type_name(ty),
+        ));
+        Ok(built)
+    }
+
+    /// Variant `variant` of the enum type `ty`, which takes no payloads, and
+    /// whose layout is in `cell`: the one frozen box every build of it
+    /// shares, read from a word of the program's data that the runtime
+    /// fills on first use. The box carries the enum's type, and retains and
+    /// releases skip it.
+    fn unit_variant_from_cell(
+        &mut self,
+        cell: Val,
+        ty: &Type,
+        variant: usize,
+    ) -> std::result::Result<ValueRef, String> {
+        let type_name = crate::native_runtime::canonical_runtime_type_name(ty);
+        let slot = super::word_cell(
+            self.tag_cells,
+            &mut *self.builder,
+            &format!("\0unit variant {type_name} {variant}"),
+        )?;
+        let kept = self
+            .builder
+            .memory_access(
+                crate::native_backend::MemoryAccess::AtomicLoad,
+                types::I64,
+                &[slot],
+            )
+            .expect("an atomic load gives a word");
+        let fill_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder
+            .brif(kept, join_block, &[kept], fill_block, &[]);
+        self.builder.switch_to_block(fill_block);
+        self.builder.seal_block(fill_block);
+        self.builder.set_cold_block(fill_block);
+        let index = self.builder.iconst(types::I64, variant as i64);
+        let filled = self
+            .builder
+            .call(self.runtime[RuntimeFn::EnumUnitCell], &[cell, index, slot]);
+        self.builder.jump(join_block, &filled.results);
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let built = self.owned_opaque_result(self.builder.block_params(join_block), ty.clone());
+        self.shaped_boxes.insert(built.values[0]);
+        Ok(built)
+    }
+
     /// Tests whether the variant box `variant`, of static type `ty`, is
     /// variant `variant_name`: by its index when it keeps its payloads in
     /// place, and with `slow` otherwise. `None` when the enum is not kept in
@@ -442,6 +556,12 @@ impl FunctionCompiler<'_> {
             Some(_) => self.builder.create_block(),
             None => slow_block,
         };
+        // Without a tape, the join's second parameter is 1 where the box
+        // is in its layout and of the variant (see `tested_variant`).
+        let plain = tape_tags.is_none();
+        if plain {
+            self.builder.append_block_param(join_block, types::I64);
+        }
         self.emit_class_check(variant, record.access, untyped_block, checked);
 
         self.builder.switch_to_block(checked);
@@ -449,7 +569,11 @@ impl FunctionCompiler<'_> {
         let actual = self.variant_index_of(variant);
         let matches = self.builder.icmp_imm(IntCC::Equal, actual, index as i64);
         let matches = self.builder.uextend(types::I64, matches);
-        self.builder.jump(join_block, &[matches]);
+        if plain {
+            self.builder.jump(join_block, &[matches, matches]);
+        } else {
+            self.builder.jump(join_block, &[matches]);
+        }
 
         if let Some(tags) = tape_tags {
             let tape_block = self.builder.create_block();
@@ -466,11 +590,20 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let matched = slow(self)?;
-        self.builder.jump(join_block, &[matched]);
+        if plain {
+            let untyped = self.builder.iconst(types::I64, 0);
+            self.builder.jump(join_block, &[matched, untyped]);
+        } else {
+            self.builder.jump(join_block, &[matched]);
+        }
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
-        Ok(Some(self.builder.block_params(join_block)[0]))
+        let params = self.builder.block_params(join_block).to_vec();
+        if plain {
+            self.tested_variant = Some((index, params[1]));
+        }
+        Ok(Some(params[0]))
     }
 
     /// Reads payload `index` of variant `variant_name` from the variant box
@@ -550,14 +683,29 @@ impl FunctionCompiler<'_> {
         } else {
             slow_block
         };
-        self.emit_variant_check(
-            object,
-            &record,
-            variant,
-            slow_block,
-            untyped_block,
-            fast_block,
-        );
+        // A plain check is kept for the next read of the same box (see
+        // `checked_variant`): the join's last parameter says which way
+        // this read went.
+        let read_place = self.variant_read_place.take();
+        let plain = untyped_block == slow_block && read_place.is_some();
+        if plain {
+            self.builder.append_block_param(join_block, types::I64);
+        }
+        match self.checked_variant.take() {
+            Some((checked, checked_index, typed))
+                if plain && read_place.as_ref() == Some(&checked) && checked_index == variant =>
+            {
+                self.builder.brif(typed, fast_block, &[], slow_block, &[]);
+            }
+            _ => self.emit_variant_check(
+                object,
+                &record,
+                variant,
+                slow_block,
+                untyped_block,
+                fast_block,
+            ),
+        }
         if view {
             use aura_runtime::json_tape::JsonTag;
             let tags = (JsonTag::Object as i64, JsonTag::Object as i64);
@@ -620,6 +768,10 @@ impl FunctionCompiler<'_> {
                 }
             }
         };
+        let mut values = values;
+        if plain {
+            values.push(self.builder.iconst(types::I64, 1));
+        }
         self.builder.jump(join_block, &values);
 
         self.builder.switch_to_block(slow_block);
@@ -647,12 +799,19 @@ impl FunctionCompiler<'_> {
         if lend {
             values.push(self.builder.iconst(types::I64, 0));
         }
+        if plain {
+            values.push(self.builder.iconst(types::I64, 0));
+        }
         self.builder.jump(join_block, &values);
         self.layout_scratch = caller_owned;
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         let mut values = self.builder.block_params(join_block).to_vec();
+        if let Some(place) = read_place.filter(|_| plain) {
+            let typed = values.pop().expect("the check's flag");
+            self.checked_variant = Some((place, variant, typed));
+        }
         if lend {
             self.lent_element_flag = values.pop();
         }

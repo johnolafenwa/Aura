@@ -45,6 +45,12 @@ use crate::runtime_value::Value;
 /// two never meet.
 pub const FIRST_CLASS_ACCESS: u32 = 0x4000_0000;
 
+/// The access code of a list that keeps the instances of the first class
+/// layout in place ([`crate::list_elements::ListElements::Instances`]).
+/// Each class layout that a list may keep in place has the code this far
+/// above its own, past every enum layout's code.
+pub const FIRST_INSTANCE_LIST_ACCESS: u32 = 0xC000_0000;
+
 /// The layout of one class whose instances keep their fields in place.
 pub struct ClassLayout {
     /// The access code of an instance box that keeps its fields in this
@@ -60,6 +66,18 @@ pub struct ClassLayout {
     /// The offsets of every field box the layout holds outside an enum or
     /// union payload, nested classes included.
     boxes: Vec<usize>,
+    /// Whether dropping a block only releases the boxes at `boxes`: every
+    /// field is a scalar, a box, or a class or tuple of such fields.
+    drops_boxes_only: bool,
+    /// Whether a list may keep instances in place, one block's bytes after
+    /// another: every field is a scalar, a `str` in a box, or a class or
+    /// tuple of such fields, and the block needs no more than 8-byte
+    /// alignment.
+    in_list: bool,
+    /// The type tag of the class, the one generated code tags a new
+    /// instance with through a cell. A new instance takes it at once, so
+    /// that tag finds the shape it records and makes no call.
+    type_tag: std::sync::Arc<super::RuntimeTypeTag>,
     /// How values move in and out of the block.
     ops: &'static FieldOps,
 }
@@ -77,6 +95,16 @@ impl ClassLayout {
 
     pub fn class_name(&self) -> &str {
         &self.class_name
+    }
+
+    pub(super) fn type_tag(&self) -> &super::RuntimeTypeTag {
+        &self.type_tag
+    }
+
+    /// The class's name for an instance of a registered layout, which
+    /// lives as long as the program, so the name shares its text.
+    pub fn runtime_name(&'static self) -> crate::runtime_value::RuntimeName {
+        crate::runtime_value::RuntimeName::from_static(&self.class_name)
     }
 
     fn table(&self) -> &LayoutTable {
@@ -121,6 +149,116 @@ impl ClassLayout {
     fn type_of(&self, id: LayoutId) -> &Type {
         &self.table().get(id).ty
     }
+
+    /// Whether a list may keep instances of this class in place (see
+    /// [`crate::list_elements::ListElements::Instances`]).
+    pub fn keeps_in_list(&self) -> bool {
+        self.in_list
+    }
+
+    /// The bytes of an instance's block.
+    pub fn size(&self) -> usize {
+        self.layout.size()
+    }
+
+    /// The offsets of the field boxes of an instance's bytes.
+    pub fn box_offsets(&self) -> &[usize] {
+        &self.boxes
+    }
+
+    /// The words one instance takes in a list that keeps it in place.
+    pub fn stride_words(&self) -> usize {
+        self.layout.size().div_ceil(8)
+    }
+
+    /// The access code of a list that keeps instances of this class in
+    /// place.
+    pub fn instance_list_access(&self) -> u32 {
+        FIRST_INSTANCE_LIST_ACCESS + (self.access - FIRST_CLASS_ACCESS)
+    }
+
+    /// Drops the instance whose block bytes lie at `ptr`, as dropping its
+    /// block would, and leaves the bytes dead.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` holds the bytes of a live block of a layout that
+    /// [`Self::keeps_in_list`], which nothing reads again.
+    pub unsafe fn drop_element(&self, ptr: *mut u8) {
+        for offset in &self.boxes {
+            // SAFETY: each offset is a box slot of the bytes.
+            drop(unsafe { field_box_mut(ptr.add(*offset)) }.take());
+        }
+    }
+
+    /// Whether the class has a field `name`.
+    pub fn has_field(&self, name: &str) -> bool {
+        self.field(name).is_some()
+    }
+
+    /// Field `name` of the instance whose block bytes lie at `ptr`:
+    /// borrowed from its box, or read out of the bytes. `None` when the
+    /// class has no such field, or the field is moved out.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` holds the bytes of a live block, which outlive the result.
+    pub unsafe fn element_field<'a>(&self, ptr: *const u8, name: &str) -> Option<Cow<'a, Value>> {
+        let field = self.field(name)?;
+        // SAFETY: the caller's contract; the field lies inside the bytes.
+        let address = unsafe { ptr.add(field.offset) };
+        if self.is_box(field.layout) {
+            // SAFETY: the slot holds a box pointer.
+            return unsafe { field_box_ref(address) }
+                .as_ref()
+                .map(|boxed| Cow::Borrowed(boxed.value()));
+        }
+        // SAFETY: the place holds a value of its layout.
+        Some(Cow::Owned(unsafe {
+            (self.ops.read)(self.table(), field.layout, address)
+        }))
+    }
+
+    /// Writes an independent copy of the instance at `src` into the dead
+    /// bytes at `dst`.
+    ///
+    /// # Safety
+    ///
+    /// `src` holds the bytes of a live block and `dst` has room for one
+    /// that does not overlap it.
+    pub unsafe fn clone_element(&self, src: *const u8, dst: *mut u8) {
+        if self.drops_boxes_only {
+            // Scalars and boxes only: the bytes, then a copy of each box,
+            // without walking the layout table.
+            // SAFETY: the caller's contract; each offset is a box slot.
+            unsafe {
+                std::ptr::copy_nonoverlapping(src, dst, self.layout.size());
+                for offset in &self.boxes {
+                    let slot = dst.add(*offset).cast::<*mut super::OpaqueValue>();
+                    slot.write(super::typed_layout::clone_handle(slot.read()));
+                }
+            }
+            return;
+        }
+        // SAFETY: the caller's contract.
+        unsafe { (self.ops.clone)(self.table(), self.layout.root(), src, dst) }
+    }
+}
+
+/// Whether a list may keep values of `id` in place: a scalar, a `str` in a
+/// box, or a class or tuple of such values.
+fn fits_list(table: &LayoutTable, id: LayoutId) -> bool {
+    let layout = table.get(id);
+    match &layout.kind {
+        LayoutKind::Unit | LayoutKind::Scalar(_) => true,
+        LayoutKind::Handle => {
+            matches!(&layout.ty, Type::Named(name, args) if name == "str" && args.is_empty())
+        }
+        LayoutKind::Struct { fields, .. } => {
+            fields.iter().all(|field| fits_list(table, field.layout))
+        }
+        LayoutKind::Indirect(_) | LayoutKind::Tagged { .. } => false,
+    }
 }
 
 impl fmt::Debug for ClassLayout {
@@ -143,6 +281,18 @@ fn collect_boxes(table: &LayoutTable, id: LayoutId, base: usize, boxes: &mut Vec
             }
         }
         _ => {}
+    }
+}
+
+/// Whether dropping a value of `id` only releases the boxes
+/// [`collect_boxes`] finds.
+fn only_boxes(table: &LayoutTable, id: LayoutId) -> bool {
+    match &table.get(id).kind {
+        LayoutKind::Unit | LayoutKind::Scalar(_) | LayoutKind::Handle => true,
+        LayoutKind::Struct { fields, .. } => {
+            fields.iter().all(|field| only_boxes(table, field.layout))
+        }
+        LayoutKind::Indirect(_) | LayoutKind::Tagged { .. } => false,
     }
 }
 
@@ -188,6 +338,10 @@ impl ClassLayout {
         }
         let mut boxes = Vec::new();
         collect_boxes(table, layout.root(), 0, &mut boxes);
+        let drops_boxes_only = only_boxes(table, layout.root());
+        let in_list = fits_list(table, layout.root()) && layout.align() <= 8 && layout.size() > 0;
+        let type_tag =
+            super::shared_runtime_type_tag(super::canonical_runtime_type_name(&root.ty).as_bytes());
         let class_name = class_name.clone();
         Ok(Self {
             access,
@@ -196,6 +350,9 @@ impl ClassLayout {
             fields,
             by_name,
             boxes,
+            drops_boxes_only,
+            in_list,
+            type_tag,
             ops: &typed_layout::FIELD_OPS,
         })
     }
@@ -376,6 +533,42 @@ impl TypedFields {
 
     pub fn layout(&self) -> &'static ClassLayout {
         self.layout
+    }
+
+    /// The instance whose block bytes lie at `src`, which a list keeps in
+    /// place: a copy of them when `copy`, and otherwise the bytes
+    /// themselves, which are dead afterwards.
+    ///
+    /// # Safety
+    ///
+    /// `src` holds the bytes of a live block of `layout`.
+    pub unsafe fn from_element(layout: &'static ClassLayout, src: *const u8, copy: bool) -> Self {
+        let typed = Self::new(layout);
+        // SAFETY: the caller's contract, and the new block's bytes are dead.
+        unsafe {
+            if copy {
+                layout.clone_element(src, typed.data.as_ptr());
+            } else {
+                std::ptr::copy_nonoverlapping(src, typed.data.as_ptr(), layout.layout.size());
+            }
+        }
+        typed
+    }
+
+    /// Moves the block's bytes to `dst`, as a list that keeps the instance
+    /// in place holds them, and frees the block.
+    ///
+    /// # Safety
+    ///
+    /// `dst` has room for the layout's size and does not overlap the block.
+    pub unsafe fn into_element(self, dst: *mut u8) {
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: the caller's contract; the block holds nothing once its
+        // bytes moved, and it came from the pool with this layout.
+        unsafe {
+            std::ptr::copy_nonoverlapping(this.data.as_ptr(), dst, this.layout.layout.size());
+            super::free_layout_block(this.data, this.layout.block_layout());
+        }
     }
 
     /// The block's address, which generated code reads fields at.
@@ -671,12 +864,8 @@ impl Clone for TypedFields {
         // SAFETY: the block holds a value of the layout, the copy's bytes
         // are dead, and the two blocks are distinct.
         unsafe {
-            (self.layout.ops.clone)(
-                self.layout.table(),
-                self.layout.layout.root(),
-                self.data.as_ptr(),
-                copy.data.as_ptr(),
-            )
+            self.layout
+                .clone_element(self.data.as_ptr(), copy.data.as_ptr())
         };
         copy
     }
@@ -687,11 +876,19 @@ impl Drop for TypedFields {
         // SAFETY: the block holds a value of the layout, with null boxes
         // where fields are moved out, and nothing reads it again.
         unsafe {
-            (self.layout.ops.drop)(
-                self.layout.table(),
-                self.layout.layout.root(),
-                self.data.as_ptr(),
-            );
+            if self.layout.drops_boxes_only {
+                // The same releases the layout's drop makes, without
+                // walking its table.
+                for offset in &self.layout.boxes {
+                    drop(field_box_mut(self.data.as_ptr().add(*offset)).take());
+                }
+            } else {
+                (self.layout.ops.drop)(
+                    self.layout.table(),
+                    self.layout.layout.root(),
+                    self.data.as_ptr(),
+                );
+            }
             super::free_layout_block(self.data, self.layout.block_layout());
         }
     }

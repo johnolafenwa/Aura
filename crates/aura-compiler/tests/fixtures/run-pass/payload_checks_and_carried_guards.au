@@ -1,0 +1,135 @@
+# Payload reads right after a match of their variant, or after another read
+# of the same local, take the check those made; floor division and modulo
+# by negative numbers; a `str` handed in that is turned into bytes; and a
+# loop that keeps the lists another loop proved long enough. A function on
+# a call cycle whose leaves look up a map pushes its frame record on entry,
+# and a failed lookup still names every caller.
+import control
+
+
+enum Expr:
+    Num(value: int64)
+    Neg(operand: indirect Expr)
+    Bin(op: int64, left: indirect Expr, right: indirect Expr)
+    Span(kind: int64, first: int64, last: int64)
+
+
+def evaluate(node: Expr, cells: list[int64]) -> int64:
+    match node:
+        case Expr.Num(value):
+            return value
+        case Expr.Span(kind, first, last):
+            mut total = 0
+            mut cell = first
+            while cell <= last:
+                total = total + kind * cells[cell]
+                cell += 1
+            return total
+        case Expr.Neg(operand):
+            return -evaluate(operand, cells)
+        case Expr.Bin(op, left, right):
+            a = evaluate(left, cells)
+            b = evaluate(right, cells)
+            if op == 43:
+                return a + b
+            return a * b
+
+
+def total_of(names: list[str], at: int64, env: dict[str, int64]) -> int64:
+    if at == names.len():
+        return 0
+    return env[names[at]] + total_of(names, at + 1, env)
+
+
+def depth(levels: int64) -> int64:
+    mut node = Expr.Num(value=0)
+    for level in range(levels):
+        if level % 2 == 0:
+            node = Expr.Neg(operand=node)
+        else:
+            node = Expr.Bin(op=level, left=Expr.Num(value=level), right=node)
+    mut count = 0
+    while true:
+        match own node:
+            case Expr.Neg(operand):
+                node = operand
+                count += 1
+            case Expr.Bin(op, left, right):
+                count += op - op + evaluate(left, [])
+                node = right
+                count += 1
+            case _:
+                return count
+
+
+def floors(left: int64, right: int64) -> str:
+    return f"{left // right} {left % right}"
+
+
+def byte_total(text: str) -> int64:
+    bytes = text.to_bytes()
+    mut total = 0
+    for at in range(bytes.len()):
+        total = total + (bytes[at] as int64)
+    return total
+
+
+def spread(xs: mut list[float64], vs: mut list[float64], dt: float64) -> None:
+    for i in range(4):
+        for j in range(i + 1, 4):
+            d = xs[i] - xs[j]
+            vs[i] -= d * dt
+            vs[j] += d * dt
+    for i in range(4):
+        xs[i] += dt * vs[i]
+
+
+def spread_short(size: int64) -> float64:
+    mut xs: list[float64] = []
+    for at in range(size):
+        xs.append(at as float64)
+    mut vs = [0.0, 0.0, 0.0, 0.0]
+    spread(xs, vs, 0.5)
+    return xs[0]
+
+
+def main() -> None:
+    cells = [3, 5, 7, 11]
+    tree = Expr.Bin(
+        op=43,
+        left=Expr.Neg(operand=Expr.Span(kind=2, first=1, last=3)),
+        right=Expr.Bin(op=42, left=Expr.Num(value=6), right=Expr.Span(kind=1, first=0, last=1)),
+    )
+    print(evaluate(tree, cells))
+    print(depth(7))
+    match control.recover(evaluate, Expr.Span(kind=1, first=2, last=4), cells):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(trap.message)
+    lefts = [-7, 7, -7, 6, -6, 0]
+    rights = [3, -3, -3, -3, 3, -5]
+    for at in range(lefts.len()):
+        print(floors(lefts[at], rights[at]))
+    word = "héllo"
+    print(byte_total(word))
+    print(byte_total(word + "!"))
+    mut xs = [0.0, 1.0, 3.0, 6.0]
+    mut vs = [0.0, 0.0, 0.0, 0.0]
+    for _ in range(3):
+        spread(xs, vs, 0.5)
+    print(f"{xs[0]} {xs[1]} {xs[2]} {xs[3]} {vs[3]}")
+    for size in [4, 3]:
+        match control.recover(spread_short, size):
+            case Ok(first):
+                print(first)
+            case Err(trap):
+                print(trap.message)
+    env = {"a": 1, "b": 20, "c": 300}
+    print(total_of(["a", "b", "c", "b"], 0, env))
+    match control.recover(total_of, ["a", "z"], 0, env):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(trap.message)
+            print(str(trap.frames))

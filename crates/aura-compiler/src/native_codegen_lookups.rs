@@ -60,6 +60,9 @@ enum SlotKind {
     /// The `Result` of `str.from_bytes` or a number parse, whose error
     /// nothing reads.
     Result,
+    /// The `Result` of a `parse_int64` whose error nothing reads, kept as
+    /// the int64 and whether the text parsed.
+    ParseWord,
     /// Scalar success kept in a register, or a complete recovery error.
     Recovery,
 }
@@ -84,7 +87,7 @@ impl SlotKind {
                         || (matches!(variant_name, Some("Closed" | "TimedOut" | "Cancelled"))
                             && arm.label == otherwise))
             }
-            SlotKind::Result | SlotKind::Recovery => {
+            SlotKind::Result | SlotKind::ParseWord | SlotKind::Recovery => {
                 matches!(enum_name, None | Some("Result"))
                     && matches!(variant_name, Some("Ok" | "Err"))
             }
@@ -97,7 +100,7 @@ impl SlotKind {
     fn keeps_payload_of(self, variant_name: &str) -> bool {
         match self {
             SlotKind::Lookup | SlotKind::MapWord | SlotKind::Receive | SlotKind::Recovery => true,
-            SlotKind::Result => variant_name == "Ok",
+            SlotKind::Result | SlotKind::ParseWord => variant_name == "Ok",
             SlotKind::Discarded => false,
         }
     }
@@ -196,8 +199,26 @@ pub(super) fn lookup_slots(function: &MirFunction) -> (HashSet<String>, HashSet<
         Some(SlotKind::Lookup) if words.contains(target) && is_dict_get(value) => {
             Some(SlotKind::MapWord)
         }
+        Some(SlotKind::Result) if is_int64_parse(value) => Some(SlotKind::ParseWord),
         kind => kind,
     })
+}
+
+/// Whether `value` is a `parse_int64` call, whose number a slot may keep as
+/// a word.
+pub(super) fn is_int64_parse(value: &Rvalue) -> bool {
+    matches!(
+        value,
+        Rvalue::Call {
+            callee: CallTarget::Runtime {
+                op: RuntimeOp::Function(FunctionOp::ParseInt64),
+                receiver: None,
+                ..
+            },
+            args,
+            ..
+        } if args.len() == 1
+    )
 }
 
 /// Whether `ty` is `Lookup[int64]`.
@@ -390,7 +411,9 @@ fn payload_slots(
         .collect::<HashMap<_, _>>();
     let word_candidates = candidates
         .iter()
-        .filter_map(|(&name, c)| (c.kind == Some(SlotKind::MapWord)).then_some(name))
+        .filter_map(|(&name, c)| {
+            matches!(c.kind, Some(SlotKind::MapWord | SlotKind::ParseWord)).then_some(name)
+        })
         .collect::<HashSet<_>>();
     let mut slots = candidates
         .into_iter()

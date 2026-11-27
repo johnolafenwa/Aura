@@ -1,0 +1,69 @@
+class Program:
+    ops: list[int64]
+    count: int64
+
+
+class Matcher:
+    seen: list[int64]
+    generation: int64
+
+    # Reads its argument only: a list element is lent to it in place.
+    def search(mut self, program: Program, data: list[int64]) -> bool:
+        self.generation += 1
+        self.seen.append(program.ops[0])
+        return program.count + data.len() > self.generation % 7
+
+    def weigh(self, program: Program) -> int64:
+        return program.count * 10 + program.ops.len()
+
+    # Returns a copy of its argument, which the caller then changes.
+    def keep(mut self, program: Program) -> Program:
+        self.generation += program.count
+        return Program(ops=program.ops.copy(), count=program.count)
+
+
+def main():
+    mut programs: list[Program] = []
+    for i in range(6):
+        programs.append(Program(ops=[i, i + 1], count=i))
+    mut matcher = Matcher(seen=[], generation=0)
+    data = [1, 2, 3]
+    mut hits = 0
+    for line in range(20):
+        for k in range(programs.len()):
+            view program = programs[k]
+            if matcher.search(program, data):
+                hits += 1
+            else:
+                hits -= 1
+    print(hits)
+    print(matcher.seen.len())
+    print(matcher.generation)
+    mut weight = 0
+    for k in range(programs.len()):
+        view program = programs[k]
+        weight += matcher.weigh(program)
+    print(weight)
+
+    # A copy shares the elements until either list changes.
+    mut copied = programs.copy()
+    view first = copied[0]
+    if matcher.search(first, data):
+        print("hit")
+    copied[0].count = 100
+    copied[0].ops.append(7)
+    print(programs[0].count)
+    print(programs[0].ops)
+    print(copied[0].count)
+    print(copied[0].ops)
+
+    # The returned copy is apart from the element.
+    view second = programs[1]
+    mut taken = matcher.keep(second)
+    taken.count = 50
+    taken.ops.append(9)
+    print(programs[1].count)
+    print(programs[1].ops)
+    print(taken.count)
+    print(taken.ops)
+    print(matcher.generation)

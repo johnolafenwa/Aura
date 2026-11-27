@@ -1912,6 +1912,17 @@ impl<T> SharedVec<T> {
     }
 }
 
+impl<T> SharedVec<T> {
+    /// Gives up this handle, and returns the storage when the handle was
+    /// the last one to share it, for a caller that drops elements in a way
+    /// of its own.
+    pub fn into_last(self) -> Option<Vec<T>> {
+        let mut this = ManuallyDrop::new(self);
+        // SAFETY: the handle is forgotten.
+        unsafe { this.release() }
+    }
+}
+
 impl<T> Drop for SharedVec<T> {
     #[inline]
     fn drop(&mut self) {

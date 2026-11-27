@@ -1,0 +1,63 @@
+# `out.extend(text.to_bytes())` appends the bytes of the text with no list
+# made for them: from a literal, a parameter a view twin holds as words, a
+# loop variable over a list of strings, and a local that owns its text.
+# A field's text makes the list as before.
+class Sink:
+    buf: list[uint8]
+    name: str
+
+    def put(mut self, text: str):
+        self.buf.extend(text.to_bytes())
+
+
+def add_text(out: mut list[uint8], text: str):
+    out.extend(text.to_bytes())
+
+
+def escape(out: mut list[uint8], data: list[uint8]):
+    for c in data:
+        if c == 38:
+            add_text(out, "&amp;")
+        elif c == 60:
+            add_text(out, "&lt;")
+        else:
+            out.append(c)
+
+
+def checksum(bytes: list[uint8]) -> int64:
+    mut total = 0
+    for byte in bytes:
+        total = (total * 31 + byte as int64) % 1000000007
+    return total
+
+
+def main():
+    mut out: list[uint8] = []
+    add_text(out, "<p>")
+    escape(out, "a < b & c".to_bytes())
+    add_text(out, "")
+    add_text(out, "h\u{e9}llo, w\u{f6}rld, and a text longer than any small room")
+    for word in ["one", "two", "three"]:
+        out.extend(word.to_bytes())
+        out.append(32)
+    owned = "own".to_upper()
+    out.extend(owned.to_bytes())
+    print(owned)
+    size = out.len()
+    out.extend(f"{owned}-{size}".to_bytes())
+    mut copy = out[0:out.len()]
+    copy.extend("!".to_bytes())
+    print(f"{out.len()} {copy.len()}")
+    print(f"{checksum(out)} {checksum(copy)}")
+    match str.from_bytes(out):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(_):
+            print("not utf-8")
+    mut sink = Sink(buf=[], name="sink")
+    sink.put("abc")
+    sink.buf.extend(sink.name.to_bytes())
+    sink.buf.extend("def".to_bytes())
+    mut lists: list[list[uint8]] = [[1], [2]]
+    lists[1].extend("xy".to_bytes())
+    print(f"{sink.buf.len()} {lists[1].len()} {checksum(sink.buf)} {checksum(lists[1])}")

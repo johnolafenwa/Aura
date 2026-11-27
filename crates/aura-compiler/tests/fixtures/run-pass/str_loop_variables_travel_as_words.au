@@ -1,0 +1,90 @@
+# The variable of a `for` loop over a `list[str]` holds the element as words
+# borrowed from the list, which cannot change during the loop, and makes its
+# own box only when something needs one.
+import control
+
+
+def kind(text: str) -> int64:
+    if text == "alpha":
+        return 1
+    if text == "beta":
+        return 2
+    return text.byte_len()
+
+
+def shout(text: str) -> str:
+    return text.to_upper()
+
+
+class Bag:
+    names: list[str]
+
+    def code(self, text: str) -> int64:
+        if text == "beta":
+            return 100
+        return 1
+
+
+def count_in(names: list[str], bag: Bag) -> int64:
+    mut total = 0
+    for name in names:
+        if name == "stop":
+            break
+        total += bag.code(name)
+    for name in bag.names:
+        total += kind(name)
+    return total
+
+
+def made() -> list[str]:
+    return "x,beta,zz,alpha,stop,beta".split(",")
+
+
+def main():
+    words = ["alpha", "beta", "", "gamma", "a longer word than any inline text holds"]
+    totals = {"alpha": 4, "beta": 9}
+    mut sum = 0
+    for round in range(3):
+        for word in words:
+            sum = sum * 3 + kind(word)
+            if word == "beta" or word != "gamma":
+                sum += 1
+            match totals.get(word):
+                case Lookup.Found(total):
+                    sum += total
+                case Lookup.Missing:
+                    sum += word.byte_len()
+    print(sum)
+    mut out: list[str] = []
+    for word in words:
+        out.append(word.clone())
+        out.append(shout(word))
+        print(f"<{word}>")
+    print(f"{out.len()} {out[1]} {out[9]}")
+    bag = Bag(names=["alpha", "beta", "omega"])
+    print(count_in(words, bag))
+    print(count_in(made(), bag))
+    for word in made():
+        for other in words:
+            if word == other:
+                print(f"{word}={other}")
+    mut kept = ""
+    for word in words:
+        if word == "gamma":
+            kept = word.clone()
+    print(kept)
+    for index in range(2):
+        match control.recover(pick, index):
+            case Ok(text):
+                print(text)
+            case Err(trap):
+                print(trap.message)
+
+
+def pick(index: int64) -> str:
+    words = ["first", "second"]
+    for word in words:
+        if word == "second":
+            assert index == 0, f"`{word}` stops at {index}"
+            return word.clone()
+    return ""

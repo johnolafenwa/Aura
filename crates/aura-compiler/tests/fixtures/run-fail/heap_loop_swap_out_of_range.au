@@ -1,0 +1,15 @@
+def sift_up(heap: mut list[int64], start: int64):
+    mut i = start
+    while i > 0:
+        parent = (i - 1) // 2
+        if heap[parent] <= heap[i]:
+            break
+        heap.swap(parent, i * i)
+        i = parent
+
+
+def main():
+    mut heap = [5, 4, 3, 2]
+    sift_up(heap, 1)
+    print(heap)
+    sift_up(heap, 2)

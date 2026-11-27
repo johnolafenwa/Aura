@@ -95,3 +95,21 @@ fn a_key_used_again_or_a_borrowed_receiver_keeps_the_copy() {
         assert!(tests.is_empty(), "{name}: {tests:?}");
     }
 }
+
+#[test]
+fn a_tested_key_is_also_an_element_slot_candidate() {
+    // Both ways claim the temporary of `keys[i] in table`, so the function
+    // compiler drops its element slot (see `retain_str_element_slots`) and
+    // the test reads the key where the list holds it.
+    let mir = lower_source_to_mir(SOURCE).expect("the source should lower");
+    let in_dict = function(&mir, "in_dict");
+    let tests = str_key_tests(in_dict);
+    let slots = super::super::str_slots::element_slots(
+        in_dict,
+        |_| true,
+        |_| Vec::new(),
+        &std::collections::HashMap::new(),
+    );
+    let key = tests.keys().next().expect("one test");
+    assert_eq!(slots.lists.get(key).map(String::as_str), Some("keys"));
+}

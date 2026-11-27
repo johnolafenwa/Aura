@@ -1,0 +1,22 @@
+class Rng:
+    state: int64
+    modulus: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % self.modulus
+        return self.state
+
+
+def bucket(value: int64, width: int64) -> int64:
+    return value // width
+
+
+def outer(value: int64, width: int64) -> int64:
+    return bucket(value, width) + 1
+
+
+def main():
+    mut rng = Rng(state=7, modulus=2147483647)
+    print(rng.next())
+    print(outer(17, 5))
+    print(outer(17, 5 - 5))

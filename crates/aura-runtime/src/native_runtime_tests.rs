@@ -7650,8 +7650,9 @@ fn native_runtime_direct_filesystem_wrappers_cover_file_success_paths() {
     let created_ptr = boxed_value(Value::File(created));
     expect_result_ok_unit(super::aura_direct_file_write_all(
         created_ptr,
-        string_value("hi"),
+        string_value("h"),
     ));
+    assert!(super::aura_direct_file_write_all_try(created_ptr, string_value("i")).is_null());
     expect_result_ok_unit(super::aura_direct_file_write_bytes(
         created_ptr,
         int_vec(&[33]),
@@ -7826,6 +7827,10 @@ fn native_runtime_direct_filesystem_wrappers_cover_io_error_results() {
         file_ptr,
         string_value("closed"),
     ));
+    expect_io_result_error(super::aura_direct_file_write_all_try(
+        file_ptr,
+        string_value("closed"),
+    ));
     expect_io_result_error(super::aura_direct_file_write_bytes(
         file_ptr,
         int_vec(&[7, 8]),
@@ -7889,9 +7894,15 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
     let tcp_client_ptr = boxed_value(Value::TcpStream(tcp_client));
     expect_result_ok_unit(super::aura_direct_tcp_stream_write_all(
         tcp_client_ptr,
-        string_value("ping\n"),
+        string_value("pi"),
         timeout,
     ));
+    assert!(super::aura_direct_tcp_stream_write_all_try(
+        tcp_client_ptr,
+        string_value("ng\n"),
+        timeout,
+    )
+    .is_null());
     expect_result_ok_unit(super::aura_direct_tcp_stream_shutdown_write(tcp_client_ptr));
     assert_eq!(
         expect_result_ok_vec_ints(super::aura_direct_tcp_stream_read_exact(
@@ -8480,6 +8491,37 @@ fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
         super::aura_direct_string_byte_len(string_value("é🎉e\u{301}")),
         9
     );
+    let text = string_value("é🎉e\u{301}");
+    // SAFETY: the box is live, and its text has nine bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(super::aura_direct_string_bytes(text), 9) };
+    assert_eq!(bytes, "é🎉e\u{301}".as_bytes());
+    let mut len = 0_i64;
+    let words = super::aura_direct_string_words(text, &mut len);
+    assert_eq!(words, super::aura_direct_string_bytes(text));
+    assert_eq!(len, 9);
+    // A shared box is read under its lock, a frozen one where it lies.
+    let long = "a text too long to keep in the value itself".repeat(2);
+    for freeze in [false, true] {
+        let held = string_value(&long);
+        unsafe {
+            if freeze {
+                super::freeze_direct_value(held);
+            } else {
+                super::share_direct_value(held);
+            }
+        }
+        let mut held_len = 0_i64;
+        let held_words = super::aura_direct_string_words(held, &mut held_len);
+        // SAFETY: the box is live and unchanged.
+        let held_bytes = unsafe { std::slice::from_raw_parts(held_words, held_len as usize) };
+        assert_eq!(held_bytes, long.as_bytes());
+    }
+    let copy = super::aura_direct_string_clone(text);
+    assert_ne!(copy, text);
+    assert_eq!(
+        super::aura_direct_string_byte_len(copy),
+        super::aura_direct_string_byte_len(text)
+    );
     assert_eq!(
         super::aura_direct_string_contains(string_value("  Aura Repo  "), string_value("Repo"),),
         1
@@ -8992,7 +9034,7 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
         1
     );
     assert_eq!(super::aura_direct_vec_swap_in_place(vec, 0, 1), 1);
-    expect_unit(super::aura_direct_vec_reverse_in_place(vec));
+    assert_eq!(super::aura_direct_vec_reverse_in_place(vec), 1);
     assert_eq!(expect_int(super::aura_direct_vec_index(vec, 0, 1, 1)), 5);
     assert_eq!(
         expect_lookup_found_int(super::aura_direct_vec_index_option(vec, 1)),
@@ -9005,15 +9047,15 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
         1,
         1,
     ));
-    expect_unit(super::aura_direct_vec_extend_in_place(
-        vec,
-        int_vec(&[7, 9]),
-    ));
+    assert_eq!(
+        super::aura_direct_vec_extend_in_place(vec, int_vec(&[7, 9])),
+        1
+    );
     assert_eq!(
         expect_vec_ints(super::aura_direct_clone_value(vec)),
         vec![5, 42, 7, 9]
     );
-    expect_unit(super::aura_direct_vec_clear_in_place(vec));
+    assert_eq!(super::aura_direct_vec_clear_in_place(vec), 1);
     assert_eq!(super::aura_direct_vec_len(vec), 0);
     expect_lookup_missing(super::aura_direct_vec_index_option(vec, 0));
 
@@ -12574,6 +12616,20 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
         ),
         vec![65, 66]
     );
+    // A list that keeps its bytes unboxed hands them over as they are.
+    assert_eq!(
+        super::expect_bytes_value(
+            &Value::Vec(VecValue {
+                element_type: crate::runtime_value::SharedType::from(
+                    aura_core::types::Type::named("uint8")
+                ),
+                elements: crate::list_elements::ListElements::from_uint8(vec![0, 7, 255]),
+                str_view: Default::default(),
+            }),
+            "bytes",
+        ),
+        vec![0, 7, 255]
+    );
     assert!(super::expect_bool_value(&Value::Bool(true), "flag"));
     assert_eq!(
         super::expect_i32_value(&Value::Int(IntegerValue::from_signed(123)), "count"),
@@ -12941,6 +12997,9 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "queue-send-discarded-type" => {
                 super::aura_direct_channel_send_discarded(bool_value(true), int_value(1));
+            }
+            "queue-send-discarded-i64-type" => {
+                super::aura_direct_channel_send_discarded_i64(bool_value(true), 1);
             }
             "queue-recv-item-type" => {
                 super::aura_direct_channel_recv_item(bool_value(true));
@@ -14458,6 +14517,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("queue-send-type", "expected `Queue`, found `bool`"),
         (
             "queue-send-discarded-type",
+            "expected `Queue`, found `bool`",
+        ),
+        (
+            "queue-send-discarded-i64-type",
             "expected `Queue`, found `bool`",
         ),
         ("queue-recv-item-type", "expected `Queue`, found `bool`"),
@@ -16921,6 +16984,34 @@ fn native_runtime_frame_stack_accessor_follows_the_task_state() {
 }
 
 #[test]
+fn native_runtime_enters_a_caller_chain_outermost_first() {
+    let outer = leaked_frame_descriptor(1, 1, b"/workspace/main.au", b"outer") as usize;
+    let inner = leaked_frame_descriptor(5, 1, b"/workspace/main.au", b"inner") as usize;
+    super::with_direct_task_runtime_scope(|| {
+        // A null chain enters nothing.
+        unsafe { super::aura_direct_enter_caller_chain(std::ptr::null()) };
+        assert!(super::direct_runtime_call_frames().0.is_empty());
+        // A link of 0 is a caller that pushed its own record.
+        let last = [outer, 0];
+        let pushed = [0, std::ptr::from_ref(&last) as usize];
+        let first = [inner, std::ptr::from_ref(&pushed) as usize];
+        unsafe { super::aura_direct_enter_caller_chain(&first) };
+        let frames = super::direct_runtime_call_frames().0;
+        let names = frames
+            .iter()
+            .map(|frame| frame.function.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["inner", "outer"]);
+        unsafe {
+            super::aura_direct_exit_call();
+            super::aura_direct_exit_call();
+        }
+        Ok::<_, Diagnostic>(Value::Unit)
+    })
+    .expect("scope should complete");
+}
+
+#[test]
 fn native_runtime_sinks_and_returned_views_send_frame_pushes_to_the_runtime() {
     let caller = leaked_frame_descriptor(1, 1, b"/workspace/main.au", b"caller") as usize;
     let callee = leaked_frame_descriptor(5, 1, b"/workspace/main.au", b"callee") as usize;
@@ -16954,6 +17045,14 @@ fn native_runtime_sinks_and_returned_views_send_frame_pushes_to_the_runtime() {
         super::aura_direct_set_next_mutable_sinks(sinks.as_ptr(), 1);
         assert!(!unsafe { super::DirectFrameStack::generated_push(stack, callee as *const _) });
         unsafe { super::aura_direct_enter_frame(callee as *const _) };
+        assert_eq!(super::aura_direct_current_mutable_sink(0), 7);
+        // Its own callees hold nothing, so they come and go in generated
+        // code and read no sink.
+        assert!(unsafe { super::DirectFrameStack::generated_push(stack, caller as *const _) });
+        assert!(unsafe { super::DirectFrameStack::generated_push(stack, caller as *const _) });
+        assert_eq!(super::aura_direct_current_mutable_sink(0), 0);
+        assert!(unsafe { super::DirectFrameStack::generated_pop(stack) });
+        assert!(unsafe { super::DirectFrameStack::generated_pop(stack) });
         assert_eq!(super::aura_direct_current_mutable_sink(0), 7);
         assert!(
             !unsafe { super::DirectFrameStack::generated_pop(stack) },
@@ -17259,13 +17358,21 @@ fn native_runtime_returned_views_store_only_calls_that_use_them() {
         "plain calls must not store returned-view records"
     );
 
+    assert_eq!(views.pop_guard(), 0);
+
     // A callee's returned projection reaches its caller once.
     views.enter(1, Vec::new());
     views.enter(2, Vec::new());
     let callee = views.current_mut(2);
     callee.returned = Some("items[*]".to_string());
     callee.returned_selectors.push(9);
+    assert_eq!(views.pop_guard(), 2, "the callee's own exit has work");
     views.exit(2);
+    assert_eq!(
+        views.pop_guard(),
+        2,
+        "the next exit at depth 2 replaces the handed-over view"
+    );
     assert_eq!(
         views
             .current(1)
@@ -17274,6 +17381,7 @@ fn native_runtime_returned_views_store_only_calls_that_use_them() {
     );
     assert_eq!(views.take_pending_child(1).as_deref(), Some("items[*]"));
     assert_eq!(views.take_pending_child(1), None);
+    assert_eq!(views.pop_guard(), 2, "the selectors are still handed over");
 
     // A later child that returns no view clears the caller's earlier one.
     views.enter(2, Vec::new());
@@ -17289,6 +17397,7 @@ fn native_runtime_returned_views_store_only_calls_that_use_them() {
 
     // Mutable sinks belong to the call that received them.
     views.enter(1, vec![5]);
+    assert_eq!(views.pop_guard(), 1);
     views.enter(2, Vec::new());
     assert!(views.current(2).is_none());
     views.exit(2);
@@ -23166,10 +23275,17 @@ fn queue_item_helpers_return_the_item_box_or_null_and_discarded_sends_build_no_r
         },
         7
     );
+    // An `int64` put passes the integer and arrives as the same item.
+    super::aura_direct_channel_send_discarded_i64(channel, i64::MIN);
+    assert_eq!(
+        unsafe { take_int(super::aura_direct_channel_recv_item(channel)) },
+        i128::from(i64::MIN)
+    );
     expect_unit(super::aura_direct_channel_close(channel));
     // A send to a closed queue drops its value, as its discarded `Result`
     // would have.
     super::aura_direct_channel_send_discarded(channel, int_value(8));
+    super::aura_direct_channel_send_discarded_i64(channel, 9);
     assert!(super::aura_direct_channel_recv_item(channel).is_null());
     assert!(super::aura_direct_channel_recv_in_task_group_item(channel, group).is_null());
     assert!(super::aura_direct_channel_recv_with_registered_producers_item(channel).is_null());
@@ -24277,6 +24393,25 @@ fn direct_scalar_wrappers_reject_out_of_range_values_and_wrong_receivers() {
     );
     assert_eq!(
         capture_direct_boundary_error_message(|| {
+            super::aura_direct_string_bytes(int_value(1));
+        }),
+        "expected `str`, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_string_clone(int_value(1));
+        }),
+        "expected `str`, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            let mut len = 0_i64;
+            super::aura_direct_string_words(int_value(1), &mut len);
+        }),
+        "expected `str`, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
             super::aura_direct_integer_to_float(string_value("x"));
         }),
         "direct backend expected an integer, found `str`"
@@ -24827,11 +24962,25 @@ fn direct_tcp_wrappers_cover_stream_reads_at_end_of_stream_and_closed_resources(
     assert!(coverage_is_none(expect_result_ok_payload(
         super::aura_direct_tcp_stream_read_line(client_ptr, duration_value(5_000)),
     )));
+    // The end of the stream is a null line with no failure.
+    let mut failure = std::ptr::null_mut();
+    assert!(super::aura_direct_tcp_stream_read_line_try(
+        client_ptr,
+        duration_value(5_000),
+        &mut failure
+    )
+    .is_null());
+    assert!(failure.is_null());
     assert!(coverage_is_none(expect_result_ok_payload(
         super::aura_direct_tcp_stream_read_bytes(client_ptr, int_value(4), duration_value(5_000)),
     )));
     expect_unit(super::aura_direct_tcp_stream_close(client_ptr));
     let timeout = || duration_value(1_000);
+    // A closed stream fails, and the failure word holds the `Result.Err`.
+    assert!(
+        super::aura_direct_tcp_stream_read_line_try(client_ptr, timeout(), &mut failure).is_null()
+    );
+    expect_result_err_payload(failure);
     expect_result_err_payload(super::aura_direct_tcp_stream_read_all(
         client_ptr,
         timeout(),
@@ -24851,6 +25000,11 @@ fn direct_tcp_wrappers_cover_stream_reads_at_end_of_stream_and_closed_resources(
         timeout(),
     ));
     expect_result_err_payload(super::aura_direct_tcp_stream_write_all(
+        client_ptr,
+        string_value("x"),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_tcp_stream_write_all_try(
         client_ptr,
         string_value("x"),
         timeout(),
@@ -26237,7 +26391,7 @@ fn direct_span_operations_check_every_range_against_the_base_list() {
     )));
 
     let extracted = span(base, EXTRACT, [1, 3, 0, 0, 0, 0, 0, 0], null);
-    expect_unit(super::aura_direct_vec_reverse_in_place(extracted));
+    assert_eq!(super::aura_direct_vec_reverse_in_place(extracted), 1);
     expect_unit(span(base, RESTORE, [1, 0, 0, 0, 0, 0, 0, 0], extracted));
     expect_unit(span(base, FILL, [3, 2, 0, 0, 0, 0, 0, 0], int_value(0)));
     assert_eq!(
@@ -26712,6 +26866,11 @@ fn list_element_reads_borrow_the_element_in_place() {
         1
     );
     assert_eq!(super::aura_direct_vec_element_len(names, 0, 0, 0), 6);
+    // A `str` counts its characters, not its bytes.
+    let texts = string_vec(&["h\u{e9}llo", ""]);
+    assert_eq!(super::aura_direct_vec_element_len(texts, 0, 0, 0), 5);
+    assert_eq!(super::aura_direct_vec_element_len(texts, -1, 0, 0), 0);
+    unsafe { release_value(texts) };
 
     let groups = super::aura_direct_vec_empty();
     super::aura_direct_vec_push_in_place(groups, int_vec(&[1, 2, 3]));
@@ -27215,6 +27374,139 @@ fn a_full_scalar_list_grows_from_what_generated_code_left() {
     super::aura_direct_vec_push_scalar(list, 1, 2);
     assert_eq!(super::aura_direct_vec_len(list), expected.len() as i64 + 1);
     for value in [list, copy] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn a_literal_list_cell_makes_one_frozen_list_with_its_str_view() {
+    use std::sync::atomic::{AtomicPtr, AtomicUsize};
+    let cell: &'static AtomicUsize = Box::leak(Box::default());
+    let tag_cell = AtomicPtr::new(std::ptr::null_mut());
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "list".to_string(),
+        vec![Type::named("str")],
+    ));
+    let texts = "AByz";
+    let lens = [1u32, 1, 2]
+        .iter()
+        .flat_map(|len| len.to_le_bytes())
+        .collect::<Vec<_>>();
+    let make = || unsafe {
+        super::aura_direct_str_literal_list_cell(
+            cell,
+            &tag_cell,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            texts.as_ptr(),
+            lens.as_ptr(),
+            3,
+        )
+    };
+    let first = make();
+    assert_eq!(make(), first);
+    assert!(super::direct_value_is_frozen(first));
+    assert_eq!(
+        unsafe { &*first }.list_access.load(Ordering::Relaxed),
+        super::DirectListAccess::Str as u32
+    );
+    match unsafe { value_ref(first) } {
+        Value::Vec(vector) => {
+            assert_eq!(*vector.element_type, Type::named("str"));
+            assert_eq!(vector.elements.len(), 3);
+            assert_eq!(
+                vector.elements.value_at(2),
+                Some(&Value::String("yz".into()))
+            );
+        }
+        other => panic!("expected a list, found {other:?}"),
+    }
+    // A caller's release leaves it as it is.
+    unsafe { release_value(first) };
+    assert_eq!(make(), first);
+    // Only a list of `str` values gets the view.
+    let numbers = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_scalar(numbers, 1, 0);
+    unsafe { &*numbers }.make_str_view();
+    assert_ne!(
+        unsafe { &*numbers }.list_access.load(Ordering::Relaxed),
+        super::DirectListAccess::Str as u32
+    );
+    unsafe { release_value(numbers) };
+}
+
+#[test]
+fn str_bytes_are_copied_from_their_words() {
+    for text in ["", "h\u{e9}llo"] {
+        let bytes = unsafe { super::aura_direct_string_to_bytes_view(text.as_ptr(), text.len()) };
+        match unsafe { value_ref(bytes) } {
+            Value::Vec(vector) => assert_eq!(*vector.element_type, Type::named("uint8")),
+            other => panic!("expected a list, found {other:?}"),
+        }
+        let copied = (0..super::aura_direct_vec_len(bytes))
+            .map(|index| super::aura_direct_vec_index_scalar(bytes, index, 6) as u8)
+            .collect::<Vec<_>>();
+        assert_eq!(copied, text.as_bytes());
+        unsafe { release_value(bytes) };
+    }
+}
+
+#[test]
+fn str_bytes_extend_a_byte_list_from_their_words() {
+    use super::DirectListAccess;
+    let bytes = |list: *mut OpaqueValue| -> Vec<u8> {
+        (0..super::aura_direct_vec_len(list))
+            .map(|index| super::aura_direct_vec_index_scalar(list, index, 6) as u8)
+            .collect()
+    };
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "list".to_string(),
+        vec![Type::named("uint8")],
+    ));
+    let list = super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+    // No bytes change nothing, and need no address.
+    super::aura_direct_vec_extend_utf8(list, std::ptr::null(), 0);
+    assert_eq!(super::aura_direct_vec_len(list), 0);
+    let text = "h\u{e9}llo";
+    // The first bytes give the list its form, and the next find it.
+    let (head, tail) = text.split_at(1);
+    for part in [head, tail] {
+        super::aura_direct_vec_extend_utf8(list, part.as_ptr(), part.len());
+    }
+    assert_eq!(list_view_access(list), DirectListAccess::Uint8 as u32);
+    // A byte generated code appended in place is kept.
+    let len = list_view_len(list);
+    assert_eq!(len, text.len());
+    assert!(len < list_view_capacity(list));
+    let layout = super::direct_list_layout();
+    unsafe {
+        let base = list as *mut u8;
+        let elements = *(base.add(layout.elements_offset as usize) as *const usize) as *mut u8;
+        *elements.add(len) = b'!';
+        *(base.add(layout.len_offset as usize) as *mut usize) = len + 1;
+    }
+    let long = "a text longer than the room the list has left";
+    super::aura_direct_vec_extend_utf8(list, long.as_ptr(), long.len());
+    let mut expected = format!("{text}!{long}").into_bytes();
+    assert_eq!(bytes(list), expected);
+    assert_eq!(list_view_len(list), expected.len());
+    // A list that shares its storage takes the general path, which copies.
+    let copy = super::aura_direct_clone_value(list);
+    super::aura_direct_vec_extend_utf8(list, b"z".as_ptr(), 1);
+    assert_eq!(bytes(copy), expected);
+    expected.push(b'z');
+    assert_eq!(bytes(list), expected);
+    // So do a list shared with another thread and one of no form yet.
+    unsafe { super::share_direct_value(copy) };
+    super::aura_direct_vec_extend_utf8(copy, b"yz".as_ptr(), 2);
+    let mut shared = expected[..expected.len() - 1].to_vec();
+    shared.extend_from_slice(b"yz");
+    assert_eq!(bytes(copy), shared);
+    let untyped = super::aura_direct_vec_empty();
+    super::aura_direct_vec_extend_utf8(untyped, b"ab".as_ptr(), 2);
+    assert_eq!(bytes(untyped), b"ab");
+    for value in [list, copy, untyped] {
         unsafe { release_value(value) };
     }
 }
@@ -27899,6 +28191,174 @@ fn a_tag_through_a_cell_records_the_shape_until_the_next_write() {
 }
 
 #[test]
+fn a_freed_scalar_list_is_the_next_empty_list_of_its_type() {
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let ints = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+            let floats = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+            let list_of = |element: &str| {
+                super::canonical_runtime_type_name(&Type::Named(
+                    "list".to_string(),
+                    vec![Type::named(element)],
+                ))
+            };
+            let (int_list, float_list) = (list_of("int64"), list_of("float64"));
+            let empty = |cell: &std::sync::atomic::AtomicPtr<std::ffi::c_void>, name: &str| {
+                super::aura_direct_vec_empty_tagged(cell, name.as_ptr(), name.len())
+            };
+            let entries =
+                || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
+            let int64 = super::DirectScalarKind::Int64 as i64;
+
+            let first = empty(&ints, &int_list);
+            for bits in 0..3 {
+                super::aura_direct_vec_push_scalar(first, bits, int64);
+            }
+            unsafe { super::aura_direct_release_last_owned_value(first) };
+            assert!(entries().is_empty());
+            // A list of another type makes a box of its own.
+            let other = empty(&floats, &float_list);
+            assert_ne!(other, first);
+            unsafe { super::aura_direct_release_last_owned_value(other) };
+            // `other` was freed last, so it is the spare now, and `first`
+            // is freed.
+            let again = empty(&floats, &float_list);
+            assert_eq!(again, other);
+            unsafe { super::aura_direct_release_last_owned_value(again) };
+
+            // The spare comes back empty, owned by the ledger, with the
+            // shape of its tag and room for the elements it held.
+            // The float spare is not taken for an int list.
+            let list = empty(&ints, &int_list);
+            assert_ne!(list, other);
+            for bits in 0..3 {
+                super::aura_direct_vec_push_scalar(list, bits, int64);
+            }
+            unsafe { super::aura_direct_release_last_owned_value(list) };
+            let reused = empty(&ints, &int_list);
+            assert_eq!(reused, list);
+            // Room shows until the next runtime access takes it back.
+            assert!(list_view_capacity(reused) >= 3);
+            assert_eq!(super::aura_direct_vec_len(reused), 0);
+            assert_eq!(entries(), [(reused as usize, 1)]);
+            assert_eq!(
+                unsafe { &*reused }
+                    .shape_tag
+                    .load(Ordering::Relaxed)
+                    .cast::<std::ffi::c_void>(),
+                ints.load(Ordering::Relaxed)
+            );
+            super::aura_direct_vec_push_scalar(reused, 7, int64);
+            assert_eq!(super::aura_direct_vec_len(reused), 1);
+
+            // A list whose storage another list shares is freed, not kept.
+            let copy = super::aura_direct_clone_value(reused);
+            unsafe { super::aura_direct_release_last_owned_value(reused) };
+            assert!(super::SPARE_LIST.with(|spare| spare.0.get().is_null()));
+            unsafe { super::aura_direct_release_value(copy) };
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+}
+
+#[test]
+fn a_scalar_list_extend_consumed_is_the_next_empty_list() {
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let ints = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+            let name = super::canonical_runtime_type_name(&Type::Named(
+                "list".to_string(),
+                vec![Type::named("int64")],
+            ));
+            let empty = || super::aura_direct_vec_empty_tagged(&ints, name.as_ptr(), name.len());
+            let entries =
+                || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
+            let int64 = super::DirectScalarKind::Int64 as i64;
+            let push = |list, bits| super::aura_direct_vec_push_scalar(list, bits, int64);
+
+            // An empty `out` takes `entry`'s storage, so `entry` is freed.
+            let out = empty();
+            let entry = empty();
+            push(entry, 1);
+            assert_eq!(super::aura_direct_vec_extend_in_place(out, entry), 1);
+            assert_eq!(entries(), [(out as usize, 1)]);
+            assert!(super::SPARE_LIST.with(|spare| spare.0.get().is_null()));
+
+            // A non-empty `out` copies, and `entry` becomes the spare.
+            let entry = empty();
+            push(entry, 2);
+            push(entry, 3);
+            assert_eq!(super::aura_direct_vec_extend_in_place(out, entry), 1);
+            assert_eq!(entries(), [(out as usize, 1)]);
+            assert_eq!(super::aura_direct_vec_len(out), 3);
+            let reused = empty();
+            assert_eq!(reused, entry);
+            assert_eq!(super::aura_direct_vec_len(reused), 0);
+
+            // A shared `entry` is consumed as before and leaves no spare.
+            push(reused, 4);
+            let copy = super::aura_direct_clone_value(reused);
+            assert_eq!(super::aura_direct_vec_extend_in_place(out, reused), 1);
+            assert!(super::SPARE_LIST.with(|spare| spare.0.get().is_null()));
+            assert_eq!(super::aura_direct_vec_len(copy), 1);
+            assert_eq!(super::aura_direct_vec_len(out), 4);
+            unsafe { super::aura_direct_release_value(copy) };
+            unsafe { super::aura_direct_release_value(out) };
+            assert!(entries().is_empty());
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+}
+
+#[test]
+fn a_list_made_with_room_takes_its_literal_in_place() {
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "list".to_string(),
+        vec![Type::named("int64")],
+    ));
+    let list = super::aura_direct_vec_empty_tagged_with_room(
+        &cell,
+        descriptor.as_ptr(),
+        descriptor.len(),
+        5,
+    );
+    assert!(list_view_capacity(list) >= 5);
+    for bits in 0..5 {
+        assert!(append_like_generated_code(
+            list,
+            bits,
+            super::DirectListAccess::Int64
+        ));
+    }
+    assert_eq!(super::aura_direct_vec_len(list), 5);
+    let tag = cell.load(std::sync::atomic::Ordering::Acquire);
+    assert_eq!(
+        unsafe { &*list }
+            .shape_tag
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .cast::<std::ffi::c_void>(),
+        tag
+    );
+    unsafe { release_value(list) };
+    // A list of values has room for its elements too.
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "list".to_string(),
+        vec![Type::named("str")],
+    ));
+    let names = super::aura_direct_vec_empty_tagged_with_room(
+        &cell,
+        descriptor.as_ptr(),
+        descriptor.len(),
+        3,
+    );
+    assert_eq!(super::aura_direct_vec_len(names), 0);
+    unsafe { release_value(names) };
+}
+
+#[test]
 fn opaque_values_keep_their_box_size() {
     // Every boxed value pays for these bytes: the 64-byte value, the
     // list view (24, with the room for in-place appends sharing a word
@@ -27932,7 +28392,7 @@ fn list_view_follows_every_write() {
     assert_eq!(list_view_len(list), 39);
     assert_eq!(read_list_view_word(copy, 39, int64), 99);
     assert_eq!(read_list_view_word(list, 38, int64), 38);
-    expect_unit(super::aura_direct_vec_clear_in_place(list));
+    assert_eq!(super::aura_direct_vec_clear_in_place(list), 1);
     assert_eq!(list_view_len(list), 0);
     // A write that unwinds still refreshes the view.
     let result = std::panic::catch_unwind(|| unsafe {
@@ -29229,6 +29689,53 @@ fn direct_empty_tagged_lists_start_in_their_element_form() {
     }
     unsafe { release_value(list) };
 
+    // The literals of a list literal join it in one call, from their
+    // texts one after another and their lengths.
+    let list = super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+    let texts = "ab\u{e9}a much longer literal than fits inline";
+    let lens = [1u32, 0, 3, 38]
+        .iter()
+        .flat_map(|len| len.to_le_bytes())
+        .collect::<Vec<_>>();
+    super::aura_direct_vec_push_str_literals(list, texts.as_ptr(), lens.as_ptr(), 4);
+    // Their view is ready for the reads that follow.
+    assert_eq!(list_view_access(list), super::DirectListAccess::Str as u32);
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => assert_eq!(
+            vector.elements.to_vec(),
+            ["a", "", "b\u{e9}", "a much longer literal than fits inline"]
+                .map(|text| Value::String(text.into()))
+                .to_vec()
+        ),
+        other => panic!("expected a list, found {other:?}"),
+    }
+    unsafe { release_value(list) };
+
+    // A copy of a `str` joins a list from its bytes, which may be an
+    // element of the same list, and an untyped list takes its type.
+    let list = super::aura_direct_vec_empty();
+    let word = "a much longer text than fits inline";
+    super::aura_direct_vec_push_str_view(list, word.as_ptr(), word.len());
+    let copy = super::aura_direct_vec_index(list, 0, 1, 1);
+    super::aura_direct_vec_push_str_view(list, super::aura_direct_string_bytes(copy), word.len());
+    unsafe { release_value(copy) };
+    super::aura_direct_vec_push_str_view(list, word.as_ptr(), 1);
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => {
+            assert_eq!(
+                vector.elements.to_vec(),
+                vec![
+                    Value::String(word.into()),
+                    Value::String(word.into()),
+                    Value::String("a".into())
+                ]
+            );
+            assert_eq!(*vector.element_type, Type::named("str"));
+        }
+        other => panic!("expected a list, found {other:?}"),
+    }
+    unsafe { release_value(list) };
+
     let message = capture_direct_boundary_error_message(|| {
         let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
         super::aura_direct_vec_empty_tagged(&cell, b"int64".as_ptr(), 5);
@@ -29265,6 +29772,23 @@ fn direct_retags_skip_values_that_already_have_the_shape() {
         &named("list", vec![Type::named("float32")])
     ));
     assert!(changes(&list("int64"), &named("set", vec![int64()])));
+    // An element type that is the tag's own shared copy, or an equal type
+    // of its own, already has the shape.
+    let nested = named("list", vec![named("list", vec![int64()])]);
+    let nested_tag = tag(&nested);
+    let nested_list = |element_type: crate::runtime_value::SharedType| {
+        Value::Vec(VecValue {
+            element_type,
+            elements: ListElements::new(),
+            str_view: Default::default(),
+        })
+    };
+    let shared = nested_tag.collection_args[0].clone();
+    assert!(!super::retag_changes(&nested_list(shared), &nested_tag));
+    let own = crate::runtime_value::SharedType::from(named("list", vec![int64()]));
+    assert!(!super::retag_changes(&nested_list(own), &nested_tag));
+    let other = crate::runtime_value::SharedType::from(named("list", vec![Type::named("str")]));
+    assert!(super::retag_changes(&nested_list(other), &nested_tag));
     let set = Value::Set(SetValue {
         element_type: crate::runtime_value::SharedType::from(Type::named("str")),
         elements: SetElements::new(),
@@ -29440,9 +29964,14 @@ fn str_lists_switch_to_the_str_view_after_enough_misses() {
         super::aura_direct_vec_push_in_place(list, string_value(name));
     }
     assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
-    // One miss in eight elements builds the view.
+    // One miss in eight elements builds the view, and never fewer than
+    // four misses.
     assert_eq!(compare_element_with_literal(list, 7, 5, "user-7"), 1);
     assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    for _ in 0..2 {
+        assert_eq!(compare_element_with_literal(list, 3, 6, "user-7"), 1);
+        assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    }
     assert_eq!(compare_element_with_literal(list, 3, 6, "user-7"), 1);
     assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
     assert_eq!(str_view_texts(list), names);
@@ -29451,7 +29980,7 @@ fn str_lists_switch_to_the_str_view_after_enough_misses() {
     // A write switches the view back until enough reads miss again.
     super::aura_direct_vec_push_in_place(list, string_value("ünïcode"));
     assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
-    for index in 0..3 {
+    for index in 0..4 {
         compare_element_with_literal(list, index, 5, "x");
     }
     assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
@@ -29481,12 +30010,59 @@ fn str_lists_switch_to_the_str_view_after_enough_misses() {
     assert_eq!(list_view_access(shared), DirectListAccess::None as u32);
     unsafe { release_value(shared) };
 
-    // An empty list builds an empty view on its first miss.
+    // An empty list builds an empty view after four misses.
     let empty = super::aura_direct_vec_empty();
+    for _ in 0..3 {
+        unsafe { &*empty }.note_str_view_miss();
+    }
+    assert_eq!(list_view_access(empty), DirectListAccess::Values as u32);
     unsafe { &*empty }.note_str_view_miss();
     assert_eq!(list_view_access(empty), DirectListAccess::Str as u32);
     assert_eq!(super::aura_direct_vec_len(empty), 0);
     unsafe { release_value(empty) };
+}
+
+#[test]
+fn a_discarded_element_store_replaces_the_element() {
+    let list = string_vec(&["alpha", "b", "c"]);
+    super::aura_direct_vec_set_index_discarded(list, 1, string_value("beta"), 0, 0);
+    super::aura_direct_vec_set_index_discarded(list, -1, string_value("gamma"), 0, 0);
+    assert_eq!(unsafe { super::value_ref(list) }, unsafe {
+        take_value(string_vec(&["alpha", "beta", "gamma"]))
+    });
+    unsafe { release_value(list) };
+}
+
+#[test]
+fn a_str_stored_in_place_keeps_the_str_view() {
+    use super::DirectListAccess;
+    let list = string_vec(&["alpha", "b", "c"]);
+    unsafe { &*list }.make_str_view();
+    assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
+    let long = "a text too long to keep inline in its value";
+    let unit = super::aura_direct_vec_set_index_in_place(list, 1, string_value(long), 0, 0);
+    unsafe { release_value(unit) };
+    assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
+    assert_eq!(str_view_texts(list), ["alpha", long, "c"]);
+    let unit = super::aura_direct_vec_set_index_in_place(list, -1, string_value("z"), 0, 0);
+    unsafe { release_value(unit) };
+    assert_eq!(str_view_texts(list), ["alpha", long, "z"]);
+
+    // Storage another list shares is copied by the store, so the view
+    // waits for misses again.
+    let before = unsafe { super::value_ref(list) };
+    let copy = super::boxed_value(before.clone());
+    let unit = super::aura_direct_vec_set_index_in_place(list, 0, string_value("y"), 0, 0);
+    unsafe { release_value(unit) };
+    assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    assert_eq!(unsafe { super::value_ref(copy) }, before);
+    // Any other value switches the view back as every write does.
+    unsafe { &*list }.make_str_view();
+    let unit = super::aura_direct_vec_set_index_in_place(list, 0, int_value(1), 0, 0);
+    unsafe { release_value(unit) };
+    assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    unsafe { release_value(copy) };
+    unsafe { release_value(list) };
 }
 
 #[test]
@@ -29958,7 +30534,144 @@ fn literal_affix_tests_and_str_element_copies_read_text_in_place() {
         expect_string(super::aura_direct_vec_str_element(list, -2, 1, 1)),
         "a"
     );
+    // The words of an element are read where the list keeps them; any other
+    // element is read from a copy, which owns them.
+    let words = |list, index| {
+        let mut out = [0_i64; 2];
+        let ptr = unsafe {
+            super::aura_direct_vec_str_element_words(list, index, 1, 1, out.as_mut_ptr())
+        };
+        let text = if ptr.is_null() {
+            None
+        } else {
+            let bytes = unsafe { std::slice::from_raw_parts(ptr, out[0] as usize) };
+            Some(String::from_utf8(bytes.to_vec()).unwrap())
+        };
+        (text, out[1] as *mut OpaqueValue)
+    };
+    let (text, owner) = words(list, -1);
+    assert_eq!((text.as_deref(), owner), (Some("bc"), std::ptr::null_mut()));
+    // Each read in place counts a miss of the list's view, and once the
+    // misses pay for it the list keeps a `str` view for the reads after.
+    assert_eq!(
+        list_view_access(list),
+        super::DirectListAccess::Values as u32
+    );
+    for _ in 1..super::STR_VIEW_MIN_MISSES {
+        assert_eq!(words(list, 0).0.as_deref(), Some("a"));
+    }
+    assert_eq!(list_view_access(list), super::DirectListAccess::Str as u32);
     unsafe { release_value(list) };
+    let mixed = boxed_value(Value::Vec(VecValue::new(
+        Type::named("str"),
+        vec![
+            Value::String("a".into()),
+            Value::Int(IntegerValue::from_i64(4)),
+        ]
+        .into(),
+    )));
+    let (text, owner) = words(mixed, 1);
+    assert_eq!(text, None, "a value that is not a `str` has no words");
+    assert!(!owner.is_null());
+    unsafe { release_value(owner) };
+    unsafe { release_value(mixed) };
+    let message = capture_direct_boundary_error_message(move || {
+        let list = string_vec(&["a"]);
+        words(list, 3);
+    });
+    assert!(message.contains("out of bounds"), "{message}");
+
+    // `+` on words joins them in place, short or long, up to the limit.
+    let concat = |left: &str, right: &str| {
+        expect_string(super::aura_direct_concat_str_words(
+            left.as_ptr(),
+            left.len(),
+            right.as_ptr(),
+            right.len(),
+            1,
+            1,
+        ))
+    };
+    assert_eq!(concat("ab", "c"), "abc");
+    let long = "z".repeat(40);
+    assert_eq!(concat(&long, "é"), format!("{long}é"));
+    let message = capture_direct_boundary_error_message(move || {
+        let half = "x".repeat(crate::runtime_value::MAX_STRING_BYTES / 2 + 1);
+        concat(&half, &half);
+    });
+    assert!(message.contains("allocation limit"), "{message}");
+
+    // A chain of `+` joins every part in one box, and the first step over
+    // the limit stops the program at the chain's span.
+    let chain = |parts: Vec<String>| {
+        let words = parts
+            .iter()
+            .flat_map(|part| [part.as_ptr() as usize, part.len()])
+            .collect::<Vec<_>>();
+        expect_string(super::aura_direct_concat_str_parts(
+            words.as_ptr(),
+            parts.len(),
+            3,
+            7,
+        ))
+    };
+    let parts = |parts: &[&str]| parts.iter().map(|part| part.to_string()).collect();
+    assert_eq!(chain(parts(&["a", ", ", "b", "!"])), "a, b!");
+    assert_eq!(chain(parts(&[&long, "é", ""])), format!("{long}é"));
+    assert_eq!(chain(Vec::new()), "");
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        let half = "x".repeat(crate::runtime_value::MAX_STRING_BYTES / 2);
+        chain(vec![half.clone(), "-".to_string(), half]);
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert!(
+        diagnostic.message.contains("allocation limit"),
+        "{diagnostic:?}"
+    );
+    assert_eq!(diagnostic.span, Some(Span::new(3, 7)));
+
+    // `text = text + other` appends to the only reference in place, copies
+    // a shared box and leaves it as it was, copies bytes of the text
+    // itself before it grows, and stops a result over the limit at the
+    // step's span.
+    let append = |text: *mut OpaqueValue, other: &str| {
+        super::aura_direct_str_append_words(text, other.as_ptr(), other.len(), 4, 9)
+    };
+    let text = string_value("ab");
+    let grown = append(text, "cd");
+    assert_eq!(grown, text, "the only reference grows in place");
+    let grown = append(grown, &long);
+    assert_eq!(grown, text);
+    assert_eq!(expect_string(grown), format!("abcd{long}"));
+    let shared = string_value("x");
+    let kept = unsafe { retain_value(shared) };
+    let copy = append(shared, "é");
+    assert_ne!(copy, shared, "a shared box is copied");
+    assert_eq!(expect_string(copy), "xé");
+    assert_eq!(expect_string(kept), "x");
+    let own = string_value(&long);
+    let own_words = unsafe {
+        super::with_value(own, |value| match value {
+            Value::String(text) => (text.as_str().as_ptr(), text.len()),
+            _ => unreachable!(),
+        })
+    };
+    let doubled = super::aura_direct_str_append_words(own, own_words.0, own_words.1, 4, 9);
+    assert_eq!(expect_string(doubled), format!("{long}{long}"));
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        let half = "x".repeat(crate::runtime_value::MAX_STRING_BYTES / 2 + 1);
+        let text = string_value(&half);
+        append(text, &half);
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(diagnostic.span, Some(Span::new(4, 9)));
+    let number = int_value(3);
+    let address = number as usize;
+    let message = capture_direct_boundary_error_message(move || {
+        append(address as *mut OpaqueValue, "a");
+    });
+    assert_eq!(message, "expected `str`, found `integer`");
+    unsafe { release_value(number) };
 
     let limit = crate::runtime_value::MAX_STRING_BYTES;
     let left = crate::text::Text::from("x".repeat(limit));
@@ -30085,6 +30798,64 @@ fn a_number_parse_for_a_slot_keeps_the_number_or_null() {
         }),
         "a number parse expects `str`, found `integer`"
     );
+}
+
+#[test]
+fn a_split_of_words_gives_the_parts_a_split_of_the_box_gives() {
+    let split = |text: &str, separator: &str| {
+        let parts = super::aura_direct_string_split_literal_words(
+            text.as_ptr(),
+            text.len(),
+            separator.as_ptr(),
+            separator.len(),
+        );
+        let boxed = super::aura_direct_string_split_literal(
+            string_value(text),
+            separator.as_ptr(),
+            separator.len(),
+        );
+        let (parts, boxed) = unsafe { (take_value(parts), take_value(boxed)) };
+        assert_eq!(parts, boxed);
+        parts
+    };
+    let strings = |parts: &[&str]| {
+        Value::Vec(VecValue {
+            element_type: crate::runtime_value::SharedType::named("str"),
+            elements: parts
+                .iter()
+                .map(|part| Value::String(part.to_string().into()))
+                .collect::<Vec<_>>()
+                .into(),
+            str_view: Default::default(),
+        })
+    };
+    assert_eq!(split("1 read 20", " "), strings(&["1", "read", "20"]));
+    assert_eq!(split("a, b,, c", ", "), strings(&["a", "b,", "c"]));
+    assert_eq!(split("", " "), strings(&[""]));
+    assert_eq!(split("é é", " "), strings(&["é", "é"]));
+}
+
+#[test]
+fn an_int64_parse_for_a_word_slot_writes_the_number_or_reports_none() {
+    let parse = |text: &str| {
+        let mut out = -1_i64;
+        let found =
+            unsafe { super::aura_direct_parse_int64_word(text.as_ptr(), text.len(), &mut out) };
+        (found == 1).then_some(out)
+    };
+    assert_eq!(parse("-12"), Some(-12));
+    assert_eq!(parse("+7"), Some(7));
+    assert_eq!(parse("9223372036854775807"), Some(i64::MAX));
+    assert_eq!(parse("9223372036854775808"), None);
+    assert_eq!(parse(" 1"), None);
+    assert_eq!(parse("x"), None);
+    assert_eq!(parse(""), None);
+    let mut out = 5_i64;
+    assert_eq!(
+        unsafe { super::aura_direct_parse_int64_word(std::ptr::null(), 0, &mut out) },
+        0
+    );
+    assert_eq!(out, 5);
 }
 
 #[test]
@@ -32562,6 +33333,35 @@ fn direct_bit_methods_check_arguments_and_preserve_wide_values() {
 }
 
 #[test]
+fn tagged_collections_share_the_tags_type_arguments() {
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let list_of_ints = Type::Named("list".to_string(), vec![Type::named("int64")]);
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "dict".to_string(),
+        vec![Type::named("str"), list_of_ints.clone()],
+    ));
+    let first = super::aura_direct_map_empty();
+    let second = super::aura_direct_map_empty();
+    for map in [first, second] {
+        super::aura_direct_tag_value_type_cell(map, &cell, descriptor.as_ptr(), descriptor.len());
+    }
+    let types = |map: *mut OpaqueValue| match unsafe { value_ref(map) } {
+        Value::Map(map) => (map.key_type.clone(), map.value_type.clone()),
+        other => panic!("a map, not {other:?}"),
+    };
+    let (first_key, first_value) = types(first);
+    let (second_key, second_value) = types(second);
+    assert_eq!(*first_value, list_of_ints);
+    assert_eq!(*first_key, Type::named("str"));
+    // Both maps hold the tag's one copy of each argument.
+    assert!(std::ptr::eq(&*first_value, &*second_value));
+    assert!(std::ptr::eq(&*first_key, &*second_key));
+    for map in [first, second] {
+        unsafe { release_value(map) };
+    }
+}
+
+#[test]
 fn float_trait_object_preserves_width_through_generic_boxing() {
     let f32_box = super::boxed_typed_value(Value::Float(1.5), "float32");
     assert_eq!(
@@ -33058,52 +33858,107 @@ fn padded_int64_parts_match_the_general_formatter() {
 }
 
 #[test]
-fn extending_a_byte_list_with_a_text_appends_its_bytes() {
-    let bytes_of = |list: *mut OpaqueValue| {
-        super::with_vector(list, |vector| {
-            (0..vector.elements.len())
-                .map(|index| match vector.elements.at(index).into_owned() {
-                    Value::Int(byte) => byte.as_i128().expect("a byte") as u8,
-                    other => panic!("expected a byte, found {other:?}"),
-                })
-                .collect::<Vec<_>>()
-        })
+fn native_runtime_reads_a_server_sent_event_into_words() {
+    use crate::runtime_value::http_client::{http_send, HttpRequestOptions, HttpResponseValue};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a test server binds");
+    let address = listener.local_addr().expect("a local address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("a connection");
+        let mut request = Vec::new();
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).expect("a request byte");
+            request.push(byte[0]);
+        }
+        let body = "event: tick\nid: 7\ndata: ab\nretry: 30\n\ndata: cd\n\n";
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(reply.as_bytes()).expect("a reply");
+    });
+    let options = HttpRequestOptions {
+        timeout: Some(StdDuration::from_secs(5)),
+        read_timeout: Some(StdDuration::from_secs(5)),
+        ..Default::default()
     };
-    let text = string_value("a&é");
-    // A list that keeps bytes unboxed, and an empty one that keeps none yet.
-    let bytes = super::boxed_value(super::bytes_vec_value(b"<".to_vec()));
-    super::aura_direct_vec_extend_str_bytes(bytes, text);
-    super::aura_direct_vec_extend_str_bytes(bytes, text);
-    assert_eq!(bytes_of(bytes), "<a&éa&é".as_bytes());
-    let empty = super::aura_direct_vec_empty();
-    super::aura_direct_vec_extend_str_bytes(empty, text);
-    assert_eq!(bytes_of(empty), "a&é".as_bytes());
-    unsafe {
-        release_value(empty);
-        release_value(bytes);
+    let body = http_send(
+        "GET",
+        &format!("http://{address}/"),
+        Vec::new(),
+        b"",
+        &options,
+        None,
+    )
+    .expect("a response");
+    let stream = HttpResponseValue::new(body);
+    let stream_ptr = boxed_value(Value::HttpResponse(stream.clone()));
+    let read = |words: &mut [i64; 5], failure: &mut *mut OpaqueValue| {
+        super::aura_direct_http_read_event_try(stream_ptr, words.as_mut_ptr(), failure)
+    };
+    let mut failure = std::ptr::null_mut();
+    let mut words = [0i64; 5];
+    read(&mut words, &mut failure);
+    assert!(failure.is_null());
+    assert_eq!(words[0], 1);
+    assert_eq!(expect_string(words[1] as *mut OpaqueValue), "tick");
+    assert_eq!(expect_string(words[2] as *mut OpaqueValue), "ab");
+    assert_eq!(expect_string(words[3] as *mut OpaqueValue), "7");
+    assert_eq!(words[4], 30);
+    read(&mut words, &mut failure);
+    assert_eq!((words[0], words[4]), (1, -1));
+    assert_eq!(expect_string(words[1] as *mut OpaqueValue), "message");
+    assert_eq!(expect_string(words[2] as *mut OpaqueValue), "cd");
+    assert_eq!(expect_string(words[3] as *mut OpaqueValue), "7");
+    // The end of the body is an event that was not found, with empty text.
+    read(&mut words, &mut failure);
+    assert!(failure.is_null());
+    assert_eq!((words[0], words[4]), (0, -1));
+    for word in &words[1..4] {
+        assert_eq!(expect_string(*word as *mut OpaqueValue), "");
     }
+    // A closed stream fails, and the failure word holds the `Result.Err`.
+    stream.close();
+    let mut words = [9i64; 5];
+    read(&mut words, &mut failure);
+    assert_eq!(words, [9i64; 5]);
+    expect_result_err_payload(failure);
+    server.join().expect("the server");
+}
 
-    let address = text as usize;
-    let number = int_value(1);
-    let number_address = number as usize;
-    let diagnostic = capture_direct_boundary_diagnostic(move || {
-        super::aura_direct_vec_extend_str_bytes(
-            address as *mut OpaqueValue,
-            number_address as *mut OpaqueValue,
-        );
-    });
-    assert_eq!(diagnostic.message, "expected `str`, found `integer`");
-    let diagnostic = capture_direct_boundary_diagnostic(move || {
-        super::aura_direct_vec_extend_str_bytes(
-            address as *mut OpaqueValue,
-            address as *mut OpaqueValue,
-        );
-    });
-    assert_eq!(diagnostic.message, "expected `list`, found `str`");
-    unsafe {
-        release_value(number);
-        release_value(text);
+#[test]
+fn a_pushed_str_box_moves_its_text_into_the_list() {
+    let list = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_in_place(list, string_value("first"));
+    super::aura_direct_vec_push_in_place(list, string_value("a text too long to keep inline"));
+    // A box another holder shares is copied, not moved.
+    let shared = string_value("shared");
+    unsafe { super::aura_direct_retain_value(shared) };
+    super::aura_direct_vec_push_in_place(list, shared);
+    assert_eq!(
+        unsafe { super::value_ref(shared) },
+        Value::String("shared".into())
+    );
+    unsafe { release_value(shared) };
+    match unsafe { super::value_ref(list) } {
+        Value::Vec(vector) => {
+            assert_eq!(*vector.element_type, Type::named("str"));
+            assert_eq!(
+                vector
+                    .elements
+                    .value_refs()
+                    .expect("a list of values")
+                    .collect::<Vec<_>>(),
+                [
+                    &Value::String("first".into()),
+                    &Value::String("a text too long to keep inline".into()),
+                    &Value::String("shared".into()),
+                ]
+            );
+        }
+        other => panic!("expected a list, found {other:?}"),
     }
+    unsafe { release_value(list) };
 }
 
 #[test]

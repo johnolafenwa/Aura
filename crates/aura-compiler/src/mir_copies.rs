@@ -270,6 +270,170 @@ pub(crate) fn cancel_loan_copies(function: &mut MirFunction) {
         .retain(|local| !removed.contains(&local.name));
 }
 
+/// Moves an empty list literal that a block makes for a local and does
+/// not read again into the one branch that may read it, when the other
+/// branch starts by releasing it, as `mut entry: list[T] = []` followed by
+/// an `if` whose other arms assign `entry` does. The branch that released
+/// it no longer makes and frees an empty list. Both branches must be
+/// reached from the block alone.
+pub(crate) fn sink_unread_empty_lists(function: &mut MirFunction) {
+    use crate::mir::{instruction_place_mentions, terminator_place_mentions, Terminator};
+    let mut predecessors = HashMap::<String, usize>::new();
+    for block in &function.blocks {
+        for label in crate::mir::terminator_successors(&block.terminator) {
+            *predecessors.entry(label.to_string()).or_default() += 1;
+        }
+    }
+    let index_of = |function: &MirFunction, label: &str| {
+        function
+            .blocks
+            .iter()
+            .position(|block| block.label == label)
+    };
+    for position in 0..function.blocks.len() {
+        let Terminator::Branch {
+            then_label,
+            else_label,
+            ..
+        } = &function.blocks[position].terminator
+        else {
+            continue;
+        };
+        if then_label == else_label
+            || predecessors.get(then_label) != Some(&1)
+            || predecessors.get(else_label) != Some(&1)
+        {
+            continue;
+        }
+        let (Some(then_index), Some(else_index)) = (
+            index_of(function, then_label),
+            index_of(function, else_label),
+        ) else {
+            continue;
+        };
+        let block = &function.blocks[position];
+        let Some((made, local)) =
+            block
+                .instructions
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, instruction)| match instruction {
+                    Instruction::Assign {
+                        target,
+                        value: Rvalue::VecLiteral { elements, .. },
+                    } if elements.is_empty() && !target.contains('.') => {
+                        Some((index, target.clone()))
+                    }
+                    _ => None,
+                })
+        else {
+            continue;
+        };
+        let mut mentions = terminator_place_mentions(&block.terminator);
+        for instruction in &block.instructions[made + 1..] {
+            instruction_place_mentions(instruction, &mut mentions);
+        }
+        if mentions
+            .iter()
+            .any(|place| place.split('.').next() == Some(local.as_str()))
+        {
+            continue;
+        }
+        let releases = |index: usize| {
+            matches!(
+                function.blocks[index].instructions.first(),
+                Some(Instruction::Release { place }) if *place == local
+            )
+        };
+        let (released, kept) = match (releases(then_index), releases(else_index)) {
+            (true, false) => (then_index, else_index),
+            (false, true) => (else_index, then_index),
+            _ => continue,
+        };
+        let assign = function.blocks[position].instructions.remove(made);
+        function.blocks[released].instructions.remove(0);
+        function.blocks[kept].instructions.insert(0, assign);
+    }
+}
+
+/// Moves the `Release` of a `list[str]` local past the reads of an element
+/// read from it just before, up to the `Release` of that element in the
+/// same block, when nothing between names the list. The element then dies
+/// before its list, so a backend that reads the element where the list
+/// keeps it needs no copy of it when the list goes.
+pub(crate) fn sink_list_releases_past_element_reads(function: &mut MirFunction) {
+    use crate::mir::{instruction_place_mentions, CallTarget};
+    use crate::runtime_ops::{ListOp, RuntimeOp};
+    let str_lists = function
+        .local_types
+        .iter()
+        .map(|local| (&local.name, &local.ty))
+        .chain(function.params.iter().map(|param| (&param.name, &param.ty)))
+        .filter(|(_, ty)| {
+            matches!(ty, Type::Named(name, args)
+                if name == "list" && args.as_slice() == [Type::named("str")])
+        })
+        .map(|(name, _)| name.clone())
+        .collect::<BTreeSet<_>>();
+    if str_lists.is_empty() {
+        return;
+    }
+    let root = |place: &str| place.split('.').next().unwrap_or(place).to_string();
+    for block in &mut function.blocks {
+        let mut index = 0;
+        while index < block.instructions.len() {
+            let Instruction::Release { place: list } = &block.instructions[index] else {
+                index += 1;
+                continue;
+            };
+            let list = list.clone();
+            let element = (index > 0 && str_lists.contains(&list))
+                .then(|| match &block.instructions[index - 1] {
+                    Instruction::Assign {
+                        target,
+                        value:
+                            Rvalue::Call {
+                                callee:
+                                    CallTarget::Runtime {
+                                        op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked),
+                                        receiver: Some(Operand::Place(receiver)),
+                                        ..
+                                    },
+                                ..
+                            },
+                    } if *receiver == list && !target.contains('.') => Some(target.clone()),
+                    _ => None,
+                })
+                .flatten();
+            let Some(element) = element else {
+                index += 1;
+                continue;
+            };
+            let mut end = None;
+            for (later, instruction) in block.instructions.iter().enumerate().skip(index + 1) {
+                if matches!(instruction, Instruction::Release { place } if *place == element) {
+                    end = Some(later);
+                    break;
+                }
+                let mut mentions = Vec::new();
+                instruction_place_mentions(instruction, &mut mentions);
+                if mentions.iter().any(|place| root(place) == list) {
+                    break;
+                }
+            }
+            match end {
+                Some(end) => {
+                    let release = block.instructions.remove(index);
+                    block.instructions.insert(end, release);
+                    index = end + 1;
+                }
+                None => index += 1,
+            }
+        }
+    }
+}
+
 /// How many times each place root is read, plus one for each definition by
 /// an `Assign` or a second `ReadLoan`, so a count of 1 for a `ReadLoan`
 /// target means one definition and exactly one read.

@@ -1,0 +1,53 @@
+# A match on `parse_int64` keeps the number and whether the text parsed as
+# words, read from the text's bytes: a `str` parameter only read this way
+# takes the bytes of a list element or a literal without a box of its own.
+
+
+def try_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return 0
+
+
+def owned_int(text: str) -> int64:
+    match own parse_int64(text):
+        case Result.Ok(value):
+            return value * 2
+        case _:
+            return -1
+
+
+def kept(text: str) -> list[int64]:
+    mut values: list[int64] = []
+    match parse_int64(text):
+        case Result.Ok(value):
+            values.append(value)
+        case Result.Err(_):
+            pass
+    return values
+
+
+def main() -> int32:
+    mut total = 0
+    for line in ["1 a 20 300", "2 b x 4000", "3 c -5 9223372036854775807", "4 d 6 99999999999999999999"]:
+        fields = line.split(" ")
+        total += try_int(fields[0]) + try_int(fields[2])
+        print(f"{try_int(fields[3])} {owned_int(fields[2])}")
+    print(total)
+    print(try_int("77") + try_int("") + try_int("-0"))
+    local = f"{total}{total}"
+    match parse_int64(local):
+        case Result.Ok(value):
+            print(value)
+        case Result.Err(_):
+            print("none")
+    match parse_int64("123"):
+        case Result.Ok(value):
+            print(value + 1)
+        case Result.Err(_):
+            print("none")
+    print(kept("12"))
+    print(kept("1.0"))
+    return 0

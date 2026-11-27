@@ -1,0 +1,73 @@
+# `try stream.read_line()` on a TCP stream builds no `Result` or boxed
+# `str | None` for a line: the line, the end of the stream, and a failed
+# read each reach the `try` as the file read's do.
+import io
+import net
+
+
+def serve(addresses: Queue[str]) -> Result[int64, io.Error]:
+    mut lines = 0
+    with listener = try net.listen("127.0.0.1:0"):
+        _ = addresses.put(try listener.local_addr())
+        with conn = try listener.accept(timeout=2s):
+            while true:
+                match own try conn.read_line():
+                    case str as line:
+                        lines += 1
+                        try conn.write_all(f"{lines}:{line}\n")
+                    case None:
+                        break
+    return Result.Ok(lines)
+
+
+def read_closed(conn: mut net.TcpStream) -> Result[str, io.Error]:
+    conn.close()
+    match own try conn.read_line(timeout=1s):
+        case str as line:
+            return Result.Ok(line)
+        case None:
+            return Result.Ok("end")
+
+
+def run() -> Result[None, io.Error]:
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(serve, addresses)
+        match addresses.get(timeout=2s):
+            case QueueReceive.Item(address):
+                mut conn = try net.connect_timeout(address, 2s)
+                for word in ["alpha", "beta", "gamma"]:
+                    try conn.write_all(word + "\n")
+                    match own try conn.read_line(timeout=2s):
+                        case str as reply:
+                            print(reply)
+                        case None:
+                            print("closed early")
+                try conn.shutdown_write()
+                match own try conn.read_line():
+                    case str as reply:
+                        print(reply)
+                    case None:
+                        print("end of replies")
+                match read_closed(conn):
+                    case Result.Ok(text):
+                        print(text)
+                    case Result.Err(error):
+                        print(f"failed: {error}")
+            case _:
+                return Result.Err(io.Error.TimedOut)
+        match own server.result():
+            case TaskResult.Ready(result):
+                print(f"served {try result}")
+            case _:
+                print("server failed")
+    return Result.Ok(None)
+
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

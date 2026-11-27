@@ -1,0 +1,48 @@
+# A `view` of a `str` element pushed into an f-string is read where the
+# list keeps it, and an f-string only another f-string takes is built in
+# that one's place, whether the list has made its view of its texts yet
+# or not, and when an index out of range stops the build.
+import control
+
+
+def label(words: list[str], at: int64) -> str:
+    view first = words[at % words.len()]
+    view second = words[(at + 1) % words.len()]
+    return f"{first}{second}"
+
+
+def tagged(words: list[str], at: int64) -> str:
+    view word = words[at]
+    return f"<{word}> {at}"
+
+
+class Named:
+    name: str
+
+
+def greeting(person: Named, names: dict[str, str]) -> str:
+    view name = person.name
+    view other = names["b"]
+    return f"{name}{other}"
+
+
+def picked(index: int64) -> str:
+    words = ["short", "a text longer than any inline text"]
+    return label(words, 0) + tagged(words, index)
+
+
+def main():
+    words = ["ka", "lo", "a text longer than any inline text", "mi"]
+    mut names: list[str] = []
+    for at in range(6):
+        names.append(label(words, at))
+    print(", ".join(names))
+    print(tagged(words, 2))
+    print(tagged(["fresh"], 0))
+    print(greeting(Named(name="ada"), {"b": "-lovelace"}))
+    for index in [1, 5]:
+        match control.recover(picked, index):
+            case Ok(text):
+                print(text)
+            case Err(trap):
+                print(trap.message)

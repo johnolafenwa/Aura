@@ -45,7 +45,12 @@ fn function(name: &str) -> MirFunction {
 }
 
 fn lent(function: &MirFunction) -> LentElements {
-    lent_element_reads(function, |place| place.starts_with("%t"), |_| Vec::new())
+    lent_element_reads(
+        function,
+        |place| place.starts_with("%t"),
+        |_| false,
+        |_| Vec::new(),
+    )
 }
 
 /// The block and position of the read that assigns `temp`.
@@ -114,9 +119,11 @@ fn a_released_list_first_gives_its_live_element_a_copy() {
         Some(&vec![temp.clone()])
     );
     // Locals that may not hold a lent box are left alone.
-    assert!(lent_element_reads(&first, |_| false, |_| Vec::new())
-        .lists
-        .is_empty());
+    assert!(
+        lent_element_reads(&first, |_| false, |_| false, |_| Vec::new())
+            .lists
+            .is_empty()
+    );
 }
 
 /// `target = receiver.op()`, a runtime call that names its receiver as
@@ -169,7 +176,7 @@ fn an_element_read_that_is_kept_or_written_is_copied() {
             value: Rvalue::Use(Operand::Place(temp.to_string())),
         },
         |temp: &str| Instruction::Lend {
-            place: format!("{temp}.name"),
+            place: temp.to_string(),
             temp: "%t_lent".to_string(),
             mutable: true,
         },
@@ -633,7 +640,7 @@ fn lent_payloads(name: &str) -> (MirFunction, LentElements) {
         .find(|function| function.name == name)
         .expect("the function should exist")
         .clone();
-    let mut found = lent_element_reads(&function, |_| true, |_| Vec::new());
+    let mut found = lent_element_reads(&function, |_| true, |_| false, |_| Vec::new());
     lent_payload_reads(
         &function,
         &mut found,
@@ -721,7 +728,12 @@ fn a_payload_takes_a_reference_before_its_scrutinee_is_handed_on() {
             place: "expr".to_string(),
         },
     );
-    let mut found = lent_element_reads(&changed, |place| place.starts_with("%t"), |_| Vec::new());
+    let mut found = lent_element_reads(
+        &changed,
+        |place| place.starts_with("%t"),
+        |_| false,
+        |_| Vec::new(),
+    );
     lent_payload_reads(
         &changed,
         &mut found,
@@ -827,7 +839,7 @@ def main():
             .iter()
             .find(|function| function.name == name)
             .expect("the function should exist");
-        let mut found = lent_element_reads(function, |_| true, |_| Vec::new());
+        let mut found = lent_element_reads(function, |_| true, |_| false, |_| Vec::new());
         lent_payload_reads(
             function,
             &mut found,
@@ -914,11 +926,16 @@ fn view_function(name: &str) -> MirFunction {
 fn adopted_views(function: &MirFunction) -> (LentElements, Vec<String>) {
     use super::super::element_loans::{entry_copy_loans, fused_entry_probes};
     use super::super::json_views::object_view_candidates;
-    let mut found = lent_element_reads(function, |place| place.starts_with("%t"), |_| Vec::new());
+    let mut found = lent_element_reads(
+        function,
+        |place| place.starts_with("%t"),
+        |_| false,
+        |_| Vec::new(),
+    );
     let views = object_view_candidates(
         function,
         &fused_entry_probes(function),
-        &entry_copy_loans(function),
+        &entry_copy_loans(function, |_| false),
     );
     let adopted = super::adopt_object_views(function, &mut found, &views, |_| Vec::new());
     let mut adopted = adopted.into_iter().collect::<Vec<_>>();
@@ -998,4 +1015,502 @@ fn a_scrutinee_a_task_reaches_has_no_view() {
         },
     );
     assert_eq!(adopted_views(&function).1, Vec::<String>::new());
+}
+
+const COPIES: &str = r#"
+enum Shape:
+    Circle(float64)
+    Rect(float64, float64)
+
+class Node:
+    tags: list[int64]
+    children: list[int64]
+
+copy class Point:
+    x: int64
+    y: int64
+
+    def norm(self) -> int64:
+        return self.x * self.x + self.y
+
+    def twice(self) -> int64:
+        return self.norm() * 2
+
+    def itself(self) -> Point:
+        return self
+
+class Holder:
+    tags: list[int64]
+
+    def probe(self) -> int64:
+        return count(self.tags)
+
+    def mixed(self) -> int64:
+        return weigh(self.tags, self)
+
+def count(tags: list[int64]) -> int64:
+    return tags.len()
+
+def weigh(tags: list[int64], holder: Holder) -> int64:
+    return tags.len() + holder.tags.len()
+
+def area(shape: Shape) -> float64:
+    match shape:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Rect(w, h):
+            return w * h
+
+def doubled(shape: Shape) -> float64:
+    return area(shape) * 2.0
+
+def same(a: Shape, b: Shape) -> bool:
+    return a == b
+
+def chosen(shape: Shape) -> Shape:
+    return shape
+
+def stored(shape: Shape) -> list[Shape]:
+    mut shapes = list[Shape]()
+    shapes.append(shape)
+    return shapes
+
+def renamed(shape: Shape) -> float64:
+    mut current = shape
+    current = Shape.Circle(1.0)
+    return area(current)
+
+def later(shape: Shape) -> float64:
+    read: def(float64) -> float64 = lambda scale: area(shape) * scale
+    return read(1.0)
+
+def each(shapes: list[Shape]) -> float64:
+    mut total = 0.0
+    for i in range(shapes.len()):
+        total += area(shapes[i])
+    return total
+
+def equal(shapes: list[Shape]) -> bool:
+    return shapes[0] == shapes[1]
+
+def copies(nodes: list[Node]) -> int64:
+    mut total = 0
+    for node in nodes:
+        tags = node.tags.copy()
+        total += tags.len()
+    return total
+
+def walks(nodes: list[Node]) -> int64:
+    mut total = 0
+    for node in nodes:
+        for child in node.children:
+            total += child
+    return total
+
+def main():
+    shapes = [Shape.Circle(2.0), Shape.Rect(1.0, 3.0)]
+    print(each(shapes))
+    print(doubled(shapes[0]))
+    print(same(shapes[0], shapes[1]))
+    print(area(chosen(shapes[0])))
+    print(stored(shapes[1]).len())
+    print(renamed(shapes[0]))
+    print(later(shapes[0]))
+    print(equal(shapes))
+    nodes = [Node(tags = [1], children = [2, 3])]
+    print(copies(nodes))
+    print(walks(nodes))
+    holder = Holder(tags = [1, 2])
+    point = Point(x = 1, y = 2)
+    print(point.twice())
+    print(point.itself().norm())
+    print(holder.probe())
+    print(holder.mixed())
+"#;
+
+/// The module of [`COPIES`], with how each function that keeps its
+/// callers' shared arguments takes them once every shared parameter of a
+/// Copy type is kept too.
+fn copies_module() -> (
+    crate::mir::MirModule,
+    std::collections::BTreeMap<String, crate::mir::ownership::BorrowingCallee>,
+) {
+    let module = lower_source_to_mir(COPIES).expect("the source should lower");
+    let mut borrowing = crate::mir::ownership::kept_arguments(&module);
+    for (name, undropped) in crate::mir::ownership::undropped_shared_params(&module) {
+        let callee = borrowing.get_mut(&name).expect("a recorded function");
+        let slots = callee.params.iter_mut().chain(callee.receiver.as_mut());
+        for (kept, undropped) in slots.zip(undropped) {
+            if undropped {
+                *kept = crate::mir::MirReceiverKind::Borrow;
+            }
+        }
+    }
+    (module, borrowing)
+}
+
+fn kept_copies(name: &str) -> Vec<bool> {
+    let (module, borrowing) = copies_module();
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == name)
+        .expect("the function should exist");
+    let receiver = usize::from(function.receiver.is_some());
+    let candidates = vec![true; function.params.len() + receiver];
+    super::kept_copy_params(function, &candidates, |instruction| {
+        crate::mir::ownership::callee_borrowed_operands(instruction, |name| borrowing.get(name))
+    })
+}
+
+#[test]
+fn a_copy_parameter_only_read_stays_with_the_caller() {
+    let undropped = crate::mir::ownership::undropped_shared_params(
+        &lower_source_to_mir(COPIES).expect("the source should lower"),
+    );
+    assert_eq!(undropped.get("area"), Some(&vec![true]));
+    assert_eq!(undropped.get("each"), Some(&vec![false]));
+    // A match and payload reads, a call that borrows it, a comparison.
+    // The MIR copies the left side of a comparison into a temporary.
+    assert_eq!(kept_copies("area"), vec![true]);
+    assert_eq!(kept_copies("doubled"), vec![true]);
+    assert_eq!(kept_copies("same"), vec![false, true]);
+    // A non-candidate stays owned.
+    let (module, _) = copies_module();
+    let area = module
+        .functions
+        .iter()
+        .find(|function| function.name == "area")
+        .expect("the function should exist");
+    assert_eq!(
+        super::kept_copy_params(area, &[false], |_| Vec::new()),
+        vec![false]
+    );
+    // Without a callee that borrows it, a call takes the parameter.
+    let doubled = module
+        .functions
+        .iter()
+        .find(|function| function.name == "doubled")
+        .expect("the function should exist");
+    assert_eq!(
+        super::kept_copy_params(doubled, &[true], |_| Vec::new()),
+        vec![false]
+    );
+}
+
+#[test]
+fn a_copy_parameter_returned_stored_reassigned_or_captured_is_owned() {
+    for name in ["chosen", "stored", "renamed", "later"] {
+        assert_eq!(kept_copies(name), vec![false], "{name}");
+    }
+}
+
+#[test]
+fn a_copy_element_only_read_is_lent() {
+    let (module, borrowing) = copies_module();
+    let find = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should exist")
+    };
+    let borrowed = |instruction| {
+        crate::mir::ownership::callee_borrowed_operands(instruction, |name| borrowing.get(name))
+    };
+    // The left side of the comparison is copied into a temporary first.
+    for (name, reads) in [("each", 1), ("equal", 1)] {
+        let found = lent_element_reads(
+            find(name),
+            |place| place.starts_with("%t"),
+            |_| true,
+            borrowed,
+        );
+        assert_eq!(found.lists.len(), reads, "{name}: {found:?}");
+        assert!(found.promotions.is_empty(), "{found:?}");
+    }
+    // A call that owns its argument takes the element.
+    let found = lent_element_reads(
+        find("each"),
+        |place| place.starts_with("%t"),
+        |_| true,
+        |_| Vec::new(),
+    );
+    assert!(found.lists.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_copy_of_a_part_or_a_loop_over_one_reads_the_element() {
+    let (module, _) = copies_module();
+    for name in ["copies", "walks"] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should exist");
+        let found = lent(function);
+        assert!(
+            found.lists.values().any(|list| list == "nodes"),
+            "{name}: {found:?}"
+        );
+    }
+}
+
+#[test]
+fn a_field_lent_to_a_call_that_borrows_it_lends_its_box() {
+    let (module, borrowing) = copies_module();
+    let method = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name.ends_with(name))
+            .expect("the method should exist")
+    };
+    let borrows = |instruction: &Instruction| {
+        matches!(
+            instruction,
+            Instruction::Assign {
+                value: Rvalue::Call {
+                    callee: CallTarget::Name(name),
+                    ..
+                },
+                ..
+            } if borrowing.contains_key(name)
+        )
+    };
+    let lent = crate::native_codegen::classes::field_lend_temps(method("probe"), borrows);
+    assert_eq!(lent.len(), 1, "{lent:?}");
+    // A call that owns its arguments may keep the field.
+    assert!(
+        crate::native_codegen::classes::field_lend_temps(method("probe"), |_| false).is_empty()
+    );
+    // A call that is also passed the instance may reach the field.
+    assert!(crate::native_codegen::classes::field_lend_temps(method("mixed"), borrows).is_empty());
+    // Anything else between the lend and its end may reach the field.
+    let mut probe = method("probe").clone();
+    let lend = probe.blocks[0]
+        .instructions
+        .iter()
+        .position(|instruction| matches!(instruction, Instruction::Lend { .. }))
+        .expect("the field is lent");
+    probe.blocks[0]
+        .instructions
+        .insert(lend + 1, Instruction::Safepoint);
+    assert!(crate::native_codegen::classes::field_lend_temps(&probe, |_| true).is_empty());
+    // A further argument that is a constant leaves the field lent; one that
+    // moves the instance, or names the field's temporary, may reach it.
+    let with_arg = |value: Operand| {
+        let mut probe = method("probe").clone();
+        let call = probe.blocks[0]
+            .instructions
+            .iter_mut()
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Name(name),
+                            args,
+                            ..
+                        },
+                    ..
+                } if borrowing.contains_key(name) => Some(args),
+                _ => None,
+            })
+            .expect("the field is passed to a call");
+        call.push(arg(value));
+        crate::native_codegen::classes::field_lend_temps(&probe, borrows).len()
+    };
+    assert_eq!(with_arg(Operand::Int(1)), 1);
+    assert_eq!(with_arg(Operand::MovePlace("self".to_string())), 0);
+    assert_eq!(with_arg(Operand::Place("self.next".to_string())), 0);
+}
+
+#[test]
+fn a_mutable_lend_of_a_part_only_read_as_a_list_reads_the_element() {
+    let lend = |temp: &str, mutable| Instruction::Lend {
+        place: format!("{temp}.tags"),
+        temp: "%t_lent".to_string(),
+        mutable,
+    };
+    let end = |temp: &str| Instruction::EndLend {
+        place: format!("{temp}.tags"),
+        temp: "%t_lent".to_string(),
+        mutable: true,
+    };
+    // The lent part is only read: its length.
+    let found = lent_after(|tail, temp| {
+        tail.insert(0, lend(temp, true));
+        tail.insert(
+            1,
+            runtime_call(
+                "%t_len",
+                RuntimeOp::List(ListOp::Len),
+                "%t_lent",
+                Vec::new(),
+            ),
+        );
+        tail.insert(2, end(temp));
+    });
+    assert!(!found.lists.is_empty(), "{found:?}");
+    // The lent part is changed, which a copy of the part would lose.
+    let found = lent_after(|tail, temp| {
+        tail.insert(0, lend(temp, true));
+        tail.insert(
+            1,
+            runtime_call(
+                "%t_unit",
+                RuntimeOp::List(ListOp::Push),
+                "%t_lent",
+                vec![MirArg {
+                    name: None,
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                }],
+            ),
+        );
+        tail.insert(2, end(temp));
+    });
+    assert!(found.lists.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_copy_of_a_part_made_in_place_reads_the_element() {
+    let found = lent_after(|tail, temp| {
+        tail.insert(
+            0,
+            runtime_call(
+                "%t_copy",
+                RuntimeOp::Value(crate::runtime_ops::ValueOp::Copy),
+                &format!("{temp}.tags"),
+                Vec::new(),
+            ),
+        )
+    });
+    assert!(!found.lists.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_copy_receiver_only_read_stays_with_the_caller() {
+    let undropped = crate::mir::ownership::undropped_shared_params(
+        &lower_source_to_mir(COPIES).expect("the source should lower"),
+    );
+    // A method's receiver comes after its parameters.
+    assert_eq!(undropped.get("Point.norm"), Some(&vec![true]));
+    assert_eq!(undropped.get("Holder.probe"), Some(&vec![false]));
+    // Reads of its parts, and a method that borrows it.
+    assert_eq!(kept_copies("Point.norm"), vec![true]);
+    assert_eq!(kept_copies("Point.twice"), vec![true]);
+    // Returned, so the method owns it.
+    assert_eq!(kept_copies("Point.itself"), vec![false]);
+}
+
+#[test]
+fn a_copy_parameter_lent_is_owned() {
+    let (module, _) = copies_module();
+    let mut area = module
+        .functions
+        .iter()
+        .find(|function| function.name == "area")
+        .expect("the function should exist")
+        .clone();
+    area.blocks[0].instructions.insert(
+        0,
+        Instruction::Lend {
+            place: "shape".to_string(),
+            temp: "%t_lent".to_string(),
+            mutable: false,
+        },
+    );
+    assert_eq!(
+        super::kept_copy_params(&area, &[true], |_| Vec::new()),
+        vec![false]
+    );
+}
+
+const APPENDS: &str = r#"
+enum Shape:
+    Circle(float64)
+    Empty
+
+def fills(n: int64) -> int64:
+    mut shapes: list[Shape] = []
+    for i in range(n):
+        shapes.append(Shape.Circle(i as float64))
+        shapes.append(Shape.Empty)
+    kept = Shape.Circle(1.0)
+    shapes.append(kept)
+    mut other: list[Shape] = []
+    other.append(kept)
+    return shapes.len() + other.len()
+
+def main():
+    print(fills(2))
+"#;
+
+#[test]
+fn a_copy_temporary_only_appended_hands_its_box_to_the_list() {
+    let mir = lower_source_to_mir(APPENDS).expect("the source should lower");
+    let fills = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "fills")
+        .expect("the function should exist");
+    let temps = super::appended_temps(fills, |_| true);
+    // The two variants built for their appends, and the two copies of the
+    // local made for its appends, each of which holds a box of its own.
+    assert_eq!(temps.len(), 4, "{temps:?}");
+    assert!(temps.iter().all(|temp| temp.starts_with("%t")));
+    // A temporary the MIR releases itself keeps its value.
+    assert!(super::appended_temps(fills, |_| false).is_empty());
+    // One named again after the append is read there.
+    let mut named = fills.clone();
+    let temp = temps.iter().next().expect("a temporary").to_string();
+    let block = named
+        .blocks
+        .iter_mut()
+        .find(|block| {
+            block.instructions.iter().any(
+                |instruction| matches!(instruction, Instruction::Assign { target, .. } if *target == temp),
+            )
+        })
+        .expect("the temporary is assigned");
+    block.instructions.push(Instruction::Eval {
+        value: Operand::Place(temp.clone()),
+    });
+    assert!(!super::appended_temps(&named, |_| true).contains(temp.as_str()));
+}
+
+const FIELD_READS: &str = r#"
+class Book:
+    qty: list[int64]
+    total: int64
+
+    def fill(mut self, at: int64, amount: int64) -> int64:
+        taken = min(amount, self.qty[at])
+        self.qty[at] -= taken
+        self.total += self.qty.len()
+        return taken
+
+def main():
+    mut book = Book(qty=[5, 6], total=0)
+    print(book.fill(1, 2))
+"#;
+
+#[test]
+fn a_field_lent_only_to_be_read_comes_back_as_it_went() {
+    let mir = lower_source_to_mir(FIELD_READS).expect("the source should lower");
+    let module =
+        crate::native_codegen::validated_for_emission(&mir).expect("the source should validate");
+    let fill = module
+        .functions
+        .iter()
+        .find(|function| function.name == "Book.fill")
+        .expect("the module has `Book.fill`");
+    let temps = crate::native_codegen::classes::field_lend_temps(fill, |_| false);
+    let read_only = crate::native_codegen::classes::read_only_field_lends(fill, &temps);
+    // The element read, its read again for `-=`, and the length read only
+    // read the list; the element write changes it.
+    assert_eq!(temps.len(), 4, "{temps:?}");
+    assert_eq!(read_only.len(), 3, "{read_only:?}");
+    assert!(read_only.is_subset(&temps));
 }

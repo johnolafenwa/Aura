@@ -1,0 +1,57 @@
+# A loop whose slow ways leave the body's copy and whose next iteration
+# runs the copy again: each value both bodies define reaches a later use
+# from the body that last defined it, so the lists it holds are released
+# once.
+
+
+def frontier(a: list[int64], b: list[int64]) -> int64:
+    n = a.len()
+    m = b.len()
+    limit = n + m
+    offset = limit + 1
+    mut v: list[int64] = []
+    for _ in range(2 * limit + 3):
+        v.append(0)
+    mut trace: list[list[int64]] = []
+    for d in range(limit + 1):
+        trace.append(v[offset - d:offset + d + 1])
+        mut k = -d
+        while k <= d:
+            mut x = 0
+            if k == -d or (k != d and v[offset + k - 1] < v[offset + k + 1]):
+                x = v[offset + k + 1]
+            else:
+                x = v[offset + k - 1] + 1
+            mut y = x - k
+            while x < n and y < m and a[x] == b[y]:
+                x += 1
+                y += 1
+            v[offset + k] = x
+            if x >= n and y >= m:
+                return d * 1000 + trace.len()
+            k += 2
+    return -1
+
+
+def stays(a: list[int64], b: list[int64]) -> int64:
+    mut v: list[int64] = []
+    for _ in range(a.len() + 3):
+        v.append(0)
+    mut trace: list[list[int64]] = []
+    for d in range(a.len() + 1):
+        trace.append(v[0:d + 1])
+        mut k = 0
+        while k <= d:
+            mut x = v[k + 1]
+            v[k] = x
+            if x >= b.len():
+                return trace.len()
+            k += 2
+    return 0
+
+
+def main():
+    print(frontier([1, 2, 3, 4], [1, 3, 4, 5]))
+    print(frontier([1, 2, 3, 4, 5, 6, 7, 8], [2, 3, 9, 5, 6, 8, 1]))
+    print(frontier([], [1]))
+    print(stays([1, 2, 3, 4], [1, 3, 4, 5]))

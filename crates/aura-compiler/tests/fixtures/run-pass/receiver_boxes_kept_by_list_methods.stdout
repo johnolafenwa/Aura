@@ -1,0 +1,4 @@
+best=3 names=6
+Book(best=3, levels=[2, 1, 0, 1], names=[n0, n1, n2, n3, n4, n5])
+Book(best=1, levels=[0, 1, 0, 0], names=[again])
+Book(best=0, levels=[1, 0], names=[x, y])

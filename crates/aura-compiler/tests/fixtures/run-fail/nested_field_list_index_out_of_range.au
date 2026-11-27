@@ -1,0 +1,14 @@
+class Mailboxes:
+    boxes: list[list[str]]
+
+    def read(self, client: int64, index: int64) -> str:
+        return self.boxes[client][index].clone()
+
+
+def main():
+    mut boxes: list[list[str]] = []
+    boxes.append(list[str]())
+    boxes[0].append("only")
+    mail = Mailboxes(boxes=boxes)
+    print(mail.read(0, 0))
+    print(mail.read(0, 1))

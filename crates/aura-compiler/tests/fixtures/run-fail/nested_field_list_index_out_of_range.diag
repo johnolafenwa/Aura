@@ -1,0 +1,6 @@
+error[AU4003]: list index `1` is out of bounds for length `1`
+ --> crates/aura-compiler/tests/fixtures/run-fail/nested_field_list_index_out_of_range.au:5:35
+  |
+5 |         return self.boxes[client][index].clone()
+  |                                   ^
+  = note: Aura call chain (innermost first): Mailboxes.read at 4:5 -> main at 8:1

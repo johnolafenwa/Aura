@@ -1,0 +1,16 @@
+true 1 1 100
+false 2 22 200
+false 1 1 100
+false 5 5 500
+false 5 5 500
+true 2 0 22
+76
+SELECT
+FROM
+X
+WHERE
+quiet
+SELECT
+FROM
+WHERE
+`a much longer token than inline` is too long

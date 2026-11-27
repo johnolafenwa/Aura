@@ -1,0 +1,6 @@
+error[AU4002]: integer value `9223372036855775810` does not fit in `int64`
+ --> crates/aura-compiler/tests/fixtures/run-fail/deferred_frames_name_trapping_callers.au:4:13
+  |
+4 |     return (value + MOD) % MOD
+  |             ^
+  = note: Aura call chain (innermost first): shift at 3:1 -> outer at 6:1 -> main at 9:1

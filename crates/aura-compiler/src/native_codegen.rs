@@ -753,12 +753,38 @@ struct NativeCodegen<'a> {
     /// check the machine stack, and count the task's call fuel unless
     /// safepoints are elided. Empty in a freestanding build.
     recursive_functions: HashSet<String>,
+    /// The module's entry of a call-cycle frame record (see
+    /// `define_cycle_frame_entry`), which a function on a call cycle runs
+    /// before its first call instead of on entry. `None` when the program
+    /// has no such function.
+    cycle_frame_entry: Option<FuncHandle>,
+    /// The module's push of a deferred frame record of a function on no
+    /// call cycle (see `define_frame_entry`). `None` in a freestanding
+    /// build, which keeps no records.
+    frame_entry: Option<FuncHandle>,
     /// The functions a frameless function may call (see `total_leaves`).
     total_leaves: HashSet<String>,
+    /// The functions whose calls lend a caller chain link, and their chain
+    /// bodies (see `caller_chains`).
+    chain_callees: HashSet<String>,
+    chain_twins: HashMap<String, FuncHandle>,
+    /// The parameters a call may pass an element a list keeps in place
+    /// as its bytes (see `element_loans::block_params`).
+    block_params: HashMap<(String, usize), element_loans::BlockParam>,
+    /// The functions a caller may call without pushing its deferred frame
+    /// record (see `frame_free_callees`).
+    frame_free_callees: HashSet<String>,
+    /// The enum parameters their callers pass untagged (see
+    /// `untagged_args`).
+    untagged_params: HashSet<(String, usize)>,
     /// The functions that only read scalar fields of an instance they are
     /// passed: a leaf's body with calls of total leaves, and no `mut`
     /// parameter.
     instance_keepers: HashSet<String>,
+    /// The `mut self` methods that keep their receiver's layout, with the
+    /// fields whose lists each may store elements into (see
+    /// `list_snapshots::layout_keepers`).
+    layout_keepers: HashMap<String, HashSet<String>>,
     program_path: String,
     program_source: String,
     /// Whether the object is a debug build, which describes each function
@@ -772,6 +798,9 @@ struct NativeCodegen<'a> {
     /// Bodies that need no write-through sinks. Leaf bodies also defer their
     /// frame until an error.
     sinkless_functions: HashMap<String, FuncHandle>,
+    /// The `mut` call slots of each function that it never changes, which
+    /// a call hands no write-through sink (see `quiet_sinks`).
+    quiet_sinks: HashMap<String, HashSet<usize>>,
     /// Scalar bodies whose only failure is an explicit check. Their
     /// recovered entry returns the scalar and an optional error.
     recovery_functions: HashMap<String, FuncHandle>,
@@ -779,6 +808,9 @@ struct NativeCodegen<'a> {
     /// (see `result_slots`).
     result_twins: HashMap<String, FuncHandle>,
     result_slot_plan: result_slots::ResultSlotPlan,
+    /// The view twin of each function that has one, and its body without
+    /// sinks when the function has such a body (see `str_slots`).
+    view_twins: HashMap<String, (FuncHandle, Option<FuncHandle>)>,
     function_thunks: HashMap<String, FuncHandle>,
     function_default_binders: HashMap<String, FuncHandle>,
     callable_shapes: HashMap<CallableShapeKey, CallableShape>,
@@ -826,6 +858,11 @@ struct OwnershipFastPaths {
     runtime_retain: FuncHandle,
     runtime_release: FuncHandle,
     release_last: FuncHandle,
+    /// The release of a box that holds a variant of an enum the program
+    /// defines, which frees a variant kept in its layout with its payload
+    /// boxes in one walk.
+    release_variant: FuncHandle,
+    release_last_variant: FuncHandle,
 }
 
 macro_rules! try_or_string_error {
@@ -1053,12 +1090,41 @@ impl<'a> NativeCodegen<'a> {
         let mut runtime =
             RuntimeTable::try_build(|function| declare_runtime_helper(&mut *object, function))?;
         let ownership = declare_ownership_fast_paths(&mut *object, &mut runtime)?;
+        let cycle_frame_entry = match recursive_functions.is_empty() {
+            true => None,
+            false => Some(try_or_string_error!(
+                object.declare_function(
+                    "aura_enter_cycle_frame",
+                    Linkage::Local,
+                    &cycle_frame_entry_signature(),
+                ),
+                "failed to declare the call-cycle frame entry: {}"
+            )),
+        };
+        if let Some(entry) = cycle_frame_entry {
+            object.mark_inline(entry);
+        }
+        let frame_entry = match freestanding {
+            Some(_) => None,
+            None => Some(try_or_string_error!(
+                object.declare_function(
+                    "aura_enter_deferred_frame",
+                    Linkage::Local,
+                    &cycle_frame_entry_signature(),
+                ),
+                "failed to declare the deferred frame entry: {}"
+            )),
+        };
+        if let Some(entry) = frame_entry {
+            object.mark_inline(entry);
+        }
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
         let mut sinkless_functions = HashMap::new();
         let mut recovery_functions = HashMap::new();
         let mut result_twins = HashMap::new();
+        let mut view_twins = HashMap::new();
         let explicit_locals = crate::mir::ownership::explicit_locals(module);
         let result_slot_plan = match freestanding {
             Some(_) => result_slots::ResultSlotPlan::default(),
@@ -1084,6 +1150,16 @@ impl<'a> NativeCodegen<'a> {
             })
             .collect::<HashSet<_>>();
         let total_leaves = total_leaves(module, &classes);
+        let chain_callees = match freestanding {
+            Some(_) => HashSet::new(),
+            None => {
+                caller_chains::chain_callees(module, &classes, &total_leaves, &recursive_functions)
+            }
+        };
+        let mut chain_twins = HashMap::new();
+        let block_params = element_loans::block_params(module, &classes);
+        let frame_free_callees = frame_free_callees(module, &recursive_functions);
+        let untagged_params = untagged_args::match_only_params(module, &frame_free_callees);
         let instance_keepers = module
             .functions
             .iter()
@@ -1092,7 +1168,35 @@ impl<'a> NativeCodegen<'a> {
                     && leaf_body_calling(function, &classes, Some(&total_leaves))
             })
             .map(|function| function.name.clone())
-            .collect();
+            .collect::<HashSet<_>>();
+        let receiver_field = |function: &MirFunction, place: &str| {
+            receiver_class(function, &classes)
+                .into_iter()
+                .flat_map(|class| &class.fields)
+                .find(|field| place.strip_prefix("self.") == Some(field.name.as_str()))
+                .map(|field| field.ty.clone())
+        };
+        let words = |ty: &Type| {
+            matches!(
+                direct_type(ty, &classes),
+                Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
+            )
+        };
+        let layout_keepers = list_snapshots::layout_keepers(
+            &module.functions,
+            |function| {
+                function.receiver == Some(MirReceiverKind::BorrowMut)
+                    && receiver_class(function, &classes).is_some()
+            },
+            |function, place| receiver_field(function, place).is_some_and(|ty| words(&ty)),
+            |function, place| {
+                receiver_field(function, place).is_some_and(|ty| {
+                    matches!(&ty, Type::Named(name, args)
+                        if name == "list" && matches!(args.as_slice(), [element] if words(element)))
+                })
+            },
+            &|callee| instance_keepers.contains(callee),
+        );
         let mut function_default_binders = HashMap::new();
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
@@ -1126,6 +1230,23 @@ impl<'a> NativeCodegen<'a> {
                 object.mark_inline(func_id);
             }
             functions.insert(function.name.clone(), func_id);
+            if chain_callees.contains(&function.name) {
+                let mut signature = signature.clone();
+                signature.params.push(types::I64);
+                let chain_id = try_or_string_error!(
+                    object.declare_function(
+                        &format!("{}__chain", mangle_symbol(&function.name)),
+                        Linkage::Local,
+                        &signature
+                    ),
+                    "failed to declare the chain body of `{}`: {}",
+                    function.name
+                );
+                if small_leaf(function) {
+                    object.mark_inline(chain_id);
+                }
+                chain_twins.insert(function.name.clone(), chain_id);
+            }
             let mutable_leaf = leaf_variant(function, &classes);
             if freestanding.is_some() {
                 // Every body is frameless, and nothing enters a function
@@ -1133,7 +1254,10 @@ impl<'a> NativeCodegen<'a> {
                 if small_leaf(function) {
                     object.mark_inline(func_id);
                 }
-            } else if mutable_leaf || sinkless_closure(function) {
+            } else if mutable_leaf
+                || sinkless_closure(function)
+                || deferring_variant(function, &classes)
+            {
                 let symbol = if mutable_leaf {
                     mangle_leaf_symbol(&function.name)
                 } else {
@@ -1174,6 +1298,28 @@ impl<'a> NativeCodegen<'a> {
                     .declare_function(&symbol, Linkage::Local, &signature)
                     .map_err(|error| format!("failed to declare result function: {error}"))?;
                 result_twins.insert(function.name.clone(), id);
+            }
+            if let Some(params) = result_slot_plan.views.get(&function.name) {
+                let signature = str_slots::view_twin_signature(signature.clone(), params.len());
+                let mut declare = |symbol: String| {
+                    object
+                        .declare_function(&symbol, Linkage::Local, &signature)
+                        .map_err(|error| format!("failed to declare view function: {error}"))
+                };
+                let mangled = mangle_symbol(&function.name);
+                let framed = declare(format!("aura_view_{mangled}"))?;
+                let sinkless = match sinkless_functions.contains_key(&function.name) {
+                    true => Some(declare(format!("aura_view_nosinks_{mangled}"))?),
+                    false => None,
+                };
+                if small_leaf(function)
+                    && (sinkless.is_some()
+                        || frameless_leaf(function, &classes)
+                        || frameless_caller(function, &classes, &total_leaves))
+                {
+                    object.mark_inline(sinkless.unwrap_or(framed));
+                }
+                view_twins.insert(function.name.clone(), (framed, sinkless));
             }
             let thunk_signature = thunk_signature();
             if freestanding.is_none() {
@@ -1260,6 +1406,7 @@ impl<'a> NativeCodegen<'a> {
             module,
             callable_shapes.keys().map(|key| key.function.as_str()),
         );
+        let shape_keepers = element_loans::receiver_shape_keepers(module, &method_receivers);
         program_shapes.set_field_only_methods(
             module
                 .functions
@@ -1268,7 +1415,8 @@ impl<'a> NativeCodegen<'a> {
                     // A total leaf is passed words, never the box.
                     boxed_receiver_fields(function, &classes).is_some()
                         && (leaf_body(function, &classes)
-                            || frameless_caller(function, &classes, &total_leaves))
+                            || frameless_caller(function, &classes, &total_leaves)
+                            || shape_keepers.contains(&function.name))
                 })
                 .map(|function| function.name.clone())
                 .collect(),
@@ -1299,17 +1447,27 @@ impl<'a> NativeCodegen<'a> {
             reachable_blocks,
             safepoints_enabled,
             recursive_functions,
+            cycle_frame_entry,
+            frame_entry,
             total_leaves,
+            chain_callees,
+            chain_twins,
+            block_params,
+            frame_free_callees,
+            untagged_params,
             instance_keepers,
+            layout_keepers,
             debug_info: false,
             program_path: program_path.to_string(),
             program_source: program_source.to_string(),
             object: Some(object),
             functions,
             sinkless_functions,
+            quiet_sinks: quiet_sinks::quiet_sink_slots(module),
             recovery_functions,
             result_twins,
             result_slot_plan,
+            view_twins,
             function_thunks,
             function_default_binders,
             callable_shapes,
@@ -1335,7 +1493,7 @@ impl<'a> NativeCodegen<'a> {
                 .collect(),
             receiver_keepers: element_loans::receiver_keepers(module, &method_receivers),
             method_receivers,
-            borrowing: crate::mir::ownership::kept_arguments(module),
+            borrowing: keep_boxed_copy_params(module, &function_param_types),
             function_return_types,
             function_param_types,
             function_writeback_types,
@@ -1410,10 +1568,72 @@ impl<'a> NativeCodegen<'a> {
             self.define_cleanup_thunks(function)?;
         }
         self.define_ownership_fast_paths()?;
+        self.define_cycle_frame_entry()?;
+        self.define_frame_entry()?;
         self.define_main_wrapper()
     }
 
     /// Defines the module's retain and release.
+    /// Defines the entry of a call-cycle frame record, which a function on
+    /// a call cycle runs where it first calls out, not on entry (see
+    /// `defers_frame`): the push, the call safepoint when the program has
+    /// tasks, and then the check of the machine stack. It is inlined into
+    /// its caller, so the stack check reads that caller's stack pointer,
+    /// the one its entry would have read.
+    fn define_cycle_frame_entry(&mut self) -> std::result::Result<(), String> {
+        let Some(entry) = self.cycle_frame_entry else {
+            return Ok(());
+        };
+        let safepoints = self.safepoints_enabled;
+        self.define_body(
+            entry,
+            &cycle_frame_entry_signature(),
+            "the call-cycle frame entry",
+            |codegen, builder| {
+                let block = builder.create_block();
+                builder.append_block_params_for_function_params(block);
+                builder.switch_to_block(block);
+                builder.seal_block(block);
+                let descriptor = builder.block_params(block)[0];
+                let runtime_refs = codegen.runtime.map(|id| builder.import_function(*id));
+                emit_frame_push(builder, &runtime_refs, descriptor);
+                if safepoints {
+                    emit_call_safepoint(builder, &runtime_refs);
+                }
+                emit_stack_check(builder, &runtime_refs);
+                builder.return_(&[]);
+                Ok(())
+            },
+        )
+    }
+
+    /// Defines the push of a deferred frame record of a function on no
+    /// call cycle, which it runs where a way first calls out (see
+    /// `defers_frame`): the record goes on the frame stack in place, or
+    /// through the runtime while the stack's flags ask for it, as an entry
+    /// push does. It is inlined into its caller.
+    fn define_frame_entry(&mut self) -> std::result::Result<(), String> {
+        let Some(entry) = self.frame_entry else {
+            return Ok(());
+        };
+        self.define_body(
+            entry,
+            &cycle_frame_entry_signature(),
+            "the deferred frame entry",
+            |codegen, builder| {
+                let block = builder.create_block();
+                builder.append_block_params_for_function_params(block);
+                builder.switch_to_block(block);
+                builder.seal_block(block);
+                let descriptor = builder.block_params(block)[0];
+                let runtime_refs = codegen.runtime.map(|id| builder.import_function(*id));
+                emit_frame_push(builder, &runtime_refs, descriptor);
+                builder.return_(&[]);
+                Ok(())
+            },
+        )
+    }
+
     fn define_ownership_fast_paths(&mut self) -> std::result::Result<(), String> {
         let paths = self.ownership;
         let frame_stack = self.runtime[RuntimeFn::FrameStack];
@@ -1431,7 +1651,16 @@ impl<'a> NativeCodegen<'a> {
             &ownership_fast_path_signature(false),
             "the release fast path",
             |_, builder| {
-                emit_release_fast_path(builder, frame_stack, paths);
+                emit_release_fast_path(builder, frame_stack, paths, paths.release_last);
+                Ok(())
+            },
+        )?;
+        self.define_body(
+            paths.release_variant,
+            &ownership_fast_path_signature(false),
+            "the variant release fast path",
+            |_, builder| {
+                emit_release_fast_path(builder, frame_stack, paths, paths.release_last_variant);
                 Ok(())
             },
         )
@@ -1495,6 +1724,16 @@ impl<'a> NativeCodegen<'a> {
             &format!("direct function `{}`", function.name),
             |codegen, builder| codegen.emit_function(builder, function, func_id, false, None),
         )?;
+        if let Some(id) = self.chain_twins.get(&function.name).copied() {
+            let mut signature = signature.clone();
+            signature.params.push(types::I64);
+            self.define_body(
+                id,
+                &signature,
+                &format!("the chain body of `{}`", function.name),
+                |codegen, builder| codegen.emit_function(builder, function, id, false, None),
+            )?;
+        }
         if let Some(id) = self.recovery_functions.get(&function.name).copied() {
             let mut signature = signature.clone();
             signature.returns.push(types::I64);
@@ -1513,6 +1752,21 @@ impl<'a> NativeCodegen<'a> {
                 &format!("the result body of `{}`", function.name),
                 |codegen, builder| codegen.emit_function(builder, function, id, false, None),
             )?;
+        }
+        if let Some((framed, sinkless)) = self.view_twins.get(&function.name).copied() {
+            let count = self.result_slot_plan.views[&function.name].len();
+            let signature = str_slots::view_twin_signature(signature.clone(), count);
+            for (id, without_sinks) in [(Some(framed), false), (sinkless, true)] {
+                let Some(id) = id else { continue };
+                self.define_body(
+                    id,
+                    &signature,
+                    &format!("the view body of `{}`", function.name),
+                    |codegen, builder| {
+                        codegen.emit_function(builder, function, id, without_sinks, None)
+                    },
+                )?;
+            }
         }
         let Some(sinkless_id) = self.sinkless_functions.get(&function.name).copied() else {
             return Ok(());
@@ -1724,6 +1978,10 @@ impl<'a> NativeCodegen<'a> {
             }
         };
         builder.append_block_params_for_function_params(entry);
+        // A chain body's last parameter is the link its caller lent.
+        let chain_link = (self.chain_twins.get(&function.name) == Some(&func_id))
+            .then(|| builder.block_params(entry).last().copied())
+            .flatten();
         builder.switch_to_block(entry);
         let runtime_refs = self.runtime.map(|id| builder.import_function(*id));
         let descriptor = if self.freestanding.is_some() {
@@ -1749,8 +2007,30 @@ impl<'a> NativeCodegen<'a> {
             || self.freestanding.is_some()
             || frameless_leaf(function, &self.classes)
             || (without_sinks && leaf_body(function, &self.classes))
-            || calls_total_leaves;
-        let (mut body, entered_in_runtime) = if frameless {
+            || calls_total_leaves
+            || self.chain_callees.contains(&function.name);
+        // Any other function with no `mut` parameter, cleanup, or second
+        // frame pushes its record where it first calls out (see
+        // `defer_frame`). One on no call cycle pushes it on entry after
+        // all when a way that is not cold calls out. One on a call cycle
+        // runs `aura_enter_cycle_frame` there instead, with the safepoint
+        // and stack check of its entry, so a call that makes no call of
+        // its own, such as the leaves of a recursive walk, leaves the
+        // frame stack alone.
+        let on_cycle = !checked_entry
+            && !calls_total_leaves
+            && self.recursive_functions.contains(&function.name);
+        let defers_frame = !frameless
+            && forwarding_frame.is_none()
+            && function.name != "main"
+            && (without_sinks || !takes_mutable(function))
+            && !function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, Instruction::PushCleanup { .. }))
+            });
+        let (mut body, entered_in_runtime) = if frameless || defers_frame {
             (entry, builder.iconst(types::I64, 0))
         } else {
             emit_frame_push(builder, &runtime_refs, descriptor)
@@ -1764,10 +2044,7 @@ impl<'a> NativeCodegen<'a> {
         // the ordinary entry as a possible target of a callback.
         // A function that only calls total leaves is on no cycle, whatever
         // the conservative call graph says of the names in its body.
-        if !checked_entry
-            && !calls_total_leaves
-            && self.recursive_functions.contains(&function.name)
-        {
+        if on_cycle && !defers_frame {
             if self.safepoints_enabled {
                 emit_call_safepoint(builder, &runtime_refs);
             }
@@ -1821,6 +2098,20 @@ impl<'a> NativeCodegen<'a> {
             }
             entry_index = end;
         }
+        let view_body = self
+            .view_twins
+            .get(&function.name)
+            .is_some_and(|(framed, sinkless)| *framed == func_id || *sinkless == Some(func_id));
+        let str_slots = match self.result_slot_plan.views.get(&function.name) {
+            Some(params) if view_body => str_slots::bind_view_params(
+                builder,
+                function,
+                params,
+                &entry_values[entry_index..],
+                &mut variable_index,
+            ),
+            _ => HashMap::new(),
+        };
 
         for local in &function.local_types {
             if variables.contains_key(&local.name) {
@@ -2035,6 +2326,98 @@ impl<'a> NativeCodegen<'a> {
             builder.seal_block(ready);
             blocks.insert(function.entry.clone(), ready);
         }
+        let mut function_refs = HashMap::new();
+        // Sorted, so each function declares its callees in the same order in
+        // every build.
+        let mut functions = self.functions.iter().collect::<Vec<_>>();
+        functions.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, func_id) in functions {
+            let func_ref = builder.import_function(*func_id);
+            function_refs.insert(name.clone(), func_ref);
+        }
+        // The calls a deferred record waits past: the frame stack's own,
+        // retains and releases, which change counts in the task's ledger
+        // and free values but never fail or yield (a frameless leaf makes
+        // them with no record at all), and calls of the functions this one
+        // names that need no record of their callers.
+        let mut frame_free = frame_calls(&runtime_refs).to_vec();
+        frame_free.extend([
+            runtime_refs[RuntimeFn::RetainValue],
+            runtime_refs[RuntimeFn::ReleaseValue],
+            runtime_refs[RuntimeFn::ReleaseLastOwnedValue],
+            runtime_refs[RuntimeFn::ReleaseLastOwnedVariant],
+        ]);
+        let mut free_callees = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Name(name),
+                            ..
+                        },
+                    ..
+                } if self.frame_free_callees.contains(name) => function_refs.get(name).copied(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        // A chain body's caller lends it the link its trap paths read.
+        let mut chain_refs = HashMap::new();
+        let mut chain_twins = self.chain_twins.iter().collect::<Vec<_>>();
+        chain_twins.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, func_id) in chain_twins {
+            let func_ref = builder.import_function(*func_id);
+            free_callees.push(func_ref);
+            chain_refs.insert(name.clone(), func_ref);
+        }
+        free_callees.sort_by_key(|callee| callee.0);
+        free_callees.dedup();
+        frame_free.extend(free_callees);
+        let deferred_frame = defers_frame.then(|| {
+            let framed = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(framed, types::I64);
+            // Once the body shows a way that is not cold calls out, the
+            // record is pushed here, as for any function.
+            let deferred = builder.iconst(types::I64, 0);
+            let push = builder.create_block();
+            let skip = builder.create_block();
+            let start = builder.create_block();
+            builder.frame_branch(deferred, push, skip);
+            builder.switch_to_block(push);
+            builder.seal_block(push);
+            // A function on a call cycle also checks the stack and counts
+            // the call as its entry does (see `define_cycle_frame_entry`).
+            match self.cycle_frame_entry {
+                Some(entry) if on_cycle => {
+                    let entry = builder.import_function(entry);
+                    builder.call(entry, &[descriptor]);
+                }
+                _ => {
+                    emit_frame_push(builder, &runtime_refs, descriptor);
+                }
+            }
+            let one = builder.iconst(types::I64, 1);
+            builder.def_var(framed, one);
+            builder.jump(start, &[]);
+            builder.switch_to_block(skip);
+            builder.seal_block(skip);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(framed, zero);
+            builder.jump(start, &[]);
+            builder.switch_to_block(start);
+            builder.seal_block(start);
+            blocks.insert(function.entry.clone(), start);
+            let enter = match (self.cycle_frame_entry, self.frame_entry) {
+                (Some(entry), _) if on_cycle => builder.import_function(entry),
+                (_, Some(entry)) => builder.import_function(entry),
+                _ => runtime_refs[RuntimeFn::EnterCall],
+            };
+            builder.defer_frame(framed, descriptor, enter, &frame_free);
+            framed
+        });
         if function.receiver == Some(MirReceiverKind::BorrowMut) {
             let receiver_ty = receiver_type(function, &self.classes)?;
             writeback_locals.push(("self".to_string(), receiver_ty));
@@ -2050,15 +2433,6 @@ impl<'a> NativeCodegen<'a> {
             }
         }
 
-        let mut function_refs = HashMap::new();
-        // Sorted, so each function declares its callees in the same order in
-        // every build.
-        let mut functions = self.functions.iter().collect::<Vec<_>>();
-        functions.sort_by(|left, right| left.0.cmp(right.0));
-        for (name, func_id) in functions {
-            let func_ref = builder.import_function(*func_id);
-            function_refs.insert(name.clone(), func_ref);
-        }
         let mut recovery_refs = HashMap::new();
         let mut functions = self.recovery_functions.iter().collect::<Vec<_>>();
         functions.sort_by_key(|(name, _)| *name);
@@ -2070,6 +2444,17 @@ impl<'a> NativeCodegen<'a> {
         twins.sort_by(|left, right| left.0.cmp(right.0));
         for (name, func_id) in twins {
             result_twin_refs.insert(name.clone(), builder.import_function(*func_id));
+        }
+        let mut view_twin_refs = HashMap::new();
+        let mut twins = self.view_twins.iter().collect::<Vec<_>>();
+        twins.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, (framed, sinkless)) in twins {
+            let twin = str_slots::ViewTwin {
+                framed: builder.import_function(*framed),
+                sinkless: sinkless.map(|sinkless| builder.import_function(sinkless)),
+                params: self.result_slot_plan.views[name].clone(),
+            };
+            view_twin_refs.insert(name.clone(), twin);
         }
         let result_twin_body = (self.result_twins.get(&function.name) == Some(&func_id))
             .then(|| result_slots::slot_parts(&function.return_type, &self.classes))
@@ -2107,6 +2492,18 @@ impl<'a> NativeCodegen<'a> {
             .get(&function.name)
             .cloned()
             .unwrap_or_default();
+        // A boxed Copy parameter or receiver the caller keeps is the
+        // caller's to release (see `keep_boxed_copy_params`).
+        if let Some(callee) = self.borrowing.get(&function.name) {
+            for (param, kept) in function.params.iter().zip(&callee.params) {
+                if *kept == MirReceiverKind::Borrow {
+                    explicit_locals.tracked.insert(param.name.clone());
+                }
+            }
+            if callee.receiver == Some(MirReceiverKind::Borrow) {
+                explicit_locals.tracked.insert("self".to_string());
+            }
+        }
         let current_function_name = public_direct_function_name(&function.name);
         let current_function_path = function
             .source_path
@@ -2232,12 +2629,14 @@ impl<'a> NativeCodegen<'a> {
         let mut lent_element_reads = elements::lent_element_reads(
             function,
             |place| {
-                explicit_locals.tracked.contains(place)
+                (explicit_locals.tracked.contains(place) || !explicit_locals.loans.contains(place))
                     && matches!(
                         variable_types.get(place),
                         Some(DirectType::Opaque(ty)) if !matches!(ty, Type::Named(name, _) if name == "str")
                     )
             },
+            // A local the MIR does not release holds a boxed Copy value.
+            |place| !explicit_locals.tracked.contains(place),
             |instruction| {
                 if let Some(receiver) = self.shared_method_receiver(instruction) {
                     return vec![receiver];
@@ -2247,6 +2646,32 @@ impl<'a> NativeCodegen<'a> {
                 })
             },
         );
+        // `str` locals that hold a list element as words (see
+        // `str_slots::element_slots`), each with its `ptr` and `len`.
+        let str_elements = match self.freestanding.is_some()
+            || self.module.ownership != crate::mir::MirOwnership::Explicit
+        {
+            true => str_slots::ElementSlots::default(),
+            false => str_slots::element_slots(
+                function,
+                |place| explicit_locals.tracked.contains(place),
+                |instruction| {
+                    if let Some(receiver) = self.shared_method_receiver(instruction) {
+                        return vec![receiver];
+                    }
+                    crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                        self.borrowing.get(name)
+                    })
+                },
+                &self.result_slot_plan.views,
+            ),
+        };
+        let mut str_slots = str_slots;
+        str_slots.extend(str_slots::declare_element_slots(
+            builder,
+            &str_elements,
+            &mut variable_index,
+        ));
         let (native_loan_uses, element_lend_temps) = element_loans::native_element_loans(
             function,
             |instruction| {
@@ -2263,7 +2688,30 @@ impl<'a> NativeCodegen<'a> {
                 _ => false,
             },
         );
-        let field_lend_temps = classes::field_lend_temps(function);
+        let field_lend_temps = classes::field_lend_temps(function, |instruction| {
+            let Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                        ..
+                    },
+                ..
+            } = instruction
+            else {
+                return false;
+            };
+            match (
+                self.borrowing.get(name),
+                self.function_param_types.get(name),
+            ) {
+                (Some(callee), Some(expected)) => {
+                    args.len() == expected.len()
+                        && reads_arguments_only(args, &callee.params, expected)
+                }
+                _ => false,
+            }
+        });
         // A local of a Copy type the MIR never releases holds a box all the
         // same, which `release_boxed_copy_roots` releases by its flag.
         let owns_its_word = |place: &str| {
@@ -2308,7 +2756,12 @@ impl<'a> NativeCodegen<'a> {
                 })
             },
         );
-        let entry_copy_loans = element_loans::entry_copy_loans(function);
+        let entry_copy_loans = element_loans::entry_copy_loans(function, |source| {
+            matches!(
+                variable_types.get(source),
+                Some(DirectType::Opaque(Type::Named(name, _))) if name == "dict"
+            )
+        });
         let lent_entry_copies = element_loans::lent_entry_copy_loans(function, &entry_copy_loans);
         let fused_entry_probes = element_loans::fused_entry_probes(function);
         // An `Object` payload of a `json.Value` that is only looked up
@@ -2403,6 +2856,59 @@ impl<'a> NativeCodegen<'a> {
             let zero = builder.iconst(types::I64, 0);
             builder.def_var(variable, zero);
             lent_elements.insert(name, variable);
+        }
+        // A lent element of a list of instances kept in place that is only
+        // read field by field is read where the list keeps it.
+        let element_candidates = lent_element_reads
+            .lists
+            .keys()
+            .filter(|local| {
+                !lent_element_reads
+                    .promotions
+                    .values()
+                    .any(|temps| temps.contains(local))
+            })
+            .filter_map(|local| match variable_types.get(local) {
+                Some(DirectType::Opaque(Type::Named(class, args)))
+                    if args.is_empty()
+                        && self.classes.contains_key(class)
+                        && self.plain_records.keeps_in_list(class) =>
+                {
+                    Some((local.clone(), class.clone()))
+                }
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        let mut element_locals = classes::instance_element_locals(
+            function,
+            &element_candidates,
+            |class, field| {
+                self.classes[class].fields.iter().any(|candidate| {
+                    candidate.name == field
+                        && matches!(
+                            ensure_direct_type(&candidate.ty, &self.classes, "field"),
+                            Ok(DirectType::Scalar(_))
+                        )
+                })
+            },
+            |class, field| {
+                self.classes[class]
+                    .fields
+                    .iter()
+                    .any(|candidate| candidate.name == field && candidate.ty == Type::named("str"))
+            },
+        )
+        .into_iter()
+        .collect::<Vec<_>>();
+        element_locals.sort();
+        let mut instance_element_blocks = HashMap::new();
+        for local in element_locals {
+            let variable = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(variable, types::I64);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(variable, zero);
+            instance_element_blocks.insert(local, variable);
         }
         let shadow_entry_copies = element_loans::shadow_entry_copy_loans(
             function,
@@ -2618,31 +3124,17 @@ impl<'a> NativeCodegen<'a> {
             }
             entry_loops.insert(list, (entry_loop, at, next));
         }
-        let list_snapshots = list_snapshots::list_snapshot_regions(
-            function,
-            |list| {
-                list != "self"
-                    && !explicit_locals.loans.contains(list)
-                    && (matches!(
-                        variable_types.get(list),
-                        Some(DirectType::Opaque(Type::Named(name, args)))
-                            if name == "list"
-                                && matches!(args.as_slice(), [element]
-                                    if !matches!(element, Type::Named(element, _) if element == "str"))
-                    ) || array_view_code(variable_types.get(list)).is_some())
-            },
-            |list| {
-                matches!(
+        let list_snapshots = list_snapshots::list_snapshot_regions(function, |list| {
+            list != "self"
+                && !explicit_locals.loans.contains(list)
+                && (matches!(
                     variable_types.get(list),
-                    Some(DirectType::Opaque(Type::Named(_, args)))
-                        if matches!(args.as_slice(), [element]
-                            if matches!(
-                                direct_type(element, &self.classes),
-                                Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
-                            ))
-                )
-            },
-        )
+                    Some(DirectType::Opaque(Type::Named(name, args)))
+                        if name == "list"
+                            && matches!(args.as_slice(), [element]
+                                if !matches!(element, Type::Named(element, _) if element == "str"))
+                ) || array_view_code(variable_types.get(list)).is_some())
+        })
         .into_iter()
         .filter_map(|region| {
             // An Array's loop reads its layout once when every element
@@ -2709,6 +3201,7 @@ impl<'a> NativeCodegen<'a> {
                 ir_blocks: Vec::new(),
                 selects: Vec::new(),
                 entries: Vec::new(),
+                scalar_entries: Vec::new(),
                 expected: Vec::new(),
                 field_box: None,
             })
@@ -2754,7 +3247,6 @@ impl<'a> NativeCodegen<'a> {
                         .is_some_and(|ty| matches!(ty, Type::Named(name, _) if name == "list"))
                         && scalar_list(variable_types.get(temp))
                 },
-                pure_index: &|temp| scalar_list(variable_types.get(temp)),
                 scalar_field: &|place| {
                     field_type(place).is_some_and(|ty| {
                         matches!(
@@ -2764,6 +3256,7 @@ impl<'a> NativeCodegen<'a> {
                     })
                 },
                 keeps_instances: &|callee| self.instance_keepers.contains(callee),
+                keeps_receiver: &|callee| self.layout_keepers.get(callee),
             },
         );
         for region in field_regions {
@@ -2792,10 +3285,15 @@ impl<'a> NativeCodegen<'a> {
                 ir_blocks: Vec::new(),
                 selects: Vec::new(),
                 entries: Vec::new(),
+                scalar_entries: Vec::new(),
                 expected: Vec::new(),
                 field_box: Some(field_box),
             });
         }
+        let formatted_reads = match self.freestanding {
+            Some(_) => HashSet::new(),
+            None => str_slots::formatted_reads(function),
+        };
         let mut compiler = FunctionCompiler {
             raw_cells: HashMap::new(),
             addressed_members: HashMap::new(),
@@ -2812,6 +3310,9 @@ impl<'a> NativeCodegen<'a> {
             next_variable_index: variable_index,
             function_refs,
             sinkless_refs,
+            quiet_sinks: &self.quiet_sinks,
+            untagged_params: &self.untagged_params,
+            unpublished_store: false,
             recovery_refs,
             result_twin_refs,
             result_twin_body,
@@ -2819,6 +3320,26 @@ impl<'a> NativeCodegen<'a> {
             result_twin_request: None,
             result_twin_called: false,
             result_twin_words: None,
+            view_twin_refs,
+            str_slots,
+            str_element_lists: str_elements.lists,
+            str_literal_lists: match self.freestanding {
+                Some(_) => HashSet::new(),
+                None => str_slots::str_literal_lists(function),
+            },
+            clone_moves: match self.freestanding {
+                Some(_) => HashMap::new(),
+                None => str_slots::clone_moves(function),
+            },
+            appended_copies: str_slots::appended_copies(function),
+            extended_bytes: str_slots::extended_bytes(function),
+            indexed_bytes: str_slots::indexed_bytes(function),
+            deferred_byte_texts: HashMap::new(),
+            spliced_plan: str_slots::spliced_formats(function, &formatted_reads),
+            formatted_reads,
+            spliced_formats: HashMap::new(),
+            deferred_reads: HashSet::new(),
+            deferred_str_copies: HashMap::new(),
             checked_scalar_body: checked_entry.then_some(func_id),
             function_thunk_refs,
             callback_refs,
@@ -2831,6 +3352,10 @@ impl<'a> NativeCodegen<'a> {
             freestanding: self.freestanding,
             checks_cast: false,
             frameless_descriptor: frameless.then_some(descriptor),
+            deferred_frame,
+            deferred_descriptor: deferred_frame.map(|_| descriptor),
+            chain_refs,
+            chain_link,
             forwarding_frame,
             deferred_traps: (frameless
                 && defers_lane_traps(function)
@@ -2847,6 +3372,12 @@ impl<'a> NativeCodegen<'a> {
             borrowing: &self.borrowing,
             return_type: function.return_type.clone(),
             layout_scratch: LayoutScratch::default(),
+            appended_temps: elements::appended_temps(function, |temp| {
+                !explicit_locals.tracked.contains(temp) && !explicit_locals.loans.contains(temp)
+            })
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
             tracked_roots: explicit_locals.tracked,
             moved_operands: explicit_locals.moved,
             loan_locals: explicit_locals.loans,
@@ -2867,12 +3398,18 @@ impl<'a> NativeCodegen<'a> {
             lend_lookup: false,
             lent_elements,
             lent_payloads: lent_element_reads.payloads.into_keys().collect(),
+            shaped_lent_payloads: HashSet::new(),
             element_promotions: lent_element_reads.promotions,
             lend_element: false,
             json_views,
             lend_json_view: false,
             json_nests,
             lent_element_flag: None,
+            instance_element_blocks,
+            lend_instance_list: None,
+            lent_element_block: None,
+            instance_appends: classes::instance_append_temps(function),
+            deferred_instance: None,
             lookup_payload: None,
             lookup_word: None,
             lookup_word_found: None,
@@ -2883,21 +3420,32 @@ impl<'a> NativeCodegen<'a> {
             str_view_wanted: false,
             str_view_found: None,
             pushed_str_view: None,
-            extended_str_bytes: None,
             lent_temps: HashMap::new(),
+            read_only_field_lends: classes::read_only_field_lends(function, &field_lend_temps),
             field_lend_temps,
             field_lends: HashMap::new(),
             record_lends: HashMap::new(),
             element_calls: HashMap::new(),
             deferred_element_retain: None,
             field_box_receiver: false,
+            block_loans: element_loans::block_passed_loans(
+                function,
+                &native_loan_uses,
+                &self.block_params,
+            ),
             native_loan_uses,
+            stand_in_slots: HashMap::new(),
             element_lend_temps,
             native_loans: HashMap::new(),
             push_entry_loans: element_loans::push_entry_loans(function),
             fused_entry_probes,
             pending_try_read: None,
+            pending_try_event: None,
+            pending_str_chain: None,
+            word_tuples: HashMap::new(),
+            pending_try_write: None,
             fused_entry_slots: HashMap::new(),
+            deferred_entry_keys: HashMap::new(),
             entry_copy_loans: entry_copy_loans.clone(),
             shadow_entry_copies,
             shadow_read_targets,
@@ -2924,17 +3472,23 @@ impl<'a> NativeCodegen<'a> {
             fused_entry_copies: HashMap::new(),
             retain_calls: HashMap::new(),
             retain_releases: HashMap::new(),
+            variant_handles: HashSet::new(),
             consumed_retains: HashSet::new(),
             callable_retains: HashMap::new(),
             retained_unions: HashSet::new(),
             last_runtime_type_tag: None,
+            runtime_type_tagged: None,
             shaped_locals,
             reusable_array_temporaries: reusable_array_temporaries(function),
             array_binary_reuse: 0,
             shaped_boxes: HashSet::new(),
+            checked_variant: None,
+            variant_read_place: None,
+            tested_variant: None,
             confined_instances: classes::confined_instances(function, &self.classes),
             skip_class_check: false,
             class_check_snapshot: None,
+            layout_checks: Vec::new(),
             list_snapshots,
             snapshot_vals: HashMap::new(),
             current_snapshot_label: String::new(),
@@ -2967,6 +3521,23 @@ impl<'a> NativeCodegen<'a> {
             runtime: runtime_refs,
         };
 
+        compiler.retain_str_element_slots(|compiler, local, list| {
+            compiler.result_slots.contains_key(local)
+                || compiler.lent_places.contains(local)
+                || compiler.lookup_slots.contains(local)
+                || compiler.recovery_slots.contains_key(local)
+                || compiler.text_byte_slices.contains(local)
+                || compiler.lent_elements.contains_key(local)
+                || compiler.element_lend_temps.contains(local)
+                || compiler.field_lend_temps.contains(local)
+                || compiler.key_loops.contains_key(list)
+                // A walk of a dict's entries reads the element as a box,
+                // so no element words come from a list.
+                || compiler.entry_loops.contains_key(list)
+                // A membership test on the element reads the key where the
+                // list holds it and never assigns the slot's words.
+                || compiler.str_key_tests.contains_key(local)
+        });
         let return_ty = ensure_direct_type(
             &function.return_type,
             &self.classes,
@@ -2980,6 +3551,7 @@ impl<'a> NativeCodegen<'a> {
         compiler.json_nests = Some(std::mem::take(&mut compiler.json_nests))
             .filter(|_| tapes)
             .unwrap_or_default();
+        let before_stamps = compiler.builder.current_block();
         compiler.prepare_raw_cells(function)?;
         for param in &function.params {
             if param.passing == MirReceiverKind::Value {
@@ -2989,8 +3561,40 @@ impl<'a> NativeCodegen<'a> {
         if function.receiver == Some(MirReceiverKind::Value) {
             compiler.stamp_lexical_owner("self")?;
         }
+        // A runtime call of the raw cells or the stamps may push a deferred
+        // frame record first, which ends the entry block in a branch. The
+        // body then starts in a block of its own after them.
+        if compiler.builder.current_block() != before_stamps {
+            let body = compiler.builder.create_block();
+            compiler.builder.jump(body, &[]);
+            compiler.builder.switch_to_block(body);
+            compiler.blocks.insert(function.entry.clone(), body);
+        }
         compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;
+        // A function on a call cycle pushes its record where a way first
+        // calls out, warm or not.
+        // A function on a call cycle defers its record past the calls of
+        // its own code and the runtime's reads of boxes generated code
+        // could not read in place. It pushes the record on entry when a
+        // warm way calls the runtime for anything else, which pays for the
+        // record on that way anyway.
+        // A function on no call cycle does the same: its deferred push is
+        // as cheap as one on entry (see `define_frame_entry`).
+        let frame_free = frame_calls(&compiler.runtime);
+        let warm_calls = {
+            let mut runtime = Vec::new();
+            compiler.runtime.map(|callee| runtime.push(*callee));
+            let fallbacks = layout_fallbacks(&compiler.runtime);
+            compiler.builder.calls_when_warm_where(&|callee| {
+                runtime.contains(&callee)
+                    && !frame_free.contains(&callee)
+                    && !fallbacks.contains(&callee)
+            })
+        };
+        if compiler.deferred_frame.is_some() && warm_calls {
+            compiler.builder.settle_frame();
+        }
 
         compiler.builder.seal_all_blocks();
         try_or_string_error!(
@@ -3876,6 +4480,15 @@ struct DirectElementSelector {
     span: Span,
 }
 
+/// A selection of one element of a list held in a list field of an
+/// instance (see `FunctionCompiler::nested_field_list_selector`).
+struct NestedFieldList {
+    root: String,
+    slot: classes::ClassSlot,
+    outer: DirectElementSelector,
+    inner: DirectElementSelector,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DirectUnionPayload {
     base: String,
@@ -4271,6 +4884,13 @@ struct FunctionCompiler<'a> {
     /// The bodies without write-through sinks, which a call with
     /// no write-through sink to hand over calls.
     sinkless_refs: HashMap<String, FuncRef>,
+    /// The `mut` call slots of each function that it never changes.
+    quiet_sinks: &'a HashMap<String, HashSet<usize>>,
+    /// See `untagged_args`.
+    untagged_params: &'a HashSet<(String, usize)>,
+    /// Whether the store being emitted brings back a value its place
+    /// already holds, which publishes nothing (see `quiet_sinks`).
+    unpublished_store: bool,
     /// The twin of each function that has one (see `result_slots`).
     result_twin_refs: HashMap<String, FuncRef>,
     /// The payload types of the `Result` this body returns as words, when
@@ -4284,6 +4904,45 @@ struct FunctionCompiler<'a> {
     result_twin_called: bool,
     /// The words the last call of a twin returned.
     result_twin_words: Option<Vec<Val>>,
+    /// The view twin of each function that has one (see `str_slots`).
+    view_twin_refs: HashMap<String, str_slots::ViewTwin>,
+    /// The `str` parameters this body takes as words, when it is a view
+    /// twin, and the `str` locals that hold a list element as words.
+    str_slots: HashMap<String, str_slots::StrSlot>,
+    /// Each `str` local that holds a list element as words, with the list.
+    str_element_lists: HashMap<String, String>,
+    /// The locals that hold the frozen copy of a literal of `str` literals
+    /// (see `str_slots::str_literal_lists`).
+    str_literal_lists: HashSet<String>,
+    /// The copies of a `str` local that may move its reference instead,
+    /// each with the local and the scrutinee it is a payload of (see
+    /// `str_slots::clone_moves`).
+    clone_moves: HashMap<String, str_slots::CloneMove>,
+    /// The temporaries that hold a copy of a `str` only for the next
+    /// operation to append it to a list.
+    appended_copies: HashMap<String, String>,
+    /// The temporaries that hold the bytes of a `str` only to extend a
+    /// list with them (see [`str_slots::extended_bytes`]).
+    extended_bytes: HashSet<String>,
+    /// The words of each such copy between the two operations, when this
+    /// body has the copied `str` as words.
+    deferred_str_copies: HashMap<String, str_slots::ViewArgument>,
+    /// The temporaries that hold the bytes of a `str` only for one read of
+    /// a byte (see [`str_slots::indexed_bytes`]).
+    indexed_bytes: HashSet<String>,
+    /// The words of each such `str` between the copy and the read.
+    deferred_byte_texts: HashMap<String, str_slots::ViewArgument>,
+    /// The loan reads that fill a `str` only for the next operation to
+    /// push it into an f-string (see `str_slots::formatted_reads`).
+    formatted_reads: HashSet<String>,
+    /// Those of them this body read as words, and the f-strings it kept as
+    /// parts, whose release frees nothing.
+    deferred_reads: HashSet<String>,
+    /// The f-strings of `str_slots::spliced_formats`.
+    spliced_plan: HashSet<String>,
+    /// The parts of each of them this body kept for the f-string that
+    /// takes it, until that one pushes them.
+    spliced_formats: HashMap<String, Vec<str_slots::ViewArgument>>,
     recovery_refs: HashMap<String, FuncRef>,
     checked_scalar_body: Option<FuncHandle>,
     function_thunk_refs: HashMap<String, FuncRef>,
@@ -4299,6 +4958,15 @@ struct FunctionCompiler<'a> {
     /// record (see `frameless_leaf`), which each trap path pushes before
     /// the runtime reports the trap.
     frameless_descriptor: Option<Val>,
+    /// The variable that is set once the function has pushed the frame
+    /// record it defers (see `defers_frame`).
+    deferred_frame: Option<Var>,
+    /// The descriptor of the record such a function defers.
+    deferred_descriptor: Option<Val>,
+    /// The chain body of each function whose calls lend a caller chain
+    /// link, and the link a chain body was lent (see `caller_chains`).
+    chain_refs: HashMap<String, FuncRef>,
+    chain_link: Option<Val>,
     /// The source frame of a closure implemented by its forwarded method.
     forwarding_frame: Option<Val>,
     /// The overflow checks of a lane method that wait for its return (see
@@ -4322,6 +4990,10 @@ struct FunctionCompiler<'a> {
     /// whose layout owns a handle holds a boxed Copy value, which the
     /// backend drops itself: see `release_boxed_copy_roots`.
     tracked_roots: HashSet<String>,
+    /// The untracked temporaries whose one use is as the element an
+    /// append adds, whose box the list takes (see
+    /// `elements::appended_temps`).
+    appended_temps: HashSet<String>,
     /// Class locals whose fields need no layout check (see
     /// `classes::confined_instances`).
     confined_instances: HashSet<String>,
@@ -4345,6 +5017,9 @@ struct FunctionCompiler<'a> {
     /// of a list in a field of the instance once: the loop, whose copy
     /// runs while the instance keeps its layout.
     class_check_snapshot: Option<usize>,
+    /// The latest layout checks, the latest first: each one's block, the block it takes where
+    /// the box keeps the layout, the box, the access code, and the flag.
+    layout_checks: Vec<(Blk, Blk, Val, i64, Val)>,
     /// The `mut` arguments and receivers the MIR moves into their call,
     /// which take their root's value: see `ownership::moved_writebacks`.
     moved_operands: HashSet<*const Operand>,
@@ -4404,6 +5079,11 @@ struct FunctionCompiler<'a> {
     /// a reference to the box where a lent element copies it. See
     /// `elements::lent_payload_reads`.
     lent_payloads: HashSet<String>,
+    /// The locals of `lent_payloads` whose one read found a box that carries
+    /// the local's type's tag: the variant's own box read as the type its
+    /// variant declares, or a box the read tagged. A promotion only takes a
+    /// reference to the box, so it keeps the tag.
+    shaped_lent_payloads: HashSet<String>,
     /// The lent locals that take their own reference before the
     /// instruction at each block label and index.
     element_promotions: HashMap<(String, usize), Vec<String>>,
@@ -4422,6 +5102,24 @@ struct FunctionCompiler<'a> {
     /// The lent flag of the element read that just compiled, when it could
     /// lend.
     lent_element_flag: Option<Val>,
+    /// The lent locals whose every use reads a scalar field, each with the
+    /// variable that holds the address of the element's bytes while the
+    /// local reads an element a list keeps in place, and 0 otherwise. See
+    /// `classes::instance_element_locals`.
+    instance_element_blocks: HashMap<String, Var>,
+    /// Set while the element read for one of `instance_element_blocks`
+    /// compiles: the list access code of a list that keeps the element's
+    /// class in place, and the bytes one element takes.
+    lend_instance_list: Option<(i64, i64)>,
+    /// The element address the read for one of `instance_element_blocks`
+    /// left, 0 when it lent or copied a box.
+    lent_element_block: Option<Val>,
+    /// The temporaries of `classes::instance_append_temps`.
+    instance_appends: HashSet<String>,
+    /// A `Construct` whose temporary the next instruction appends: the
+    /// temporary, the class, and the field values, built into the list
+    /// there (see `push_constructed_instance`).
+    deferred_instance: Option<(String, String, Vec<crate::mir::MirFieldInit>)>,
     /// Set while a `get` for one of `lookup_slots` compiles: `Some(false)`
     /// asks for the payload form, and the helper that emits it sets
     /// `Some(true)`.
@@ -4454,9 +5152,6 @@ struct FunctionCompiler<'a> {
     /// The bytes and length the append being compiled copies into its list
     /// when the box it is given is null.
     pushed_str_view: Option<(Val, Val)>,
-    /// The `str` whose bytes the current instruction's `extend` appends, as
-    /// [`extended_str_bytes`] finds it.
-    extended_str_bytes: Option<Operand>,
     /// The temporaries of the function's lends, each with whether its lend
     /// is mutable. The call that writes back a mutable one takes its value,
     /// as MIR states by giving it no retain. A builtin operation changes a
@@ -4465,6 +5160,9 @@ struct FunctionCompiler<'a> {
     /// The temporaries of lends of a field to one runtime operation, which
     /// may lend the field's box as it is. See `classes::field_lend_temps`.
     field_lend_temps: HashSet<String>,
+    /// The field lend temporaries whose one operation only reads the list.
+    /// See `classes::read_only_field_lends`.
+    read_only_field_lends: HashSet<String>,
     /// The field lends in progress that lent a box as it is, by temporary.
     field_lends: HashMap<String, classes::FieldLend>,
     /// The lends of a plain record to a method call in progress that read
@@ -4483,6 +5181,13 @@ struct FunctionCompiler<'a> {
     /// temporaries their lends lend to one runtime operation. See
     /// `element_loans::native_element_loans`.
     native_loan_uses: HashMap<String, element_loans::LoanUse>,
+    /// The followed loans passed only to parameters that read scalar
+    /// fields, with those fields (see `element_loans::block_passed_loans`).
+    block_loans: HashMap<String, element_loans::BlockParam>,
+    /// The stack slot of the stand-in box header each of `block_loans`
+    /// lends an element kept in place by (see
+    /// `element_loans::emit_element_stand_in`).
+    stand_in_slots: HashMap<String, crate::native_backend::Slot>,
     element_lend_temps: HashSet<String>,
     /// The element loans generated code followed when they began.
     native_loans: HashMap<String, element_loans::NativeLoan>,
@@ -4495,7 +5200,21 @@ struct FunctionCompiler<'a> {
     /// The result temporary, line word, and failure word address of a
     /// `try file.read_line()` whose read is emitted and whose `try` is next.
     pending_try_read: Option<(String, Val, Val)>,
+    /// The result temporary, words address, and failure word address of
+    /// a fused event read whose `try` is next (see `event_reads`).
+    pending_try_event: Option<(String, Val, Val)>,
+    /// The last step of a run of `+` on `str`s being compiled, with the
+    /// run's parts and span (see `str_chains`).
+    pending_str_chain: Option<(*const Rvalue, Vec<Operand>, Span)>,
+    /// The tuples of fused event reads, held as words (see `event_reads`).
+    word_tuples: HashMap<String, event_reads::WordTuple>,
+    /// The result temporary of a `try` write (see
+    /// `Self::opens_with_try_write`) and the word its helper returned.
+    pending_try_write: Option<(String, Val)>,
     fused_entry_slots: HashMap<String, Var>,
+    /// The entry loans whose key a view twin holds as words, with the key
+    /// and the loan's selector variable, until a walk needs the key's box.
+    deferred_entry_keys: HashMap<String, (String, Var)>,
     /// The entry loans of the function a fused test may copy for, with
     /// whether each is read once, and the copies those tests made, by loan.
     entry_copy_loans: HashMap<String, bool>,
@@ -4572,6 +5291,9 @@ struct FunctionCompiler<'a> {
     /// took. A handle no consumer took was only read: its retain and its
     /// releases cancel at the end of the instruction.
     retain_releases: HashMap<Val, Vec<Inst>>,
+    /// The boxes this function holds that are variants of an enum the
+    /// program defines (see `note_variant_handle`).
+    variant_handles: HashSet<Val>,
     consumed_retains: HashSet<Val>,
     /// The retain adapter call of each callable a `Retain` made, by its
     /// first word, with the drop calls that release it. A consumer that
@@ -4583,6 +5305,10 @@ struct FunctionCompiler<'a> {
     /// The latest `tag_value_type` call: its instruction, value, and encoded
     /// type, so an identical tag that no other call follows is not repeated.
     last_runtime_type_tag: Option<(Inst, Val, String)>,
+    /// The block a `tag_value_type` check joins in, with the value and the
+    /// encoded type it tagged, so an identical tag in that block that no
+    /// other call precedes is not repeated.
+    runtime_type_tagged: Option<(Blk, Val, String)>,
     /// The locals whose box always carries the tag of their type. See
     /// `shapes::shaped_locals`.
     shaped_locals: HashSet<String>,
@@ -4597,6 +5323,16 @@ struct FunctionCompiler<'a> {
     /// what it returns, or a variant that keeps its payloads in place.
     /// Coercing one to that type tags nothing.
     shaped_boxes: HashSet<Val>,
+    /// The scrutinee local, variant and flag of the last payload read in
+    /// place: the flag is 1 where that read found the box in its layout
+    /// and of that variant. A read from the same local right after it
+    /// takes the flag instead of checking again. Cleared by anything else.
+    checked_variant: Option<(String, usize, Val)>,
+    /// The scrutinee local of the payload read being compiled, if any.
+    variant_read_place: Option<String>,
+    /// The variant and flag of the last `typed_variant_test` that checked
+    /// the box's layout: as `checked_variant`, for a match to hand on.
+    tested_variant: Option<(usize, Val)>,
     /// The `str` boxes this instruction loaded as fresh copies through an
     /// element path, which no other place holds, so a clone of one is the
     /// box itself.
@@ -4700,6 +5436,17 @@ impl<'a> FunctionCompiler<'a> {
     fn mark_temporary_opaque_owned(&mut self, value: &ValueRef) {
         if self.is_opaque_value(value) {
             self.layout_scratch.insert(value.values[0]);
+            self.note_variant_handle(&value.ty, value.values[0]);
+        }
+    }
+
+    /// Records that `word`, of direct type `ty`, is a box that holds a
+    /// variant of an enum the program defines when it is one, so its
+    /// release frees it as a variant (see
+    /// `aura_direct_release_last_owned_variant`).
+    fn note_variant_handle(&mut self, ty: &DirectType, word: Val) {
+        if matches!(ty, DirectType::Opaque(Type::Named(name, _)) if self.enums.contains_key(name)) {
+            self.variant_handles.insert(word);
         }
     }
 
@@ -4720,9 +5467,12 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn release_opaque_handle(&mut self, value: Val) {
-        let call = self
-            .builder
-            .call(self.runtime[RuntimeFn::ReleaseValue], &[value]);
+        let release = if self.variant_handles.contains(&value) {
+            RuntimeFn::ReleaseLastOwnedVariant
+        } else {
+            RuntimeFn::ReleaseValue
+        };
+        let call = self.builder.call(self.runtime[release], &[value]);
         if self.retain_calls.contains_key(&value) {
             self.retain_releases
                 .entry(value)
@@ -5045,7 +5795,10 @@ impl<'a> FunctionCompiler<'a> {
                 let owned = self.builder.select(lent, null, words[0]);
                 self.release_opaque_handle(owned);
             }
-            _ => self.release_opaque_handle(words[0]),
+            _ => {
+                self.note_variant_handle(&ty, words[0]);
+                self.release_opaque_handle(words[0]);
+            }
         }
         Ok(())
     }
@@ -5092,12 +5845,28 @@ impl<'a> FunctionCompiler<'a> {
         let target_ty = self.type_of_place(target)?;
         self.lend_element = true;
         self.lend_json_view = self.json_views.contains(target);
+        let element_block = self.instance_element_blocks.get(target).copied();
+        if element_block.is_some() {
+            self.lend_instance_list = self.instance_list_slot(&target_ty)?;
+        }
         let compiled = self.compile_rvalue_for_target(value, &target_ty);
         self.lend_element = false;
         self.lend_json_view = false;
+        self.lend_instance_list = None;
+        let address = self.lent_element_block.take();
+        if let Some(block_var) = element_block {
+            let address = address.unwrap_or_else(|| self.builder.iconst(types::I64, 0));
+            self.builder.def_var(block_var, address);
+        }
         let flag = self.lent_element_flag.take();
         let compiled = compiled?;
         let flag_var = self.lent_elements[target];
+        if self.lent_payloads.contains(target)
+            && !self.json_views.contains(target)
+            && matches!(compiled.values.as_slice(), [word] if self.shaped_boxes.contains(word))
+        {
+            self.shaped_lent_payloads.insert(target.to_string());
+        }
         let Some(flag) = flag else {
             let coerced = self.coerce_value(compiled, &target_ty)?;
             self.store_place(target, coerced)?;
@@ -5224,6 +5993,10 @@ impl<'a> FunctionCompiler<'a> {
             let zero = self.builder.iconst(types::I64, 0);
             self.builder.def_var(flag_var, zero);
         }
+        if let Some(block_var) = self.instance_element_blocks.get(name).copied() {
+            let zero = self.builder.iconst(types::I64, 0);
+            self.builder.def_var(block_var, zero);
+        }
         let ty = self.local_type(name)?;
         if !layout_owns_handles(&ty) {
             return Ok(());
@@ -5342,7 +6115,18 @@ impl<'a> FunctionCompiler<'a> {
             HashMap::<String, HashMap<String, Vec<DirectClosureCaptureWriteback>>>::new();
         incoming_writebacks.insert(function.entry.clone(), HashMap::new());
         let mut compiled = HashSet::new();
+        let mut predecessors = HashMap::<&str, Vec<&str>>::new();
+        for block in block_by_label.values() {
+            for successor in direct_terminator_successors(&block.terminator) {
+                predecessors
+                    .entry(successor)
+                    .or_default()
+                    .push(&block.label);
+            }
+        }
+        self.enter_method_snapshot(function)?;
 
+        let mut checked_at_exit = HashMap::new();
         for label in order {
             let block = block_by_label.get(label.as_str()).ok_or_else(|| {
                 format!(
@@ -5363,8 +6147,25 @@ impl<'a> FunctionCompiler<'a> {
                         function.name
                     )
                 })?;
+            // Blocks compile in reverse postorder, so only a loop's way
+            // back reaches a block after it.
+            let mut entered = predecessors.get(label.as_str()).into_iter().flatten();
+            if entered.all(|from| compiled.contains(*from)) {
+                self.builder.note_complete(self.blocks[label.as_str()]);
+            }
+            // A payload read's check holds in a block that only one block
+            // reaches, by its `Goto` or `Match`.
+            self.checked_variant = match predecessors.get(label.as_str()).map(Vec::as_slice) {
+                Some([from]) => checked_at_exit.get(*from).cloned(),
+                _ => None,
+            };
             let first_block = self.builder.block_count();
             self.compile_block(block, return_ty)?;
+            if let (Some(checked), Terminator::Goto(_) | Terminator::Match { .. }) =
+                (self.checked_variant.take(), &block.terminator)
+            {
+                checked_at_exit.insert(label.clone(), checked);
+            }
             let own = self.compiled_block_id(&label)?;
             self.note_snapshot_blocks(&label, own, first_block);
             compiled.insert(label.clone());
@@ -5505,9 +6306,24 @@ impl<'a> FunctionCompiler<'a> {
             if matches!(instruction, Instruction::IndexInRange { .. }) {
                 continue;
             }
+            if !matches!(
+                instruction,
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::VariantPayload {
+                        scrutinee: Operand::Place(place),
+                        ..
+                    },
+                } if target != place
+            ) {
+                self.checked_variant = None;
+            }
             self.current_snapshot_instruction = instruction_index;
             if self.freestanding.is_some() && self.compile_scale_offset(block, instruction_index)? {
                 skipped = 3;
+                continue;
+            }
+            if self.defer_instance_construct(&block.instructions[instruction_index..])? {
                 continue;
             }
             if self.compile_union_buffer_read(block, instruction_index)? {
@@ -5528,6 +6344,26 @@ impl<'a> FunctionCompiler<'a> {
                 skipped = 2;
                 continue;
             }
+            if let Some(chain) = self.opens_with_str_chain(
+                &block.label,
+                instruction_index,
+                &block.instructions[instruction_index..],
+            ) {
+                skipped = chain.covered - 1;
+                self.compile_str_chain_run(block, instruction_index, chain)?;
+                continue;
+            }
+            if let Some(write) = self.opens_with_try_write(&block.instructions[instruction_index..])
+            {
+                self.compile_try_write(write, instruction)?;
+                continue;
+            }
+            if let Some((result, stream)) =
+                self.opens_with_try_event(&block.instructions[instruction_index..])
+            {
+                self.compile_try_event(result, stream)?;
+                continue;
+            }
             if self.opens_with_try_read(&block.instructions[instruction_index..]) {
                 if let Instruction::Assign {
                     target,
@@ -5535,38 +6371,18 @@ impl<'a> FunctionCompiler<'a> {
                         Rvalue::Call {
                             callee:
                                 CallTarget::Runtime {
+                                    op: RuntimeOp::Resource(op),
                                     receiver: Some(file),
                                     ..
                                 },
+                            args,
                             ..
                         },
                 } = instruction
                 {
-                    self.compile_try_read(target, file)?;
+                    self.compile_try_read(target, *op, file, args)?;
                     continue;
                 }
-            }
-            if let Some(text) = extended_str_bytes(&block.instructions[instruction_index..])
-                .filter(|_| self.extends_byte_list(&block.instructions[instruction_index + 1]))
-            {
-                // The extend reads the text's bytes itself, so the list
-                // `to_bytes` would make for it is never built.
-                self.extended_str_bytes = Some(text.clone());
-                let compiled = self.compile_instruction(
-                    &block.label,
-                    instruction_index + 1,
-                    &block.instructions[instruction_index + 1],
-                );
-                let taken = self.extended_str_bytes.take().is_none();
-                compiled?;
-                if !taken {
-                    return Err(
-                        "direct backend left a fused `extend(text.to_bytes())` without its bytes"
-                            .to_string(),
-                    );
-                }
-                skipped = 1;
-                continue;
             }
             if let Some(receiver) = owned_replace_receiver(&block.instructions[instruction_index..])
                 .filter(|receiver| self.owns_str_temporary(receiver))
@@ -5807,6 +6623,11 @@ impl<'a> FunctionCompiler<'a> {
         self.emptied_store_root = None;
         self.layout_scratch.consumers.clear();
         compiled?;
+        if self.deferred_instance.is_some() {
+            return Err(format!(
+                "direct backend left a deferred instance before {instruction:?}"
+            ));
+        }
         self.release_all_temporary_owned();
         self.cancel_unconsumed_retains();
         Ok(())
@@ -6351,11 +7172,29 @@ impl<'a> FunctionCompiler<'a> {
             }
             // The tuple of a walk by entry is never made.
             Instruction::Release { place } if self.entry_loop_tuples.contains_key(place) => {}
+            // A fused event read's tuple is words (see `event_reads`).
+            Instruction::Release { place } if self.release_word_tuple(place) => {}
+            Instruction::Assign {
+                target,
+                value: Rvalue::Use(Operand::MovePlace(source)),
+            } if self.move_word_tuple(target, source) => {}
+            Instruction::Assign {
+                target,
+                value: Rvalue::VecLiteral { elements, .. },
+            } if self.str_literal_lists.contains(target) => {
+                self.compile_str_literal_list(target, elements)?;
+            }
+            // The frozen copy of a literal takes no reference.
+            Instruction::Release { place } if self.str_literal_lists.contains(place) => {}
             Instruction::Assign { target, value }
                 if self.compile_callable_element_read(target, value)? => {}
             // A callee read from a loan only to be called is called through
             // the loan, so the read and its release make nothing.
             Instruction::ReadLoan { target, loan } if self.call_through_loan(target, loan)? => {}
+            Instruction::ReadLoan { target, loan }
+                if self.defer_formatted_read(target, loan)? => {}
+            Instruction::Release { place } if self.deferred_reads.remove(place) => {}
+            Instruction::Assign { target, value } if self.splice_format(target, value)? => {}
             Instruction::Release { place } if self.in_place_callees.contains_key(place) => {}
             // A walk by entry makes neither the keys copy nor the key.
             Instruction::Release { place }
@@ -6383,6 +7222,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             // A slice native code did not make holds nothing.
             Instruction::Release { place } if self.text_byte_slices.contains(place) => {}
+            Instruction::Release { place } if self.release_deferred_bytes(place) => {}
             Instruction::Release { place } if self.release_result_slot(place)? => {}
             // A found int64 kept as a word is in no box.
             Instruction::Release { place } if self.map_word_slots.contains_key(place) => {}
@@ -6733,6 +7573,12 @@ impl<'a> FunctionCompiler<'a> {
                     self.release_opaque_handle(key);
                 }
             }
+            Instruction::Assign { target, .. } if self.defer_str_copy(target)? => {}
+            Instruction::Assign { target, value }
+                if self.defer_extended_bytes(target, value)? => {}
+            Instruction::Assign { target, value } if self.defer_indexed_bytes(target, value)? => {}
+            Instruction::Assign { target, value }
+                if self.index_deferred_bytes(target, value)? => {}
             Instruction::Assign { target, value } => {
                 if let Rvalue::Closure { captures, .. } = value {
                     let root = target.split('.').next().unwrap_or(target).to_string();
@@ -6857,6 +7703,9 @@ impl<'a> FunctionCompiler<'a> {
                     self.compile_text_byte_slice(target, value)?;
                 } else if self.lent_elements.contains_key(target.as_str()) {
                     self.compile_lent_element_assign(target, value)?;
+                } else if self.compile_str_element_assign(target, value)?
+                    || self.compile_clone_move(target)?
+                {
                 } else if let Some(scalar) = self.compile_scalar_variant_payload(target, value)? {
                     self.store_place(target, scalar)?;
                 } else if let Some(found) = self.compile_fused_entry_probe(target, value)? {
@@ -7000,6 +7849,21 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.node_read_targets.contains(place.as_str())
                 );
+                // A match of one variant of a local hands its check on to
+                // the payload reads of its arm (see `checked_variant`).
+                let tested_place = match (scrutinee, arms.as_slice()) {
+                    (Operand::Place(place), [arm])
+                        if !arm.wildcard
+                            && !recovery_slot
+                            && !lookup_slot
+                            && !lent
+                            && !node_read =>
+                    {
+                        Some(place.clone())
+                    }
+                    _ => None,
+                };
+                self.tested_variant = None;
                 let scrutinee = self.load_scrutinee(scrutinee)?;
                 let DirectType::Opaque(scrutinee_ty) = &scrutinee.ty else {
                     return Err(
@@ -7093,6 +7957,11 @@ impl<'a> FunctionCompiler<'a> {
                     self.layout_scratch = pending_owned;
                 }
                 self.release_all_temporary_owned();
+                if let (Some(place), Some((index, typed))) =
+                    (tested_place, self.tested_variant.take())
+                {
+                    self.checked_variant = Some((place, index, typed));
+                }
                 if self.closed_matches.contains(block_label) {
                     self.builder.trap(TrapCode::User(2));
                 } else {
@@ -7263,7 +8132,19 @@ impl<'a> FunctionCompiler<'a> {
             self.release_root_words(root)?;
         }
         self.release_boxed_copy_roots()?;
-        if self.frameless_descriptor.is_none() {
+        self.release_made_str_slots();
+        if let Some(framed) = self.deferred_frame {
+            let pushed = self.builder.use_var(framed);
+            let pop = self.builder.create_block();
+            let done = self.builder.create_block();
+            self.builder.frame_branch(pushed, pop, done);
+            self.builder.switch_to_block(pop);
+            self.builder.seal_block(pop);
+            emit_frame_pop(self.builder, &self.runtime);
+            self.builder.jump(done, &[]);
+            self.builder.switch_to_block(done);
+            self.builder.seal_block(done);
+        } else if self.frameless_descriptor.is_none() {
             emit_frame_pop(self.builder, &self.runtime);
         }
         if self.checked_scalar_body.is_some() {
@@ -7279,11 +8160,14 @@ impl<'a> FunctionCompiler<'a> {
         rvalue: &Rvalue,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
-        if self.borrow_field_reads || !reads_operands_only(rvalue) {
+        if self.borrow_field_reads
+            || !(reads_operands_only(rvalue) || makes_text_from_operands(rvalue))
+        {
             return self.compile_rvalue_for_target_directly(rvalue, target);
         }
-        // The rvalue gives back a scalar and keeps none of its operands, so
-        // a field box it reads stays the instance's for the whole read.
+        // The rvalue gives back a scalar or a new value and keeps none of
+        // its operands, so a field box it reads stays the instance's for
+        // the whole read.
         if self.field_read_copies.is_empty() {
             self.field_read_copies = (0..FIELD_READS_PER_RVALUE)
                 .map(|_| self.declare_word_var())
@@ -7306,12 +8190,19 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// Loads the scrutinee of a match or a payload read: the box of a
-    /// followed read-only loan where its list keeps it, and any other
-    /// operand as usual.
+    /// followed read-only loan where its list keeps it, the box of a field
+    /// where its instance keeps it, and any other operand as usual.
     fn load_scrutinee(&mut self, operand: &Operand) -> std::result::Result<ValueRef, String> {
         if let Operand::Place(place) = operand {
             if let Some(value) = self.pass_native_element(place)? {
                 return Ok(value);
+            }
+            // A box field of an instance kept in place is read where it
+            // lies: the match or the payload read is done with the box
+            // before anything can change the field.
+            if self.boxed_class_place(place)?.is_some() {
+                let ty = self.type_of_place(place)?;
+                return self.load_borrowed_field_argument(operand, &ty);
             }
         }
         self.load_operand(operand)
@@ -7704,6 +8595,9 @@ impl<'a> FunctionCompiler<'a> {
                             .flatten()
                     });
                 if is_comparison_op(*op) {
+                    if let Some(result) = self.compile_str_view_comparison(*op, left, right)? {
+                        return Ok(result);
+                    }
                     if let Some(result) =
                         self.compile_borrowed_element_comparison(*op, left, right, *span)?
                     {
@@ -7712,6 +8606,14 @@ impl<'a> FunctionCompiler<'a> {
                     if let Some(result) =
                         self.compile_str_literal_comparison(*op, left, right, *span)?
                     {
+                        return Ok(result);
+                    }
+                }
+                if *op == BinaryOp::Add {
+                    if let Some(result) = self.compile_pending_str_chain(rvalue)? {
+                        return Ok(result);
+                    }
+                    if let Some(result) = self.compile_str_slot_concat(left, right, *span)? {
                         return Ok(result);
                     }
                 }
@@ -7733,7 +8635,10 @@ impl<'a> FunctionCompiler<'a> {
                 callee,
                 args,
                 type_args,
-            } => self.compile_call(callee, args, type_args, target),
+            } => match self.compile_str_view_read(callee, args)? {
+                Some(read) => Ok(read),
+                None => self.compile_call(callee, args, type_args, target),
+            },
             Rvalue::VecLiteral {
                 elements,
                 element_type,
@@ -7914,6 +8819,10 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.lent_places.contains(place.as_str())
                 );
+                let read_place = match scrutinee {
+                    Operand::Place(place) => Some(place.clone()),
+                    _ => None,
+                };
                 let scrutinee = self.load_scrutinee(scrutinee)?;
                 if !lent {
                     let any = DirectType::Opaque(Type::named("Unknown"));
@@ -7924,13 +8833,16 @@ impl<'a> FunctionCompiler<'a> {
                     };
                     let index = *index;
                     let slow_scrutinee = scrutinee.clone();
-                    if let Some(payload) = self.typed_variant_payload(
+                    self.variant_read_place = read_place;
+                    let read = self.typed_variant_payload(
                         &scrutinee,
                         variant_name,
                         index,
                         read_as,
                         |this| this.compile_variant_payload(slow_scrutinee, index),
-                    )? {
+                    );
+                    self.variant_read_place = None;
+                    if let Some(payload) = read? {
                         return Ok(payload);
                     }
                 }
@@ -8048,6 +8960,14 @@ impl<'a> FunctionCompiler<'a> {
         let resolved_is_str = resolved_element_type == Type::named("str");
         let list_type = Type::Named("list".to_string(), vec![resolved_element_type]);
         let wildcard = runtime_type_is_wildcard(&list_type);
+        let scalar = scalar_element.filter(|_| matches!(element_direct_ty, DirectType::Scalar(_)));
+        // A short literal of scalars starts with room for every element,
+        // which all go in place. The room is what appends growing the list
+        // from empty would have left, so later appends grow it as before.
+        let room = (scalar.is_some() && !wildcard && elements.len() <= LITERAL_ELEMENTS_IN_PLACE)
+            .then_some(elements.len())
+            .filter(|len| *len > 0)
+            .map(|len| len.next_power_of_two().max(4));
         let init = if wildcard {
             self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[])
         } else {
@@ -8056,26 +8976,37 @@ impl<'a> FunctionCompiler<'a> {
             let encoded = crate::native_runtime::canonical_runtime_type_name(&list_type);
             let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
             let cell = self.tag_cell(&encoded)?;
-            let call = self.builder.call(
-                self.runtime[RuntimeFn::VecEmptyTagged],
-                &[cell, type_ptr, type_len],
-            );
+            let call = match room {
+                Some(room) => {
+                    let room = self.builder.iconst(types::I64, room as i64);
+                    self.builder.call(
+                        self.runtime[RuntimeFn::VecEmptyTaggedWithRoom],
+                        &[cell, type_ptr, type_len, room],
+                    )
+                }
+                None => self.builder.call(
+                    self.runtime[RuntimeFn::VecEmptyTagged],
+                    &[cell, type_ptr, type_len],
+                ),
+            };
             if elements.is_empty() {
                 self.last_runtime_type_tag = Some((call.inst, call.results[0], encoded));
             }
             call
         };
         let vector = self.owned_opaque_result(init.results, list_type);
+        if resolved_is_str && !wildcard && self.push_str_literals(vector.values[0], elements)? {
+            return Ok(vector);
+        }
         // A scalar or a record goes in as its bits, with no box, by the
         // calls `append` falls back to.
-        let scalar = scalar_element.filter(|_| matches!(element_direct_ty, DirectType::Scalar(_)));
         let record = self.plain_record(&element_direct_ty)?;
         for (position, element) in elements.iter().enumerate() {
             // The first element's call gives the list its storage, which
             // has room for the next few, so those go in place as an
             // `append` does. A long literal keeps the calls, which take
             // less code.
-            let in_place = (1..LITERAL_ELEMENTS_IN_PLACE).contains(&position);
+            let in_place = room.is_some() || (1..LITERAL_ELEMENTS_IN_PLACE).contains(&position);
             if let Some(kind) = scalar {
                 let loaded =
                     self.load_operand_with_integer_hint(element, element_direct_ty.scalar_kind())?;
@@ -8124,6 +9055,44 @@ impl<'a> FunctionCompiler<'a> {
             );
         }
         Ok(vector)
+    }
+
+    /// Appends the elements of a literal of `str` literals to `list` in
+    /// one call, from one constant that holds their texts one after
+    /// another and one that holds their lengths, when there are two or
+    /// more of them and some text is not empty.
+    fn push_str_literals(
+        &mut self,
+        list: Val,
+        elements: &[Operand],
+    ) -> std::result::Result<bool, String> {
+        let texts = elements
+            .iter()
+            .map(|element| match element {
+                Operand::String(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(texts) = texts.filter(|texts| texts.len() >= 2) else {
+            return Ok(false);
+        };
+        let joined = texts.concat();
+        let Some(lens) = texts
+            .iter()
+            .map(|text| u32::try_from(text.len()).ok().map(u32::to_le_bytes))
+            .collect::<Option<Vec<_>>>()
+            .filter(|_| !joined.is_empty())
+        else {
+            return Ok(false);
+        };
+        let (texts_ptr, _) = self.string_constant(joined.as_bytes())?;
+        let (lens_ptr, _) = self.string_constant(&lens.concat())?;
+        let count = self.builder.iconst(types::I64, texts.len() as i64);
+        self.builder.call(
+            self.runtime[RuntimeFn::VecPushStrLiterals],
+            &[list, texts_ptr, lens_ptr, count],
+        );
+        Ok(true)
     }
 
     fn compile_map_literal_for_target(
@@ -8738,6 +9707,7 @@ impl<'a> FunctionCompiler<'a> {
             return;
         }
         if let Some(descriptor) = self.frameless_descriptor {
+            self.push_caller_chain();
             if let Some(outer) = self.forwarding_frame {
                 self.builder
                     .call(self.runtime[RuntimeFn::EnterCall], &[outer]);
@@ -8873,12 +9843,8 @@ impl<'a> FunctionCompiler<'a> {
                 if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
                     && selection.element_type == Type::named("str")
                 {
-                    let equal = self.emit_str_view_equality(
-                        list,
-                        index,
-                        (literal_ptr, literal.len()),
-                        &slow_args,
-                    );
+                    let equal =
+                        self.emit_str_view_equality(list, index, literal.as_bytes(), &slow_args)?;
                     let result = if op == BinaryOp::Eq {
                         equal
                     } else {
@@ -8955,6 +9921,18 @@ impl<'a> FunctionCompiler<'a> {
         let Some((target, map, key, span)) = dict_str_clone(instructions) else {
             return Ok(false);
         };
+        // A `contains_key` test that already found the entry for this loan
+        // keeps what it found for the loan to read, so the loan compiles
+        // as usual and takes it.
+        if let Some(Instruction::BeginElementLoan { loan, .. }) = instructions.first() {
+            if self
+                .fused_entry_probes
+                .values()
+                .any(|probe| probe.loan == *loan)
+            {
+                return Ok(false);
+            }
+        }
         let text = Type::named("str");
         let dict = Type::Named("dict".to_string(), vec![text.clone(), text.clone()]);
         let plain = |codegen: &Self, place: &str, ty: &Type| {
@@ -9102,6 +10080,11 @@ impl<'a> FunctionCompiler<'a> {
             // A comparison makes no check.
             return self
                 .compile_binary(op, left, right, Some(span), ArithmeticTrap::None)
+                .map(Some);
+        }
+        if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+            return self
+                .compile_str_box_equality(op, loaded.values[0], Err(literal))
                 .map(Some);
         }
         let (literal_ptr, literal_len) = self.string_constant(literal.as_bytes())?;
@@ -9278,6 +10261,13 @@ impl<'a> FunctionCompiler<'a> {
             let right = self.ensure_opaque(right)?;
             let binary_opcode = Self::binary_opcode(op);
             let opcode = self.builder.iconst(types::I64, binary_opcode);
+            let str_ty = DirectType::Opaque(Type::named("str"));
+            if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                && left.ty == str_ty
+                && right.ty == str_ty
+            {
+                return self.compile_str_box_equality(op, left.values[0], Ok(right.values[0]));
+            }
             if is_comparison_op(op) {
                 // The result is a machine `bool`, so no box is built for it.
                 let (line, column) = self.span_values(span);
@@ -9610,9 +10600,12 @@ impl<'a> FunctionCompiler<'a> {
         let remainder_nonzero = self
             .builder
             .icmp(IntCC::NotEqual, truncating_remainder, zero);
-        let left_negative = self.builder.icmp(IntCC::SignedLessThan, left, zero);
-        let right_negative = self.builder.icmp(IntCC::SignedLessThan, right, zero);
-        let signs_differ = self.builder.bxor(left_negative, right_negative);
+        // A remainder that is not zero has the sign of `left`, so the
+        // signs differ when its sign is not the divisor's. Tested on the
+        // remainder, a positive constant divisor leaves `remainder < 0`,
+        // and LLVM knows the floor remainder lies in `0..right`.
+        let signs = self.builder.bxor(truncating_remainder, right);
+        let signs_differ = self.builder.icmp(IntCC::SignedLessThan, signs, zero);
         let adjust = self.builder.band(remainder_nonzero, signs_differ);
 
         if quotient {
@@ -10734,31 +11727,6 @@ impl<'a> FunctionCompiler<'a> {
         Ok(builder)
     }
 
-    /// Whether `instruction` is an `extend` on a place that holds a
-    /// `list[uint8]`, the receiver [`extended_str_bytes`] needs.
-    fn extends_byte_list(&self, instruction: &Instruction) -> bool {
-        let Instruction::Assign {
-            value:
-                Rvalue::Call {
-                    callee:
-                        CallTarget::Runtime {
-                            receiver: Some(Operand::Place(receiver)),
-                            ..
-                        },
-                    ..
-                },
-            ..
-        } = instruction
-        else {
-            return false;
-        };
-        matches!(
-            self.type_of_place(receiver),
-            Ok(DirectType::Opaque(Type::Named(name, args)))
-                if name == "list" && args == [Type::named("uint8")]
-        )
-    }
-
     /// Whether `root` is a `str` temporary this function owns outright, so
     /// an operation may take its box: nothing lends it or holds a loan of
     /// it.
@@ -10786,10 +11754,8 @@ impl<'a> FunctionCompiler<'a> {
         let Some(root) = self.str_append_root.clone() else {
             return Ok(None);
         };
-        let Rvalue::FormatString { parts } = value else {
-            return Ok(None);
-        };
-        if !self.tracked_roots.contains(&root)
+        if !matches!(value, Rvalue::FormatString { .. } | Rvalue::Binary { .. })
+            || !self.tracked_roots.contains(&root)
             || self.loan_locals.contains(&root)
             || self.lent_places.contains(&root)
             || self.lent_elements.contains_key(&root)
@@ -10800,6 +11766,13 @@ impl<'a> FunctionCompiler<'a> {
         {
             return Ok(None);
         }
+        let parts = match value {
+            Rvalue::FormatString { parts } => parts,
+            Rvalue::Binary { right, span, .. } if self.is_str_part(right) => {
+                return self.compile_str_plus_append(&root, right, *span).map(Some);
+            }
+            _ => return Ok(None),
+        };
         let text = self.take_place(&root)?;
         let text = self.transfer_owned_opaque_value(&text);
         // A leading literal part, as in `text += "..."`, appends in the call
@@ -10822,6 +11795,37 @@ impl<'a> FunctionCompiler<'a> {
         let builder = self.owned_opaque_result(call.results, Type::named("str"));
         self.push_format_parts(builder.values[0], rest)?;
         Ok(Some(builder))
+    }
+
+    /// `root = root + right` on a `str` local the function owns outright:
+    /// `right`'s words append to `root`'s box in place when nothing else
+    /// shares it. A result over the limit stops the program at `span`, as
+    /// the `+` does.
+    fn compile_str_plus_append(
+        &mut self,
+        root: &str,
+        right: &Operand,
+        span: Span,
+    ) -> std::result::Result<ValueRef, String> {
+        let (ptr, len) = match right {
+            Operand::String(text) => self.string_constant(text.as_bytes())?,
+            _ => match self.str_slot_words(right) {
+                Some(words) => words,
+                None => {
+                    let value = self.load_operand(right)?;
+                    let value = self.ensure_opaque(value)?;
+                    self.str_box_words(value.values[0])
+                }
+            },
+        };
+        let text = self.take_place(root)?;
+        let text = self.transfer_owned_opaque_value(&text);
+        let (line, column) = self.span_values(Some(span));
+        let results = self.runtime_call_results(
+            self.runtime[RuntimeFn::StrAppendWords],
+            &[text, ptr, len, line, column],
+        );
+        Ok(self.owned_opaque_result(results, Type::named("str")))
     }
 
     /// Appends each of `parts` to the f-string builder `handle`.
@@ -10849,6 +11853,9 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
                 MirFormatPart::Value(value) => {
+                    if self.push_format_words(handle, value)? {
+                        continue;
+                    }
                     let value = self.load_operand(value)?;
                     self.push_format_value(handle, value)?;
                 }
@@ -10948,7 +11955,19 @@ impl<'a> FunctionCompiler<'a> {
         // The shared validator binds one argument to each parameter.
         debug_assert_eq!(args.len(), expected.len(), "arguments of `{name}`");
         let reads_arguments_only = reads_arguments_only(args, &kept, &expected);
+        let view_twin = self.view_twin_call(name, args, !type_args.is_empty());
+        let mut view_words = Vec::new();
+        let mut view_copies = Vec::new();
         for (index, (argument, abi_expected)) in args.iter().zip(&expected).enumerate() {
+            if let Some((twin, held)) = &view_twin {
+                if let Some(held) = held.get(&index) {
+                    let words = self.load_held_words(held, twin.boxes(index))?;
+                    lowered_args.push(words.owner);
+                    view_words.extend([words.ptr, words.len]);
+                    view_copies.extend(words.released);
+                    continue;
+                }
+            }
             let specialized = substitute_type(&direct_type_to_type(abi_expected), &substitutions);
             let semantic_expected = ensure_direct_type(
                 &specialized,
@@ -10988,6 +12007,13 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 operand => self.load_operand_for_target(operand, &semantic_expected)?,
             };
+            // A parameter its function only matches on takes the box as it is.
+            if let (DirectType::Opaque(_), [word]) = (&loaded.ty, loaded.values.as_slice()) {
+                if type_args.is_empty() && self.untagged_params.contains(&(name.to_string(), index))
+                {
+                    self.shaped_boxes.insert(*word);
+                }
+            }
             let semantic_coerced = self.coerce_value(loaded, &semantic_expected)?;
             let coerced = self.coerce_value(semantic_coerced, abi_expected)?;
             let coerced = self.fixed_argument_reference(coerced, argument, kept.get(index));
@@ -11011,10 +12037,19 @@ impl<'a> FunctionCompiler<'a> {
             let transferred = self.transfer_values(&coerced);
             lowered_args.extend(transferred);
         }
+        lowered_args.extend(view_words);
+        let quiet_places = self.drop_quiet_sinks(name, &mut mutable_sink_places);
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
-        let func_ref = self.sinkless_callee(name, func_ref, &mutable_sinks);
-        let func_ref = self.result_twin_callee(name, func_ref);
+        let func_ref = match &view_twin {
+            Some((twin, _)) => twin.callee(mutable_sinks.0.is_some()),
+            None => {
+                let func_ref = self.sinkless_callee(name, func_ref, &mutable_sinks);
+                let func_ref = self.result_twin_callee(name, func_ref);
+                self.chain_callee(name, func_ref, &mut lowered_args)
+            }
+        };
         let inst = self.builder.call(func_ref, &lowered_args);
+        self.release_view_arguments(view_copies);
         let results = self.take_result_twin_words(name, inst.results);
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, writebacks) = self.split_call_results(name, results)?;
@@ -11025,7 +12060,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.shaped_boxes.insert(*word);
             }
         }
-        self.apply_writeback_places(&writeback_places, writebacks)?;
+        self.apply_writeback_places(&writeback_places, writebacks, &quiet_places)?;
         let result = self.align_erased_union_result(result, &substitutions)?;
         if self.program_shapes.returns_tagged(name) {
             if let (DirectType::Opaque(_), [word]) = (&result.ty, result.values.as_slice()) {
@@ -11570,7 +12605,13 @@ impl<'a> FunctionCompiler<'a> {
             }
             _ => None,
         };
-        let results = if let Some((source, code)) = literal_codec {
+        let from_words = match (name, args) {
+            ("str.to_bytes", [text]) => self.str_to_bytes_from_words(&text.value)?,
+            _ => None,
+        };
+        let results = if let Some(results) = from_words {
+            results
+        } else if let Some((source, code)) = literal_codec {
             let source = self.load_place(source)?;
             let code = self.builder.iconst(types::I64, code as i64);
             let decode = self
@@ -11613,7 +12654,26 @@ impl<'a> FunctionCompiler<'a> {
                     index + 1
                 ));
             }
-            let loaded = self.load_operand(&argument.value)?;
+            let loaded = match &argument.value {
+                // A stream in a field is passed where it lies to a builtin
+                // that borrows it: the builtin reads the stream it names,
+                // and the field keeps it.
+                Operand::Place(place)
+                    if place.contains('.')
+                        && builtin
+                            .metadata()
+                            .params
+                            .get(index)
+                            .map(|param| param.passing)
+                            == Some(ReceiverKind::Borrow)
+                        && self.type_of_place(place).ok()
+                            == Some(DirectType::Opaque(Type::named("http.Stream"))) =>
+                {
+                    let ty = DirectType::Opaque(Type::named("http.Stream"));
+                    self.load_borrowed_field_argument(&argument.value, &ty)?
+                }
+                operand => self.load_operand(operand)?,
+            };
             let loaded = self.ensure_opaque(loaded)?;
             loaded_args.push(loaded);
         }
@@ -12079,6 +13139,94 @@ impl<'a> FunctionCompiler<'a> {
         Ok((list.values[0], index))
     }
 
+    /// `len()` of a lent `str` element of a `list[str]` field, such as
+    /// `self.groups[i].len()`, read where the list keeps it when the
+    /// instance is kept in place, instead of from a copy of the element.
+    /// Any other instance, or a moved-out field, takes the runtime walk.
+    /// Returns `None` for any other call.
+    fn compile_field_str_element_len(
+        &mut self,
+        object: &Operand,
+        callee: MemberCallee<'_>,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        if callee.op() != Some(RuntimeOp::Str(StrOp::Len)) || !args.is_empty() {
+            return Ok(None);
+        }
+        let Operand::Place(place) = object else {
+            return Ok(None);
+        };
+        let Some(resolved) = self.view_places.get(place) else {
+            return Ok(None);
+        };
+        let [alternative] = resolved.alternatives.as_slice() else {
+            return Ok(None);
+        };
+        let [selector] = alternative.elements.as_slice() else {
+            return Ok(None);
+        };
+        if !alternative.conditions.is_empty()
+            || !alternative.union_payloads.is_empty()
+            || selector.kind != DirectElementKind::List
+            || !selector.projection.is_empty()
+            || selector.element_type != Type::named("str")
+        {
+            return Ok(None);
+        }
+        let alternative = alternative.clone();
+        let selector = selector.clone();
+        let Some((root, slot, _)) = self.class_place(&alternative.place)? else {
+            return Ok(None);
+        };
+        if !matches!(slot.kind, classes::SlotKind::Handle) {
+            return Ok(None);
+        }
+        let object = self.load_root(&root)?.values[0];
+        let index = self.builder.use_var(selector.variable);
+        let (line, column) = self.span_operands(selector.span);
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let field_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.emit_class_check(object, slot.access, slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let block = self.class_block(object);
+        let field = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), block, slot.offset);
+        self.builder.brif(field, field_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(field_block);
+        self.builder.seal_block(field_block);
+        let len = self.builder.call(
+            self.runtime[RuntimeFn::VecElementLen],
+            &[field, index, line, column],
+        );
+        let len = len.results[0];
+        self.builder.jump(join_block, &[len]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let (collection, projection) = self.load_element_path_root(&alternative.place)?;
+        let copy = self.element_path_load(collection.values[0], &projection, &alternative)?;
+        let len = self
+            .builder
+            .call(self.runtime[RuntimeFn::StringLen], &[copy])
+            .results[0];
+        self.release_opaque_handle(copy);
+        self.builder.jump(join_block, &[len]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(Some(ValueRef {
+            values: vec![self.builder.block_params(join_block)[0]],
+            ty: DirectType::Scalar(ScalarKind::Int64),
+        }))
+    }
+
     /// `len()` or `get(key)` on a lent list element, read where it lies (see
     /// `borrowed_list_element`): a peephole on the resolved `len` of a
     /// `str`, `list`, `dict`, or `set` and the resolved `get` of a `dict`.
@@ -12090,7 +13238,7 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
     ) -> std::result::Result<Option<ValueRef>, String> {
         let Some(selection) = self.borrowed_list_element(object) else {
-            return Ok(None);
+            return self.compile_field_str_element_len(object, callee, args);
         };
         let op = callee.op();
         let key = match (op, args) {
@@ -12603,7 +13751,7 @@ impl<'a> FunctionCompiler<'a> {
     /// Records that `loaded`, read out of `place`, carries its type's tag
     /// when `place` is a shaped local.
     fn mark_shaped_place(&mut self, place: &str, loaded: &ValueRef) {
-        if self.shaped_locals.contains(place) {
+        if self.shaped_locals.contains(place) || self.shaped_lent_payloads.contains(place) {
             if let (DirectType::Opaque(_), [word]) = (&loaded.ty, loaded.values.as_slice()) {
                 self.shaped_boxes.insert(*word);
             }
@@ -12652,13 +13800,11 @@ impl<'a> FunctionCompiler<'a> {
                 values: vec![self.builder.f64const(*value)],
                 ty: DirectType::Scalar(ScalarKind::Float64),
             }),
-            Operand::String(value) => {
-                let (ptr, len) = self.string_constant(value.as_bytes())?;
-                let inst = self
-                    .builder
-                    .call(self.runtime[RuntimeFn::StringLiteral], &[ptr, len]);
-                Ok(self.owned_opaque_result(inst.results, Type::named("str")))
-            }
+            // Every read of a literal shares its one frozen box, which
+            // anything that changes or takes its text copies first, as for
+            // a module constant: a literal only read or dropped allocates
+            // nothing.
+            Operand::String(value) => self.load_borrowed_string_literal(value),
             Operand::Duration(value) => {
                 let low = self.builder.iconst(types::I64, *value as i64);
                 let high = self.builder.iconst(types::I64, (*value >> 64) as i64);
@@ -12724,6 +13870,21 @@ impl<'a> FunctionCompiler<'a> {
         }
         let hint = target.scalar_kind().filter(|kind| kind.is_integer());
         self.load_operand_with_integer_hint(operand, hint)
+    }
+
+    /// Whether `temp`, an argument of an append to a list of `element`,
+    /// is one of [`Self::appended_temps`] that holds a box of its own of
+    /// the element's type, which the append may take as it is.
+    fn hands_appended_temp(
+        &mut self,
+        temp: &str,
+        element: &DirectType,
+    ) -> std::result::Result<bool, String> {
+        Ok(self.appended_temps.contains(temp)
+            && !self.lent_places.contains(temp)
+            && !self.lent_elements.contains_key(temp)
+            && matches!(self.local_type(temp)?, DirectType::Opaque(_))
+            && self.local_type(temp)? == *element)
     }
 
     fn load_operand_as_opaque_direct(
@@ -12794,7 +13955,28 @@ impl<'a> FunctionCompiler<'a> {
         };
         // The loan's local carries the type the selection reaches.
         let element_type = direct_type_to_type(&self.local_type(loan)?);
-        let loaded = self.load_operand_for_target(selector, &selector_ty)?;
+        // A key a view twin holds as words, which a fused test probed by
+        // its bytes, is boxed only on the way that walks to the entry.
+        let deferred_key = match selector {
+            Operand::Place(place)
+                if self.fused_entry_slots.contains_key(loan)
+                    && self.tracked_roots.contains(place)
+                    && self
+                        .str_slots
+                        .get(place.as_str())
+                        .is_some_and(|slot| slot.is_param()) =>
+            {
+                Some(place.clone())
+            }
+            _ => None,
+        };
+        let loaded = match &deferred_key {
+            Some(place) => ValueRef {
+                values: vec![self.builder.use_var(self.local_vars(place)?[0])],
+                ty: selector_ty.clone(),
+            },
+            None => self.load_operand_for_target(selector, &selector_ty)?,
+        };
         let selected = self.coerce_value(loaded, &selector_ty)?;
         // An explicit module keeps a selector's place until the loan ends,
         // so a key read from its place is lent to the loan. A key the load
@@ -12813,6 +13995,10 @@ impl<'a> FunctionCompiler<'a> {
         self.next_variable_index += 1;
         self.builder.declare_var(variable, abi);
         self.builder.def_var(variable, words[0]);
+        if let Some(place) = deferred_key {
+            self.deferred_entry_keys
+                .insert(loan.to_string(), (place, variable));
+        }
         if matches!(selector_ty, DirectType::Opaque(_)) && !lent_key {
             self.view_element_keys
                 .entry(loan.to_string())
@@ -12835,6 +14021,7 @@ impl<'a> FunctionCompiler<'a> {
         if self.begin_native_element_loan(loan)? {
             return Ok(());
         }
+        self.load_deferred_entry_key(loan)?;
         if checked
             && kind == DirectElementKind::Dict
             && self.begin_shadow_entry_loan(loan, source, selector_operand)?
@@ -12850,10 +14037,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             let (list, index) = self.load_borrowed_list_element(&selection)?;
             let (line, column) = self.span_operands(selection.span);
-            self.builder.call(
-                self.runtime[RuntimeFn::VecCheckIndex],
-                &[list, index, line, column],
-            );
+            self.emit_list_index_check(list, index, line, column);
             return Ok(());
         }
         // An unchecked loan of a callable element of a local list is read
@@ -12895,6 +14079,24 @@ impl<'a> FunctionCompiler<'a> {
         loan: &str,
         alternative: &DirectViewAlternative,
     ) -> std::result::Result<bool, String> {
+        if let Some(nested) = self.nested_field_list_selector(alternative)? {
+            let slow_block = self.builder.create_block();
+            let join_block = self.builder.create_block();
+            let list = self.load_nested_field_list(&nested, slow_block)?;
+            let index = self.builder.use_var(nested.inner.variable);
+            let (line, column) = self.span_operands(nested.inner.span);
+            self.emit_list_index_check(list, index, line, column);
+            self.builder.jump(join_block, &[]);
+
+            self.builder.switch_to_block(slow_block);
+            self.builder.seal_block(slow_block);
+            self.emit_element_path_probe(loan, false)?;
+            self.builder.jump(join_block, &[]);
+
+            self.builder.switch_to_block(join_block);
+            self.builder.seal_block(join_block);
+            return Ok(true);
+        }
         let [selector] = alternative.elements.as_slice() else {
             return Ok(false);
         };
@@ -12926,10 +14128,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(field_block);
         self.builder.seal_block(field_block);
         let (line, column) = self.span_operands(selector.span);
-        self.builder.call(
-            self.runtime[RuntimeFn::VecCheckIndex],
-            &[field, index, line, column],
-        );
+        self.emit_list_index_check(field, index, line, column);
         self.builder.jump(join_block, &[]);
 
         self.builder.switch_to_block(slow_block);
@@ -12940,6 +14139,38 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         Ok(true)
+    }
+
+    /// Checks that `index` selects an element of `list`, counting a
+    /// negative one from the end, against the length its list view keeps
+    /// (see `emit_list_len`). An index out of range calls
+    /// `aura_direct_vec_check_index`, which reports it.
+    fn emit_list_index_check(&mut self, list: Val, index: Val, line: Val, column: Val) {
+        let len = self.emit_list_len(list, false);
+        let forward = self.builder.icmp(IntCC::UnsignedLessThan, index, len);
+        let wrap_block = self.builder.create_block();
+        let fail_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.set_cold_block(wrap_block);
+        self.builder.set_cold_block(fail_block);
+        self.builder.brif(forward, join_block, &[], wrap_block, &[]);
+
+        self.builder.switch_to_block(wrap_block);
+        self.builder.seal_block(wrap_block);
+        let from_end = self.builder.iadd(len, index);
+        let counted = self.builder.icmp(IntCC::UnsignedLessThan, from_end, len);
+        self.builder.brif(counted, join_block, &[], fail_block, &[]);
+
+        self.builder.switch_to_block(fail_block);
+        self.builder.seal_block(fail_block);
+        self.builder.call(
+            self.runtime[RuntimeFn::VecCheckIndex],
+            &[list, index, line, column],
+        );
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
     }
 
     /// A span as the line and column words the runtime's indexing helpers
@@ -13018,6 +14249,28 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         alternative: &DirectViewAlternative,
     ) -> std::result::Result<Option<Val>, String> {
+        if let Some(nested) = self
+            .nested_field_list_selector(alternative)?
+            .filter(|nested| nested.inner.element_type == Type::named("str"))
+        {
+            let slow_block = self.builder.create_block();
+            let join_block = self.builder.create_block();
+            self.builder.append_block_param(join_block, types::I64);
+            let list = self.load_nested_field_list(&nested, slow_block)?;
+            let index = self.builder.use_var(nested.inner.variable);
+            let copy = self.emit_str_element_copy(list, index, nested.inner.span);
+            self.builder.jump(join_block, &[copy]);
+
+            self.builder.switch_to_block(slow_block);
+            self.builder.seal_block(slow_block);
+            let (collection, projection) = self.load_element_path_root(&alternative.place)?;
+            let copy = self.element_path_load(collection.values[0], &projection, alternative)?;
+            self.builder.jump(join_block, &[copy]);
+
+            self.builder.switch_to_block(join_block);
+            self.builder.seal_block(join_block);
+            return Ok(Some(self.builder.block_params(join_block)[0]));
+        }
         let [selector] = alternative.elements.as_slice() else {
             return Ok(None);
         };
@@ -13085,6 +14338,89 @@ impl<'a> FunctionCompiler<'a> {
             self.str_view_found = Some((params[1], params[2]));
         }
         Ok(Some(copy))
+    }
+
+    /// The inner selector of a selection of one element of a list held in
+    /// a list field, such as `broker.mailboxes[c][i]`, when the instance
+    /// may be kept in place: two list positions, no projections, and the
+    /// field a handle slot. `None` for any other alternative.
+    fn nested_field_list_selector(
+        &mut self,
+        alternative: &DirectViewAlternative,
+    ) -> std::result::Result<Option<NestedFieldList>, String> {
+        let [outer, inner] = alternative.elements.as_slice() else {
+            return Ok(None);
+        };
+        let plain = |selector: &DirectElementSelector| {
+            selector.projection.is_empty() && matches!(selector.kind, DirectElementKind::List)
+        };
+        if !plain(outer)
+            || !plain(inner)
+            || !matches!(&outer.element_type, Type::Named(name, _) if name == "list")
+        {
+            return Ok(None);
+        }
+        let Some((root, slot, _)) = self.class_place(&alternative.place)? else {
+            return Ok(None);
+        };
+        Ok(
+            matches!(slot.kind, classes::SlotKind::Handle).then(|| NestedFieldList {
+                root,
+                slot,
+                outer: outer.clone(),
+                inner: inner.clone(),
+            }),
+        )
+    }
+
+    /// The box of the inner list a [`Self::nested_field_list_selector`]
+    /// alternative selects from, read where the instance keeps its field
+    /// and the field's list keeps its elements in boxes. An instance not
+    /// kept in place, a moved-out field or element, any other list form,
+    /// or an outer position out of range branches to `slow_block`, where
+    /// the runtime walk reports it.
+    fn load_nested_field_list(
+        &mut self,
+        nested: &NestedFieldList,
+        slow_block: Blk,
+    ) -> std::result::Result<Val, String> {
+        use aura_runtime::native_runtime::DirectListAccess;
+        let NestedFieldList {
+            root, slot, outer, ..
+        } = nested;
+        let flags = MemFlags::trusted();
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let object = self.load_root(root)?.values[0];
+        let fast_block = self.builder.create_block();
+        self.emit_class_check(object, slot.access, slow_block, fast_block);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let block = self.class_block(object);
+        let field = self.builder.load(types::I64, flags, block, slot.offset);
+        let field_block = self.builder.create_block();
+        self.builder.brif(field, field_block, &[], slow_block, &[]);
+        self.builder.switch_to_block(field_block);
+        self.builder.seal_block(field_block);
+        let boxes_block = self.builder.create_block();
+        self.emit_list_access_check(
+            field,
+            DirectListAccess::Boxes,
+            &layout,
+            slow_block,
+            boxes_block,
+        );
+        self.builder.switch_to_block(boxes_block);
+        self.builder.seal_block(boxes_block);
+        let index = self.builder.use_var(outer.variable);
+        let position = self.emit_list_view_bounds_check(field, index, &layout, slow_block);
+        let elements = self.list_view_word(field, list_snapshots::ViewWord::Elements);
+        let element_slot = self.scalar_list_element(elements, position, 8);
+        let list = self.builder.load(types::I64, flags, element_slot, 0);
+        let list_block = self.builder.create_block();
+        self.builder.brif(list, list_block, &[], slow_block, &[]);
+        self.builder.switch_to_block(list_block);
+        self.builder.seal_block(list_block);
+        Ok(list)
     }
 
     /// Stores through one view alternative: a static place directly, or the
@@ -13558,6 +14894,7 @@ impl<'a> FunctionCompiler<'a> {
             return Err("direct backend encountered an empty move place".to_string());
         };
         let root_ty = self.local_type(root)?;
+        self.refuse_deferred_str_copy(root)?;
         if segments.len() == 1 {
             let vars = self.local_vars(root)?;
             let values = vars
@@ -13631,6 +14968,8 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_root(&mut self, name: &str) -> std::result::Result<ValueRef, String> {
+        self.materialize_str_slot(name)?;
+        self.refuse_deferred_str_copy(name)?;
         if let Some((layout, slot)) = self.raw_cells.get(name).cloned() {
             let ty = self.local_type(name)?;
             return self.read_raw_class(&layout, slot, ty);
@@ -14094,6 +15433,12 @@ impl<'a> FunctionCompiler<'a> {
                 return Ok(());
             }
         }
+        if let Some((block, tagged, tagged_type)) = &self.runtime_type_tagged {
+            // Either way through the check below, the box has the tag.
+            if *tagged == raw && *tagged_type == encoded && self.no_call_in(*block) {
+                return Ok(());
+            }
+        }
         let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
         let cell = self.tag_cell(&encoded)?;
         // A box that already took this cell's tag has its shape, so the
@@ -14128,8 +15473,9 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(done);
         self.builder.switch_to_block(done);
         // The call sits in a block of its own, so a later tag of the same
-        // box repeats the cheap check instead.
+        // box in another block repeats the cheap check instead.
         self.last_runtime_type_tag = None;
+        self.runtime_type_tagged = Some((done, raw, encoded));
         Ok(())
     }
 
@@ -14145,18 +15491,29 @@ impl<'a> FunctionCompiler<'a> {
     /// release of `raw` that frees it. A call that only boxes a new value
     /// from its words reaches no other box.
     fn no_call_since(&self, inst: Inst) -> bool {
-        self.builder.only_calls_since(
-            inst,
-            &[
-                self.runtime[RuntimeFn::RetainValue],
-                self.runtime[RuntimeFn::ReleaseValue],
-                self.runtime[RuntimeFn::FormatBegin],
-                self.runtime[RuntimeFn::StringLiteral],
-                self.runtime[RuntimeFn::StringLiteralCell],
-                self.runtime[RuntimeFn::BoxI64],
-                self.runtime[RuntimeFn::BoxBool],
-            ],
-        )
+        self.builder
+            .only_calls_since(inst, &self.box_keeping_calls())
+    }
+
+    /// Whether `block` is the current block and no call that could change
+    /// a box is in it (see `no_call_since`).
+    fn no_call_in(&self, block: Blk) -> bool {
+        self.builder.only_calls_in(block, &self.box_keeping_calls())
+    }
+
+    /// The runtime calls that change no box but the one they name (see
+    /// `no_call_since`).
+    fn box_keeping_calls(&self) -> [FuncRef; 8] {
+        [
+            self.runtime[RuntimeFn::RetainValue],
+            self.runtime[RuntimeFn::ReleaseValue],
+            self.runtime[RuntimeFn::ReleaseLastOwnedVariant],
+            self.runtime[RuntimeFn::FormatBegin],
+            self.runtime[RuntimeFn::StringLiteral],
+            self.runtime[RuntimeFn::StringLiteralCell],
+            self.runtime[RuntimeFn::BoxI64],
+            self.runtime[RuntimeFn::BoxBool],
+        ]
     }
 
     fn tag_raw_opaque_runtime_type(
@@ -14295,9 +15652,10 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         list: Val,
         index: Val,
-        (literal_ptr, literal_len): (Val, usize),
+        literal: &[u8],
         slow_args: &[Val; 8],
-    ) -> Val {
+    ) -> std::result::Result<Val, String> {
+        let literal_len = literal.len();
         use aura_runtime::native_runtime::{
             DirectListAccess, DIRECT_STR_VIEW_ENTRY_BYTES, DIRECT_STR_VIEW_LEN_OFFSET,
             DIRECT_STR_VIEW_PTR_OFFSET,
@@ -14337,12 +15695,7 @@ impl<'a> FunctionCompiler<'a> {
             let bytes = self
                 .builder
                 .load(types::I64, flags, entry, DIRECT_STR_VIEW_PTR_OFFSET);
-            let literal_len = self.builder.iconst(types::I64, literal_len as i64);
-            let inst = self.builder.call(
-                self.runtime[RuntimeFn::BytesEqual],
-                &[bytes, literal_ptr, literal_len],
-            );
-            let equal = inst.results[0];
+            let equal = self.emit_literal_bytes_equal(bytes, literal)?;
             self.builder.jump(join_block, &[equal]);
         }
 
@@ -14360,7 +15713,7 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
-        self.builder.block_params(join_block)[0]
+        Ok(self.builder.block_params(join_block)[0])
     }
 
     /// A new box copying element `index` of the `list[str]` `list`. A list
@@ -14773,7 +16126,7 @@ impl<'a> FunctionCompiler<'a> {
             self.emit_list_view_bounds_check(list, index, &layout, slow_block)
         };
         let element = self.scalar_list_element(elements, position, stride);
-        let bits = self.load_scalar_list_element(kind, element);
+        let bits = self.load_list_element(kind, element);
         self.builder.jump(join_block, &[bits]);
 
         self.builder.switch_to_block(slow_block);
@@ -14815,6 +16168,37 @@ impl<'a> FunctionCompiler<'a> {
         let join_block = self.builder.create_block();
         self.builder.append_block_param(join_block, types::I64);
         self.builder.append_block_param(join_block, types::I64);
+        let instances = self.lend_instance_list.take();
+        if instances.is_some() {
+            // The address of the element's bytes, or 0.
+            self.builder.append_block_param(join_block, types::I64);
+        }
+        let null = self.builder.iconst(types::I64, 0);
+        let zero = instances.map(|_| null);
+        if let Some((access, stride)) = instances {
+            // A list that keeps the instances in place lends the element's
+            // bytes, and no box: the local only reads scalar fields.
+            let element_block = self.builder.create_block();
+            let boxes_block = self.builder.create_block();
+            let actual = self.emit_list_access(list, &layout);
+            let kept = self.builder.icmp_imm(IntCC::Equal, actual, access);
+            self.builder
+                .brif(kept, element_block, &[], boxes_block, &[]);
+            self.builder.switch_to_block(element_block);
+            self.builder.seal_block(element_block);
+            let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
+            let position = if proven {
+                index
+            } else {
+                self.emit_list_view_bounds_check(list, index, &layout, slow_block)
+            };
+            let offset = self.builder.imul_imm(position, stride);
+            let address = self.builder.iadd(elements, offset);
+            let lent = self.builder.iconst(types::I64, 1);
+            self.builder.jump(join_block, &[null, lent, address]);
+            self.builder.switch_to_block(boxes_block);
+            self.builder.seal_block(boxes_block);
+        }
         self.emit_list_access_check(
             list,
             DirectListAccess::Boxes,
@@ -14834,7 +16218,9 @@ impl<'a> FunctionCompiler<'a> {
         let element = self.scalar_list_element(elements, position, 8);
         let lent_box = self.builder.load(types::I64, flags, element, 0);
         let lent = self.builder.iconst(types::I64, 1);
-        self.builder.jump(join_block, &[lent_box, lent]);
+        let mut words = vec![lent_box, lent];
+        words.extend(zero);
+        self.builder.jump(join_block, &words);
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
@@ -14850,11 +16236,16 @@ impl<'a> FunctionCompiler<'a> {
         let word = word.results[0];
         let flag = self.builder.band_imm(word, 1);
         let element_box = self.builder.band_imm(word, !1);
-        self.builder.jump(join_block, &[element_box, flag]);
+        let mut words = vec![element_box, flag];
+        words.extend(zero);
+        self.builder.jump(join_block, &words);
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
-        let params = self.builder.block_params(join_block);
+        let params = self.builder.block_params(join_block).to_vec();
+        if instances.is_some() {
+            self.lent_element_block = Some(params[2]);
+        }
         Ok((params[0], params[1]))
     }
 
@@ -14878,14 +16269,22 @@ impl<'a> FunctionCompiler<'a> {
         let fast_block = self.builder.create_block();
         let room_block = self.builder.create_block();
         let join_block = self.builder.create_block();
+        // Growing the storage is rare once a list has room, so the call is
+        // cold, and a function that only calls out there pushes its frame
+        // record there (see `defers_frame`).
+        self.builder.set_cold_block(slow_block);
         self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
-        let flags = MemFlags::trusted();
+        let flags = MemFlags::trusted_in(AliasClass::BoxLen);
         let len = self
             .builder
             .load(types::I64, flags, list, layout.len_offset);
-        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        let capacity = self.builder.uload32(
+            MemFlags::trusted_in(AliasClass::BoxRoom),
+            list,
+            layout.capacity_offset,
+        );
         let full = self
             .builder
             .icmp(IntCC::UnsignedGreaterThanOrEqual, len, capacity);
@@ -14893,11 +16292,14 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(room_block);
         self.builder.seal_block(room_block);
-        let elements = self
-            .builder
-            .load(types::I64, flags, list, layout.elements_offset);
+        let elements = self.builder.load(
+            types::I64,
+            MemFlags::trusted_in(AliasClass::BoxElements),
+            list,
+            layout.elements_offset,
+        );
         let element = self.scalar_list_element(elements, len, stride);
-        self.store_scalar_list_element(kind, bits, element);
+        self.store_list_element(kind, bits, element);
         let grown = self.builder.iadd_imm(len, 1);
         self.builder.store(flags, grown, list, layout.len_offset);
         self.builder.jump(join_block, &[]);
@@ -14929,11 +16331,15 @@ impl<'a> FunctionCompiler<'a> {
         self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
-        let flags = MemFlags::trusted();
+        let flags = MemFlags::trusted_in(AliasClass::BoxLen);
         let len = self
             .builder
             .load(types::I64, flags, list, layout.len_offset);
-        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        let capacity = self.builder.uload32(
+            MemFlags::trusted_in(AliasClass::BoxRoom),
+            list,
+            layout.capacity_offset,
+        );
         // Room means unshared storage, and it is at least the length, so a
         // length below it is not zero.
         let empty = self.builder.icmp_imm(IntCC::Equal, len, 0);
@@ -14944,11 +16350,14 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(pop_block);
         self.builder.seal_block(pop_block);
         let last = self.builder.iadd_imm(len, -1);
-        let elements = self
-            .builder
-            .load(types::I64, flags, list, layout.elements_offset);
+        let elements = self.builder.load(
+            types::I64,
+            MemFlags::trusted_in(AliasClass::BoxElements),
+            list,
+            layout.elements_offset,
+        );
         let element = self.scalar_list_element(elements, last, stride);
-        let bits = self.load_scalar_list_element(kind, element);
+        let bits = self.load_list_element(kind, element);
         self.builder.store(flags, last, list, layout.len_offset);
         self.builder.jump(join_block, &[bits]);
 
@@ -14998,9 +16407,11 @@ impl<'a> FunctionCompiler<'a> {
         let position = self.emit_list_view_bounds_check(list, index, &layout, slow_block);
         // Room covers every element of unshared storage, and a list with
         // shared storage has none.
-        let capacity = self
-            .builder
-            .uload32(MemFlags::trusted(), list, layout.capacity_offset);
+        let capacity = self.builder.uload32(
+            MemFlags::trusted_in(AliasClass::BoxRoom),
+            list,
+            layout.capacity_offset,
+        );
         let mut unshared = self
             .builder
             .icmp(IntCC::UnsignedLessThan, position, capacity);
@@ -15024,7 +16435,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(store_block);
         let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
         let element = self.scalar_list_element(elements, position, stride);
-        self.store_scalar_list_element(kind, bits, element);
+        self.store_list_element(kind, bits, element);
         self.builder.jump(join_block, &[]);
 
         self.builder.switch_to_block(slow_block);
@@ -15057,9 +16468,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(fast);
         let left = self.emit_list_view_bounds_check(list, first, &layout, slow);
         let right = self.emit_list_view_bounds_check(list, second, &layout, slow);
-        let capacity = self
-            .builder
-            .uload32(MemFlags::trusted(), list, layout.capacity_offset);
+        let capacity = self.list_view_word(list, list_snapshots::ViewWord::Room);
         let writable = self.builder.icmp_imm(IntCC::NotEqual, capacity, 0);
         self.builder.brif(writable, write, &[], slow, &[]);
 
@@ -15068,10 +16477,10 @@ impl<'a> FunctionCompiler<'a> {
         let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
         let left = self.scalar_list_element(elements, left, stride);
         let right = self.scalar_list_element(elements, right, stride);
-        let a = self.load_scalar_list_element(kind, left);
-        let b = self.load_scalar_list_element(kind, right);
-        self.store_scalar_list_element(kind, b, left);
-        self.store_scalar_list_element(kind, a, right);
+        let a = self.load_list_element(kind, left);
+        let b = self.load_list_element(kind, right);
+        self.store_list_element(kind, b, left);
+        self.store_list_element(kind, a, right);
         self.builder.jump(join, &[]);
 
         self.builder.switch_to_block(slow);
@@ -15097,7 +16506,22 @@ impl<'a> FunctionCompiler<'a> {
     /// extended to its exact 64-bit value, a `bool` as 0 or 1, or the bits
     /// of a float widened to `float64`.
     fn load_scalar_list_element(&mut self, kind: ScalarElement, element: Val) -> Val {
-        let flags = MemFlags::trusted();
+        self.load_scalar_element_in(kind, element, MemFlags::trusted())
+    }
+
+    /// [`Self::load_scalar_list_element`] of an element of a list that
+    /// keeps scalars, which no access of other memory classes touches.
+    fn load_list_element(&mut self, kind: ScalarElement, element: Val) -> Val {
+        let flags = MemFlags::trusted_in(AliasClass::ListElements);
+        self.load_scalar_element_in(kind, element, flags)
+    }
+
+    fn load_scalar_element_in(
+        &mut self,
+        kind: ScalarElement,
+        element: Val,
+        flags: MemFlags,
+    ) -> Val {
         match kind {
             ScalarElement::Int8 => self.builder.sload8(flags, element, 0),
             ScalarElement::Int16 => self.builder.sload16(flags, element, 0),
@@ -15121,7 +16545,23 @@ impl<'a> FunctionCompiler<'a> {
     /// Stores a `kind` scalar's `bits`, which hold a value of that kind, as
     /// the unboxed element at `element`.
     fn store_scalar_list_element(&mut self, kind: ScalarElement, bits: Val, element: Val) {
-        let flags = MemFlags::trusted();
+        self.store_scalar_element_in(kind, bits, element, MemFlags::trusted());
+    }
+
+    /// [`Self::store_scalar_list_element`] of an element of a list that
+    /// keeps scalars, which no access of other memory classes touches.
+    fn store_list_element(&mut self, kind: ScalarElement, bits: Val, element: Val) {
+        let flags = MemFlags::trusted_in(AliasClass::ListElements);
+        self.store_scalar_element_in(kind, bits, element, flags);
+    }
+
+    fn store_scalar_element_in(
+        &mut self,
+        kind: ScalarElement,
+        bits: Val,
+        element: Val,
+        flags: MemFlags,
+    ) {
         let stored = match kind {
             // A `bool` element is one byte that holds 0 or 1.
             ScalarElement::Bool => self.builder.icmp_imm(IntCC::NotEqual, bits, 0),
@@ -15774,11 +17214,15 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let tag = codegen.builder.iconst(types::I64, index as i64);
                 let call = codegen.builder.call(inject, &[ptr, len, tag, transferred]);
+                // The injection names the union's type, which is all a tag
+                // gives a union.
+                codegen.shaped_boxes.insert(call.results[0]);
                 Ok(ValueRef {
                     values: call.results,
                     ty: DirectType::Opaque(union_type.clone()),
                 })
             })?;
+        self.shaped_boxes.insert(boxed.values[0]);
         self.mark_temporary_opaque_owned(&boxed);
         Ok(boxed)
     }
@@ -16101,6 +17545,10 @@ impl<'a> FunctionCompiler<'a> {
             if let Some(list) = self.entry_loop_tuples.get(place).cloned() {
                 return self.load_walked_entry(&list, index == 0, element_type);
             }
+            if let Some(element) = self.take_word_tuple_element(place, index) {
+                let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
+                return self.coerce_value(element, &direct_type);
+            }
         }
         let tuple = self.load_operand(tuple)?;
         let tuple = self.ensure_opaque(tuple)?;
@@ -16126,6 +17574,10 @@ impl<'a> FunctionCompiler<'a> {
         element_type: &Type,
     ) -> std::result::Result<ValueRef, String> {
         validate_tuple_take_place(place)?;
+        if let Some(element) = self.take_word_tuple_element(place, index) {
+            let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
+            return self.coerce_value(element, &direct_type);
+        }
         let tuple = self.load_place(place)?;
         let tuple = self.ensure_opaque(tuple)?;
         let index = self.builder.iconst(types::I64, index as i64);
@@ -16323,7 +17775,11 @@ impl<'a> FunctionCompiler<'a> {
             (DirectType::Scalar(_), false) => None,
             _ => return Ok(None),
         };
-        let scrutinee = self.load_operand(scrutinee)?;
+        let scrutinee = if lent {
+            self.load_operand(scrutinee)?
+        } else {
+            self.load_scrutinee(scrutinee)?
+        };
         let scrutinee = self.ensure_opaque(scrutinee)?;
         let index = *index;
         // Without a scalar read of its own, the runtime copies the payload
@@ -16349,11 +17805,13 @@ impl<'a> FunctionCompiler<'a> {
         };
         if !lent {
             let slow_scrutinee = scrutinee.clone();
-            if let Some(scalar) =
+            self.variant_read_place = Some(place.clone());
+            let read =
                 self.typed_variant_payload(&scrutinee, variant_name, index, &target_ty, |this| {
                     runtime_read(this, &slow_scrutinee)
-                })?
-            {
+                });
+            self.variant_read_place = None;
+            if let Some(scalar) = read? {
                 return Ok(Some(scalar));
             }
         }
@@ -16396,6 +17854,9 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(&address) = self.map_word_slots.get(target) {
             if lookups::is_dict_get(value) {
                 return self.compile_dict_word_lookup(target, value, address);
+            }
+            if lookups::is_int64_parse(value) {
+                return self.compile_parse_word(value, address);
             }
             return self.compile_map_word_lookup(value, address);
         }
@@ -16621,6 +18082,23 @@ impl<'a> FunctionCompiler<'a> {
         releases_on_error: &[String],
         from: Option<&str>,
     ) -> std::result::Result<(), String> {
+        if let Some((source, failure)) = self.pending_try_write.take() {
+            debug_assert!(
+                matches!(try_value, Operand::MovePlace(moved) if *moved == source),
+                "a `try` after a fused write takes that write"
+            );
+            return self.compile_try_of_write(target, &source, failure, releases_on_error, from);
+        }
+        if let Some((source, words, failure)) = self.pending_try_event.take() {
+            return self.compile_try_of_event(
+                target,
+                &source,
+                words,
+                failure,
+                releases_on_error,
+                from,
+            );
+        }
         if let Some((source, line, failure)) = self.pending_try_read.take() {
             debug_assert!(
                 matches!(try_value, Operand::MovePlace(moved) if *moved == source),
@@ -16768,6 +18246,148 @@ impl<'a> FunctionCompiler<'a> {
         self.emit_return_value(error_result, releases_on_error)
     }
 
+    /// The helper of the `try file.write_all(text)` or `try
+    /// stream.write_all(text)` that `instructions` open with: the write into
+    /// a temporary, the releases of other places, and a `try` that moves it
+    /// out into a unit.
+    fn opens_with_try_write(&self, instructions: &[Instruction]) -> Option<RuntimeFn> {
+        let [write, rest @ ..] = instructions else {
+            return None;
+        };
+        let releases = rest
+            .iter()
+            .take_while(|instruction| matches!(instruction, Instruction::Release { .. }))
+            .count();
+        // The `try` moves the result, so none of the releases is its.
+        let try_at = rest.get(releases)?;
+        let (
+            Instruction::Assign {
+                target: result,
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::Resource(op),
+                                receiver: Some(Operand::Place(_)),
+                                ..
+                            },
+                        ..
+                    },
+            },
+            Instruction::Assign {
+                target: written,
+                value:
+                    Rvalue::Try {
+                        value: Operand::MovePlace(moved),
+                        ..
+                    },
+            },
+        ) = (write, try_at)
+        else {
+            return None;
+        };
+        let helper = match op {
+            crate::runtime_ops::ResourceOp::FileWriteAll => RuntimeFn::FileWriteAllTry,
+            crate::runtime_ops::ResourceOp::TcpStreamWriteAll => RuntimeFn::TcpStreamWriteAllTry,
+            _ => return None,
+        };
+        (result == moved
+            && result.starts_with('%')
+            && !self.lent_places.contains(result.as_str())
+            && !self.lookup_slots.contains(result.as_str())
+            && self.type_of_place(written) == Ok(DirectType::Scalar(ScalarKind::Unit)))
+        .then_some(helper)
+    }
+
+    /// The write of a `try file.write_all(text)` (see
+    /// [`Self::opens_with_try_write`]). Its helper returns null when the
+    /// write succeeds, so no `Result` is built, and otherwise the
+    /// `Result.Err`, which the `try` that follows takes from
+    /// `pending_try_write`.
+    fn compile_try_write(
+        &mut self,
+        helper: RuntimeFn,
+        instruction: &Instruction,
+    ) -> std::result::Result<(), String> {
+        let Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            receiver: Some(receiver),
+                            ..
+                        },
+                    args,
+                    ..
+                },
+        } = instruction
+        else {
+            return Err("direct backend expected a resource write".to_string());
+        };
+        let receiver = self.load_operand(receiver)?;
+        let mut words = vec![self.ensure_opaque(receiver)?.values[0]];
+        for argument in args {
+            let word = match &argument.value {
+                Operand::Default(ArgDefault::Omitted) => self.builder.iconst(types::I64, 0),
+                operand => {
+                    let loaded = self.load_operand(operand)?;
+                    self.ensure_opaque(loaded)?.values[0]
+                }
+            };
+            words.push(word);
+        }
+        let failure = self.builder.call(self.runtime[helper], &words).results[0];
+        self.release_all_temporary_owned();
+        self.pending_try_write = Some((target.to_string(), failure));
+        Ok(())
+    }
+
+    /// The `try` of a `try file.write_all(text)`: a null word is success,
+    /// and any other holds the `Result.Err` to return.
+    fn compile_try_of_write(
+        &mut self,
+        target: &str,
+        source: &str,
+        failure: Val,
+        releases_on_error: &[String],
+        from: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        let source_ty = self.type_of_place(source)?;
+        let (source_error_ty, target_error_ty) = self.try_error_types(target, &source_ty)?;
+        let ok_block = self.builder.create_block();
+        let err_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.set_cold_block(err_block);
+        self.builder.brif(failure, err_block, &[], ok_block, &[]);
+
+        self.builder.switch_to_block(ok_block);
+        self.builder.seal_block(ok_block);
+        let unit = unit_value(&mut *self.builder);
+        self.store_place(target, unit)?;
+        self.release_all_temporary_owned();
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(err_block);
+        self.builder.seal_block(err_block);
+        let value = ValueRef {
+            values: vec![failure],
+            ty: source_ty,
+        };
+        self.compile_try_error_return(
+            &value,
+            true,
+            &source_error_ty,
+            &target_error_ty,
+            releases_on_error,
+            from,
+        )?;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(())
+    }
+
     /// Whether `instructions` open with `try file.read_line()`: the read
     /// into a temporary and the `try` that moves it out.
     fn opens_with_try_read(&self, instructions: &[Instruction]) -> bool {
@@ -16777,7 +18397,7 @@ impl<'a> FunctionCompiler<'a> {
                 Rvalue::Call {
                     callee:
                         CallTarget::Runtime {
-                            op: RuntimeOp::Resource(crate::runtime_ops::ResourceOp::FileReadLine),
+                            op: RuntimeOp::Resource(op),
                             receiver: Some(Operand::Place(_)),
                             ..
                         },
@@ -16795,9 +18415,16 @@ impl<'a> FunctionCompiler<'a> {
         else {
             return false;
         };
+        // A stream's read takes its timeout, which the helper takes too.
+        let arity = match op {
+            crate::runtime_ops::ResourceOp::FileReadLine => 0,
+            crate::runtime_ops::ResourceOp::TcpStreamReadLine => 1,
+            _ => return false,
+        };
         result == moved
             && result.starts_with('%')
-            && args.is_empty()
+            && args.len() == arity
+            && args.iter().all(|arg| arg.writeback_place.is_none())
             && !self.lent_places.contains(result.as_str())
             && !self.lookup_slots.contains(result.as_str())
             && self
@@ -16813,18 +18440,35 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_try_read(
         &mut self,
         result: &str,
+        op: crate::runtime_ops::ResourceOp,
         file: &Operand,
+        args: &[MirArg],
     ) -> std::result::Result<(), String> {
         let loaded = self.load_operand(file)?;
         let file = self.ensure_opaque(loaded)?;
+        let mut words = vec![file.values[0]];
+        for argument in args {
+            let word = match &argument.value {
+                Operand::Default(ArgDefault::Omitted) => self.builder.iconst(types::I64, 0),
+                operand => {
+                    let loaded = self.load_operand(operand)?;
+                    self.ensure_opaque(loaded)?.values[0]
+                }
+            };
+            words.push(word);
+        }
         let slot = self.builder.create_sized_stack_slot(8, 3);
         let failure = self.builder.stack_addr(types::I64, slot, 0);
         let zero = self.builder.iconst(types::I64, 0);
         self.builder.store(MemFlags::new(), zero, failure, 0);
-        let call = self.builder.call(
-            self.runtime[RuntimeFn::FileReadLineTry],
-            &[file.values[0], failure],
-        );
+        words.push(failure);
+        let helper = if op == crate::runtime_ops::ResourceOp::TcpStreamReadLine {
+            RuntimeFn::TcpStreamReadLineTry
+        } else {
+            RuntimeFn::FileReadLineTry
+        };
+        let call = self.builder.call(self.runtime[helper], &words);
+        self.release_all_temporary_owned();
         self.pending_try_read = Some((result.to_string(), call.results[0], failure));
         Ok(())
     }
@@ -17289,6 +18933,9 @@ impl<'a> FunctionCompiler<'a> {
         let Some(index) = self.mutable_param_indices.get(root).copied() else {
             return Ok(());
         };
+        if self.unpublished_store {
+            return Ok(());
+        }
         let mut sink = self.current_mutable_sink(index);
         if let Some(snapshot) = self
             .snapshot_of_root(root)
@@ -17563,10 +19210,13 @@ impl<'a> FunctionCompiler<'a> {
         Ok((result, writebacks))
     }
 
+    /// Stores each writeback in its place. A place in `quiet` holds the
+    /// value it gets back, so its store publishes nothing to a sink.
     fn apply_writeback_places(
         &mut self,
         places: &[String],
         values: Vec<ValueRef>,
+        quiet: &[String],
     ) -> std::result::Result<(), String> {
         if places.len() != values.len() {
             return Err(format!(
@@ -17576,7 +19226,10 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         for (place, value) in places.iter().zip(values) {
-            self.store_place(place, value)?;
+            self.unpublished_store = quiet.contains(place);
+            let stored = self.store_place(place, value);
+            self.unpublished_store = false;
+            stored?;
         }
         Ok(())
     }
@@ -17828,8 +19481,32 @@ impl<'a> FunctionCompiler<'a> {
                 *slot = Some(place.to_string());
             }
         }
+        let view_twin = self.view_twin_call(function, args, false);
+        let mut view_words = Vec::new();
+        let mut view_copies = Vec::new();
         for (index, argument) in args.iter().enumerate() {
+            if let Some((twin, Some(held))) = view_twin
+                .as_ref()
+                .map(|(twin, held)| (twin, held.get(&index)))
+            {
+                let words = self.load_held_words(held, twin.boxes(index))?;
+                lowered_args.push(words.owner);
+                view_words.extend([words.ptr, words.len]);
+                view_copies.extend(words.released);
+                continue;
+            }
+            let borrowed = kept
+                .as_ref()
+                .is_some_and(|callee| callee.params.get(index) == Some(&MirReceiverKind::Borrow))
+                && argument.writeback_place.is_none();
+            // A followed loan passed to a borrowed parameter lends the box
+            // where its list keeps it, as a call by name does.
+            let passed = match &argument.value {
+                Operand::Place(place) if borrowed => self.pass_native_element(place)?,
+                _ => None,
+            };
             let loaded = match &argument.value {
+                _ if passed.is_some() => passed.expect("checked above"),
                 Operand::Place(place)
                     if self
                         .moved_operands
@@ -17853,22 +19530,28 @@ impl<'a> FunctionCompiler<'a> {
                     *slot = Some(place.clone());
                 }
             }
-            if kept
-                .as_ref()
-                .is_some_and(|callee| callee.params.get(index) == Some(&MirReceiverKind::Borrow))
-                && argument.writeback_place.is_none()
-            {
+            if borrowed {
                 lowered_args.extend(coerced.values.iter().copied());
                 continue;
             }
             let transferred = self.transfer_values(&coerced);
             lowered_args.extend(transferred);
         }
+        lowered_args.extend(view_words);
+        let quiet_places = self.drop_quiet_sinks(&method_function_name, &mut mutable_sink_places);
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
-        let func_ref = self.sinkless_callee(&method_function_name, func_ref, &mutable_sinks);
-        let func_ref = self.result_twin_callee(&method_function_name, func_ref);
+        let func_ref = match &view_twin {
+            Some((twin, _)) => twin.callee(mutable_sinks.0.is_some()),
+            None => {
+                let func_ref =
+                    self.sinkless_callee(&method_function_name, func_ref, &mutable_sinks);
+                let func_ref = self.result_twin_callee(&method_function_name, func_ref);
+                self.chain_callee(&method_function_name, func_ref, &mut lowered_args)
+            }
+        };
         let results =
             self.call_numeric_method(function, &receiver_expected, func_ref, &lowered_args);
+        self.release_view_arguments(view_copies);
         let results = self.take_result_twin_words(&method_function_name, results);
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, mut writebacks) = self.split_call_results(&method_function_name, results)?;
@@ -17899,7 +19582,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
         }
-        self.apply_writeback_places(&writeback_places, writebacks)?;
+        self.apply_writeback_places(&writeback_places, writebacks, &quiet_places)?;
         Ok(result)
     }
 
@@ -17983,6 +19666,8 @@ impl<'a> FunctionCompiler<'a> {
                 self.runtime[RuntimeFn::StringSplitLiteral],
                 &[object.values[0], ptr, len],
             );
+            // The new list's element type names its type, as its tag would.
+            self.shaped_boxes.insert(call.results[0]);
             return Ok(self.owned_opaque_result(
                 call.results,
                 Type::Named("list".to_string(), vec![Type::named("str")]),
@@ -18077,6 +19762,28 @@ impl<'a> FunctionCompiler<'a> {
         let call = op.runtime_call();
         let receiver_ty = direct_type_to_type(&object.ty);
         let object = self.ensure_opaque(object)?;
+        if op == RuntimeOp::Queue(QueueOp::Put)
+            && self.lookup_payload == Some(false)
+            && crate::runtime_ops::first_type_arg(Some(&receiver_ty)) == Some(Type::named("int64"))
+        {
+            if let [argument] = args {
+                // A discarded `put` of an `int64` passes the integer itself,
+                // so no box is made for it.
+                self.lookup_payload = Some(true);
+                let loaded =
+                    self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+                let value = self.coerce_value(loaded, &DirectType::Scalar(ScalarKind::Int64))?;
+                self.runtime_call_results(
+                    self.runtime[RuntimeFn::ChannelSendDiscardedInt64],
+                    &[object.values[0], value.values[0]],
+                );
+                let null = self.builder.iconst(types::I64, 0);
+                return Ok(ValueRef {
+                    values: vec![null],
+                    ty: DirectType::Opaque(Type::named("Unknown")),
+                });
+            }
+        }
         let params = op.params();
         let mut lowered = Vec::with_capacity(params.len());
         let mut writeback = None;
@@ -18477,10 +20184,14 @@ impl<'a> FunctionCompiler<'a> {
             let result = self.builder.call(copy, &[object.values[0]]);
             return Ok(self.owned_opaque_result(result.results, result_ty));
         }
-        let results = self.runtime_call_results(
-            self.runtime[runtime_op.runtime_call().function],
-            &[object.values[0]],
-        );
+        // A `str` copies its text and nothing else.
+        let function = match op {
+            ValueOp::Clone | ValueOp::Copy if receiver_ty == Type::named("str") => {
+                self.runtime[RuntimeFn::StringClone]
+            }
+            _ => self.runtime[runtime_op.runtime_call().function],
+        };
+        let results = self.runtime_call_results(function, &[object.values[0]]);
         Ok(self.owned_opaque_result(results, result_ty))
     }
 
@@ -18667,9 +20378,35 @@ impl<'a> FunctionCompiler<'a> {
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
+            ListOp::Extend if self.extend_deferred_bytes(list, &args[0].value) => {
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
+            ListOp::Push
+                if element_ty == Type::named("str")
+                    && self.push_deferred_str_copy(list, &args[0].value) =>
+            {
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
+            ListOp::Push
+                if matches!(&args[0].value, Operand::MovePlace(temp)
+                    if self.push_constructed_instance(list, temp)?) =>
+            {
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
             ListOp::Push => {
-                let value =
-                    self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
+                let value = match &args[0].value {
+                    // A boxed Copy temporary nothing reads after the append
+                    // hands its box over instead of a copy.
+                    Operand::Place(temp)
+                        if self.hands_appended_temp(temp, &element_direct_ty)? =>
+                    {
+                        self.take_place(temp)?
+                    }
+                    operand => self.load_operand_as_opaque_direct(operand, &element_direct_ty)?,
+                };
                 let value = self.transfer_owned_opaque_value(&value);
                 if let Some((bytes, len)) = self.pushed_str_view.take() {
                     // A null box stands for the text still in its list.
@@ -18856,9 +20593,11 @@ impl<'a> FunctionCompiler<'a> {
                 let column = self.load_word(args[3], int32, false)?;
                 let index = self.emit_vec_index_failure_guard(list, index, line, column)?;
                 let value = self.transfer_owned_opaque_value(&value);
-                let results =
-                    self.runtime_call_results(function, &[list, index, value, line, column]);
-                self.release_opaque_handle(results[0]);
+                // The store's `None` result is not read, so it gets no box.
+                self.builder.call(
+                    self.runtime[RuntimeFn::VecSetIndexDiscarded],
+                    &[list, index, value, line, column],
+                );
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -18896,29 +20635,17 @@ impl<'a> FunctionCompiler<'a> {
                     ty: DirectType::Scalar(ScalarKind::Bool),
                 })
             }
-            ListOp::Extend if self.extended_str_bytes.is_some() => {
-                let text = self.extended_str_bytes.take().expect("checked above");
-                let loaded = self.load_operand(&text)?;
-                let text = self.ensure_opaque(loaded)?;
-                self.builder.call(
-                    self.runtime[RuntimeFn::VecExtendStrBytes],
-                    &[list, text.values[0]],
-                );
-                self.store_receiver_back(receiver_place, &object)?;
-                Ok(unit_value(&mut *self.builder))
-            }
             ListOp::Extend => {
                 let loaded = self.load_operand(&args[0].value)?;
                 let other = self.ensure_opaque(loaded)?;
                 let other = self.transfer_owned_opaque_value(&other);
-                let results = self.runtime_call_results(function, &[list, other]);
-                self.release_opaque_handle(results[0]);
+                // The call returns 1, not a box of `None`.
+                self.builder.call(function, &[list, other]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             ListOp::Clear | ListOp::Reverse => {
-                let results = self.runtime_call_results(function, &[list]);
-                self.release_opaque_handle(results[0]);
+                self.builder.call(function, &[list]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -19019,6 +20746,16 @@ impl<'a> FunctionCompiler<'a> {
                             ty: DirectType::Scalar(ScalarKind::Bool),
                         });
                     }
+                    // A `str` key held as words is looked up from its bytes.
+                    let in_place = self.runtime[RuntimeFn::MapContainsView];
+                    if let Some(found) =
+                        self.call_with_held_str_key(&key.value, map, in_place, &[])?
+                    {
+                        return Ok(ValueRef {
+                            values: vec![found],
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        });
+                    }
                     let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
                     words.push(key.values[0]);
                 }
@@ -19098,6 +20835,28 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 };
                 Ok(self.owned_opaque_result(vec![found], optional_type(value_ty)))
+            }
+            DictOp::Get if self.holds_place_words(&args[0].value) => {
+                // A key held as words is looked up as a literal key is.
+                let key = self
+                    .load_place_words(&args[0].value)?
+                    .expect("the key is held as words");
+                let words = [map, key.ptr, key.len];
+                let found = match self.dict_lookup_words(RuntimeFn::MapGetStrWord, &words) {
+                    Some(found) => found,
+                    None => {
+                        let function = self.lookup_function(
+                            self.runtime[RuntimeFn::MapGetStr],
+                            RuntimeFn::MapGetStrPayload,
+                            RuntimeFn::MapGetStrLent,
+                            in_place,
+                        );
+                        let results = self.runtime_call_results(function, &words);
+                        self.owned_opaque_result(results, optional_type(value_ty))
+                    }
+                };
+                self.release_view_arguments(key.released.into_iter().collect());
+                Ok(found)
             }
             DictOp::Get | DictOp::Remove => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
@@ -19290,6 +21049,16 @@ impl<'a> FunctionCompiler<'a> {
                         self.runtime_call_results(function, &[set, value.values[0]])[0]
                     }
                 };
+                Ok(ValueRef {
+                    values: vec![found],
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })
+            }
+            SetOp::Contains if self.holds_place_words(&args[0].value) => {
+                let in_place = self.runtime[RuntimeFn::SetContainsView];
+                let found = self
+                    .call_with_held_str_key(&args[0].value, set, in_place, &[])?
+                    .expect("the needle is held as words");
                 Ok(ValueRef {
                     values: vec![found],
                     ty: DirectType::Scalar(ScalarKind::Bool),
@@ -20879,6 +22648,26 @@ fn leaf_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> 
         && leaf_body(function, classes)
 }
 
+/// Whether `function` gets a second body that reads no write-through sink
+/// although it is no leaf (see `leaf_variant`): it has a `mut self`
+/// receiver or `mut` parameters, so its own body keeps its frame record on
+/// entry to learn whether the runtime entered it with sinks. A direct call
+/// that hands no sink over enters the second body, which pushes its record
+/// only where it first calls out, as a function with no `mut` parameter
+/// does (see `defers_frame`). A body with cleanup keeps its record.
+fn deferring_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
+    takes_mutable(function)
+        && !function.name.ends_with(FAST_ADVANCE_SUFFIX)
+        && function.name != "main"
+        && !leaf_body(function, classes)
+        && !function.blocks.iter().any(|block| {
+            block
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::PushCleanup { .. }))
+        })
+}
+
 /// Small closure bodies can forward mutations of an owned environment
 /// directly to another method. When no write-through sink was handed to
 /// the adapter, that method can use its existing sink-free entry as well.
@@ -20886,13 +22675,13 @@ fn sinkless_closure(function: &MirFunction) -> bool {
     function.name.contains("::__lambda_") && takes_mutable(function) && small_leaf(function)
 }
 
-/// The scalar fields of the receiver of a method of a class kept in a
-/// box, by name, or `None` when `function` has no such receiver. A generic
-/// class keeps a symbolic layout, so it has none here.
-fn boxed_receiver_fields<'c>(
+/// The class of the receiver of a method of a class kept in a box, or
+/// `None` when `function` has no such receiver. A generic class keeps a
+/// symbolic layout, so it has none here.
+fn receiver_class<'c>(
     function: &MirFunction,
     classes: &'c HashMap<String, MirClass>,
-) -> Option<HashSet<&'c str>> {
+) -> Option<&'c MirClass> {
     function.receiver?;
     let receiver = function
         .local_types
@@ -20906,6 +22695,17 @@ fn boxed_receiver_fields<'c>(
     if !arguments.is_empty() || !class.type_params.is_empty() {
         return None;
     }
+    Some(class)
+}
+
+/// The scalar fields of the receiver of a method of a class kept in a
+/// box, by name, or `None` when `function` has no such receiver. A generic
+/// class keeps a symbolic layout, so it has none here.
+fn boxed_receiver_fields<'c>(
+    function: &MirFunction,
+    classes: &'c HashMap<String, MirClass>,
+) -> Option<HashSet<&'c str>> {
+    let class = receiver_class(function, classes)?;
     Some(
         class
             .fields
@@ -21137,6 +22937,146 @@ fn total_leaves(module: &MirModule, classes: &HashMap<String, MirClass>) -> Hash
         .collect()
 }
 
+/// The functions of `module` a caller that defers its frame record may
+/// call without pushing it (see `defer_frame`): nothing on any of their
+/// ways can need the caller's record. Such a function is on no call cycle,
+/// so it neither checks the stack nor counts scheduling fuel, and it has
+/// no safepoint, no call of a function, and no trap: its instructions are
+/// copies, releases, scalar arithmetic and comparisons with no check,
+/// `str` equality, and reads of a variant's payload, and its terminators
+/// branch, match on the variant of an enum, and return. The runtime reads
+/// a variant or a `str` box its generated code cannot read in place with
+/// helpers that fail only on a value of another type, which a well-typed
+/// program never passes; a release frees a value without running Aura
+/// code. The references it takes and releases belong to the task's
+/// ledger, which no frame record keeps. Its own record is pushed where it
+/// calls one of those helpers, as any function's is.
+fn frame_free_callees(module: &MirModule, recursive: &HashSet<String>) -> HashSet<String> {
+    let enum_type = |ty: &Type| {
+        matches!(ty, Type::Named(name, args) if args.is_empty()
+            && module.enums.iter().any(|candidate| &candidate.name == name
+                && candidate.type_params.is_empty()))
+    };
+    let scalar_name = |ty: &Type| {
+        matches!(ty, Type::Named(name, args) if args.is_empty() && matches!(name.as_str(),
+            "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64"
+                | "float32" | "float64" | "bool"))
+    };
+    let text =
+        |ty: &Type| matches!(ty, Type::Named(name, args) if args.is_empty() && name == "str");
+    let free = |function: &MirFunction| {
+        let types = function
+            .local_types
+            .iter()
+            .map(|local| (local.name.as_str(), &local.ty))
+            .chain(
+                function
+                    .params
+                    .iter()
+                    .map(|param| (param.name.as_str(), &param.ty)),
+            )
+            .collect::<HashMap<_, _>>();
+        let typed = |operand: &Operand, accepts: &dyn Fn(&Type) -> bool| match operand {
+            Operand::Place(place) | Operand::MovePlace(place) => {
+                types.get(place.as_str()).is_some_and(|ty| accepts(ty))
+            }
+            Operand::Int(_) | Operand::Bool(_) | Operand::Float(_) => {
+                accepts(&Type::named("int64"))
+            }
+            _ => false,
+        };
+        let plain = |operand: &Operand| {
+            matches!(
+                operand,
+                Operand::Place(_)
+                    | Operand::MovePlace(_)
+                    | Operand::Int(_)
+                    | Operand::Float(_)
+                    | Operand::Bool(_)
+                    | Operand::Unit
+            )
+        };
+        let instruction_free = |instruction: &Instruction| match instruction {
+            Instruction::SourceLocation { .. }
+            | Instruction::SourceName { .. }
+            | Instruction::Retain { .. }
+            | Instruction::Release { .. } => true,
+            Instruction::Assign { target, value } => {
+                let local = types.get(target.as_str()).copied();
+                match value {
+                    Rvalue::Use(operand) => plain(operand),
+                    Rvalue::VariantPayload { scrutinee, .. } => {
+                        typed(scrutinee, &enum_type)
+                            && local.is_some_and(|ty| scalar_name(ty) || text(ty))
+                    }
+                    Rvalue::Binary {
+                        op,
+                        left,
+                        right,
+                        trap,
+                        ..
+                    } => match op {
+                        BinaryOp::Eq | BinaryOp::NotEq
+                            if typed(left, &text) && typed(right, &text) =>
+                        {
+                            true
+                        }
+                        BinaryOp::Div
+                        | BinaryOp::FloorDiv
+                        | BinaryOp::Mod
+                        | BinaryOp::Pow
+                        | BinaryOp::Shl
+                        | BinaryOp::Shr => false,
+                        _ => {
+                            *trap == ArithmeticTrap::None
+                                && typed(left, &scalar_name)
+                                && typed(right, &scalar_name)
+                        }
+                    },
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        let terminator_free = |terminator: &Terminator| match terminator {
+            Terminator::Return(operand) => plain(operand),
+            Terminator::Goto(_) => true,
+            Terminator::Branch { condition, .. } => typed(condition, &scalar_name),
+            Terminator::Match {
+                scrutinee, arms, ..
+            } => {
+                typed(scrutinee, &enum_type)
+                    && arms
+                        .iter()
+                        .all(|arm| arm.variant_name.is_some() && !arm.wildcard)
+            }
+            _ => false,
+        };
+        function.name != "main"
+            && !function.blocks.is_empty()
+            && function.receiver.is_none()
+            && !recursive.contains(&function.name)
+            && function
+                .params
+                .iter()
+                .all(|param| param.passing == MirReceiverKind::Borrow)
+            && types
+                .values()
+                .all(|ty| scalar_name(ty) || text(ty) || enum_type(ty))
+            && (scalar_name(&function.return_type) || function.return_type == Type::Unit)
+            && function.blocks.iter().all(|block| {
+                block.instructions.iter().all(instruction_free)
+                    && terminator_free(&block.terminator)
+            })
+    };
+    module
+        .functions
+        .iter()
+        .filter(|function| free(function))
+        .map(|function| function.name.clone())
+        .collect()
+}
+
 /// Whether `function` keeps no frame record although it calls functions:
 /// each call is a direct one of a function of `total` (see `total_leaves`),
 /// and the rest of its body is a leaf's (see `frameless_leaf`). Such a
@@ -21234,6 +23174,25 @@ fn leaf_body_calling(
             }),
         _ => false,
     };
+    // An integer local or literal: an integer division checks its divisor
+    // (and the one quotient that overflows) inline, and each failure path
+    // pushes the frame record the function skipped.
+    let integer_operand = |operand: &Operand| match operand {
+        Operand::Int(_) => true,
+        Operand::Place(place) | Operand::MovePlace(place) => function
+            .local_types
+            .iter()
+            .map(|local| (&local.name, &local.ty))
+            .chain(function.params.iter().map(|param| (&param.name, &param.ty)))
+            .any(|(name, ty)| {
+                name == place
+                    && matches!(ty, Type::Named(name, args)
+                        if args.is_empty() && matches!(name.as_str(),
+                            "int8" | "int16" | "int32" | "int64"
+                                | "uint8" | "uint16" | "uint32" | "uint64"))
+            }),
+        _ => false,
+    };
     function.blocks.iter().all(|block| {
         let instructions = block
             .instructions
@@ -21253,7 +23212,10 @@ fn leaf_body_calling(
                     } => {
                         let total = match op {
                             BinaryOp::Div => float_operand(left) && float_operand(right),
-                            BinaryOp::FloorDiv | BinaryOp::Mod | BinaryOp::Pow => false,
+                            BinaryOp::FloorDiv | BinaryOp::Mod => {
+                                integer_operand(left) && integer_operand(right)
+                            }
+                            BinaryOp::Pow => false,
                             _ => true,
                         };
                         total && plain_operand(left) && plain_operand(right)
@@ -21356,6 +23318,13 @@ fn emit_frame_push(
     (done, builder.block_params(done)[0])
 }
 
+/// The signature of `aura_enter_cycle_frame`: the frame descriptor.
+fn cycle_frame_entry_signature() -> Signature {
+    let mut signature = Signature::new(CallConv::C);
+    signature.params.push(types::I64);
+    signature
+}
+
 fn ownership_fast_path_signature(returns_value: bool) -> Signature {
     let mut signature = Signature::new(CallConv::C);
     signature.params.push(types::I64);
@@ -21388,14 +23357,25 @@ fn declare_ownership_fast_paths(
         ),
         "failed to declare the release fast path: {}"
     );
+    let release_variant = try_or_string_error!(
+        module.declare_function(
+            "aura_owned_release_variant",
+            Linkage::Local,
+            &ownership_fast_path_signature(false),
+        ),
+        "failed to declare the variant release fast path: {}"
+    );
     module.mark_inline(retain);
     module.mark_inline(release);
+    module.mark_inline(release_variant);
     Ok(OwnershipFastPaths {
         retain,
         release,
         runtime_retain: runtime.replace(RuntimeFn::RetainValue, retain),
         runtime_release: runtime.replace(RuntimeFn::ReleaseValue, release),
         release_last: runtime[RuntimeFn::ReleaseLastOwnedValue],
+        release_variant,
+        release_last_variant: runtime.replace(RuntimeFn::ReleaseLastOwnedVariant, release_variant),
     })
 }
 
@@ -21516,6 +23496,91 @@ fn adds_to_receiver(op: RuntimeOp) -> bool {
     )
 }
 
+/// How each function that keeps its callers' shared arguments takes them
+/// (see `mir::ownership::kept_arguments`), with one addition. The MIR
+/// passes a shared parameter or receiver of a Copy type by the owning
+/// convention, since it copies such a value freely. This backend keeps
+/// some of those values in boxes: a Copy enum with a payload, a tuple, a
+/// Copy class. The caller of a function that only reads such a parameter
+/// or receiver where it lies (see `elements::kept_copy_params`) keeps the
+/// box, as it keeps any other shared argument, so the call copies and
+/// releases nothing.
+fn keep_boxed_copy_params(
+    module: &MirModule,
+    param_types: &HashMap<String, Vec<DirectType>>,
+) -> BTreeMap<String, crate::mir::ownership::BorrowingCallee> {
+    // A callee's parameters, then its receiver for a method.
+    fn slots(
+        callee: &mut crate::mir::ownership::BorrowingCallee,
+    ) -> impl Iterator<Item = &mut MirReceiverKind> + '_ {
+        callee.params.iter_mut().chain(callee.receiver.as_mut())
+    }
+    let mut borrowing = crate::mir::ownership::kept_arguments(module);
+    let undropped = crate::mir::ownership::undropped_shared_params(module);
+    // Every candidate starts as kept, and loses that when its function
+    // does more than read it. A function may pass a parameter on to
+    // another candidate, so the passes repeat until none changes.
+    let mut candidates = Vec::new();
+    for function in &module.functions {
+        let (Some(undropped), Some(types), Some(callee)) = (
+            undropped.get(&function.name),
+            param_types.get(&function.name),
+            borrowing.get_mut(&function.name),
+        ) else {
+            continue;
+        };
+        // The receiver's type comes first, the parameters' after it.
+        let first = types.len().saturating_sub(function.params.len());
+        let slot_types = types[first..].iter().chain(types[..first].iter());
+        let mut started = Vec::new();
+        for ((kept, ty), undropped) in slots(callee).zip(slot_types).zip(undropped) {
+            let boxed = matches!(
+                ty,
+                DirectType::Opaque(Type::Named(name, _)) if name != "str"
+            ) || matches!(ty, DirectType::Opaque(Type::Tuple(_)));
+            let candidate = boxed && *undropped && *kept == MirReceiverKind::Value;
+            if candidate {
+                *kept = MirReceiverKind::Borrow;
+            }
+            started.push(candidate);
+        }
+        if started.contains(&true) {
+            candidates.push((function, started));
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (function, started) in &candidates {
+            let callee = borrowing
+                .get_mut(&function.name)
+                .expect("a candidate is a borrowing function");
+            let current = slots(callee)
+                .zip(started)
+                .map(|(kept, started)| *started && *kept == MirReceiverKind::Borrow)
+                .collect::<Vec<_>>();
+            let kept = elements::kept_copy_params(function, &current, |instruction| {
+                crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                    borrowing.get(name)
+                })
+            });
+            if kept != current {
+                let callee = borrowing
+                    .get_mut(&function.name)
+                    .expect("a candidate is a borrowing function");
+                for ((slot, was), kept) in slots(callee).zip(&current).zip(&kept) {
+                    if *was && !*kept {
+                        *slot = MirReceiverKind::Value;
+                    }
+                }
+                changed = true;
+            }
+        }
+        if !changed {
+            return borrowing;
+        }
+    }
+}
+
 /// Whether a call to a function whose parameters `kept` names only borrows
 /// its arguments: each is a scalar or goes to a borrowed parameter, none
 /// is written back, and none can be a callable, whose captures could reach
@@ -21545,6 +23610,43 @@ fn cannot_be_callable(ty: &Type) -> bool {
     }
 }
 
+/// Whether `rvalue` is a `str` operation that makes a new value from its
+/// text and its arguments and only reads them, or a `clone` or `copy`,
+/// which makes a new value from its receiver, so a box field it reads may
+/// stay where it lies, as for [`reads_operands_only`].
+fn makes_text_from_operands(rvalue: &Rvalue) -> bool {
+    matches!(
+        rvalue,
+        Rvalue::Call {
+            callee: CallTarget::Runtime {
+                op: RuntimeOp::Str(
+                    StrOp::Split
+                        | StrOp::Replace
+                        | StrOp::ToLower
+                        | StrOp::ToUpper
+                        | StrOp::StripPrefix
+                        | StrOp::StripSuffix
+                        | StrOp::Trim
+                        | StrOp::Join
+                        | StrOp::TrimStart
+                        | StrOp::TrimEnd
+                        | StrOp::SplitOnce
+                        | StrOp::RsplitOnce
+                        | StrOp::Lines
+                        | StrOp::SplitWhitespace
+                        | StrOp::Find
+                        | StrOp::Count
+                        | StrOp::Repeat
+                        | StrOp::Chars
+                        | StrOp::CharAt
+                ) | RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy),
+                ..
+            },
+            ..
+        }
+    )
+}
+
 /// The box field reads one rvalue reads in place; a comparison reads two,
 /// and a membership test its receiver and its argument.
 const FIELD_READS_PER_RVALUE: usize = 4;
@@ -21559,20 +23661,15 @@ fn reads_operands_only(rvalue: &Rvalue) -> bool {
             ..
         } => matches!(
             op,
-            RuntimeOp::Str(StrOp::Contains | StrOp::StartsWith | StrOp::EndsWith | StrOp::Len)
-                | RuntimeOp::List(
-                    ListOp::Len
-                        | ListOp::IsEmpty
-                        | ListOp::Contains
-                        | ListOp::IndexOf
-                        | ListOp::Count
-                )
-                | RuntimeOp::Dict(
-                    DictOp::Len | DictOp::IsEmpty | DictOp::ContainsKey | DictOp::ContainsKeyInt64
-                )
-                | RuntimeOp::Set(
-                    SetOp::Len | SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64
-                )
+            RuntimeOp::Str(
+                StrOp::Contains | StrOp::StartsWith | StrOp::EndsWith | StrOp::Len | StrOp::ByteLen
+            ) | RuntimeOp::List(
+                ListOp::Len | ListOp::IsEmpty | ListOp::Contains | ListOp::IndexOf | ListOp::Count
+            ) | RuntimeOp::Dict(
+                DictOp::Len | DictOp::IsEmpty | DictOp::ContainsKey | DictOp::ContainsKeyInt64
+            ) | RuntimeOp::Set(
+                SetOp::Len | SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64
+            )
         ),
         _ => false,
     }
@@ -21582,6 +23679,7 @@ fn emit_release_fast_path(
     builder: &mut dyn FunctionBackend,
     frame_stack: FuncHandle,
     paths: OwnershipFastPaths,
+    release_last: FuncHandle,
 ) {
     let layout = ownership_layout();
     let trusted = MemFlags::trusted();
@@ -21607,7 +23705,7 @@ fn emit_release_fast_path(
     builder.jump(blocks.done, &[]);
 
     builder.switch_to_block(last_block);
-    let last_ref = builder.import_function(paths.release_last);
+    let last_ref = builder.import_function(release_last);
     builder.call(last_ref, &[blocks.value]);
     builder.jump(blocks.done, &[]);
 
@@ -21680,6 +23778,44 @@ fn emit_stack_check(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<Fu
 /// Pops the innermost call's frame record: count one entry fewer, unless
 /// the stack's flags ask for the runtime or no call is above its floor.
 /// Then `aura_direct_exit_call` does the whole pop.
+/// The calls that push, find, and pop frame records, which need none.
+/// The runtime's reads of a variant or list box that generated code reads
+/// in place when the box is in its layout, a list element's loan or path
+/// in a list of another form, the words of a `str` box, a byte compare,
+/// and its releases.
+fn layout_fallbacks(runtime: &RuntimeTable<FuncRef>) -> Vec<FuncRef> {
+    [
+        RuntimeFn::VariantMatches,
+        RuntimeFn::VariantPayload,
+        RuntimeFn::VariantPayloadI64,
+        RuntimeFn::VariantPayloadInt64,
+        RuntimeFn::VariantPayloadU64,
+        RuntimeFn::VariantPayloadBool,
+        RuntimeFn::VecLen,
+        RuntimeFn::VecIndex,
+        RuntimeFn::VecIndexScalar,
+        RuntimeFn::VecLend,
+        RuntimeFn::ElementPathLoad,
+        RuntimeFn::ElementPathPromote,
+        RuntimeFn::StringWords,
+        RuntimeFn::BytesEqual,
+        RuntimeFn::TagValueType,
+        RuntimeFn::ReleaseValue,
+        RuntimeFn::ReleaseLastOwnedValue,
+    ]
+    .into_iter()
+    .map(|function| runtime[function])
+    .collect()
+}
+
+fn frame_calls(runtime: &RuntimeTable<FuncRef>) -> [FuncRef; 3] {
+    [
+        runtime[RuntimeFn::FrameStack],
+        runtime[RuntimeFn::EnterCall],
+        runtime[RuntimeFn::ExitCall],
+    ]
+}
+
 fn emit_frame_pop(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<FuncRef>) {
     let layout = frame_stack_layout();
     let header = MemFlags::trusted_in(AliasClass::FrameHeader);
@@ -22491,11 +24627,12 @@ fn validate_rvalue(
 
 /// The root `x` of `instructions` that start `t = f"{x}..."; Release(x);
 /// x = move t`, the form the ownership pass gives `x += ...` on a `str`
-/// local, when no later part of the f-string reads `x`.
+/// local, or `t = x + y; Release(x); x = move t`, the form of
+/// `x = x + y`, when no later part of the f-string, or `y`, reads `x`.
 fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
     let [Instruction::Assign {
         target: temporary,
-        value: Rvalue::FormatString { parts },
+        value,
     }, Instruction::Release { place: released }, Instruction::Assign {
         target: root,
         value: Rvalue::Use(Operand::MovePlace(moved)),
@@ -22503,8 +24640,23 @@ fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
     else {
         return None;
     };
-    let [MirFormatPart::Value(Operand::Place(first)), rest @ ..] = parts.as_slice() else {
-        return None;
+    let (first, rest): (&String, Vec<&Operand>) = match value {
+        Rvalue::FormatString { parts } => {
+            let [MirFormatPart::Value(Operand::Place(first)), rest @ ..] = parts.as_slice() else {
+                return None;
+            };
+            (
+                first,
+                rest.iter().filter_map(MirFormatPart::operand).collect(),
+            )
+        }
+        Rvalue::Binary {
+            op: BinaryOp::Add,
+            left: Operand::Place(first),
+            right,
+            ..
+        } => (first, vec![right]),
+        _ => return None,
     };
     let reads_root = |operand: &Operand| {
         matches!(operand, Operand::Place(place) | Operand::MovePlace(place)
@@ -22514,70 +24666,8 @@ fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
         && released == root
         && moved == temporary
         && !root.contains('.')
-        && !rest
-            .iter()
-            .filter_map(MirFormatPart::operand)
-            .any(reads_root))
+        && !rest.into_iter().any(reads_root))
     .then_some(root.as_str())
-}
-
-/// The `str` operand `text` of `instructions` that start `%t =
-/// text.to_bytes(); x = out.extend(move %t)`, the form
-/// `out.extend(text.to_bytes())` takes: nothing else reads the list of
-/// bytes, so the extend may read them from the text.
-fn extended_str_bytes(instructions: &[Instruction]) -> Option<&Operand> {
-    let [Instruction::Assign {
-        target: bytes,
-        value:
-            Rvalue::Call {
-                callee:
-                    CallTarget::Runtime {
-                        op: RuntimeOp::Host(builtin),
-                        receiver: None,
-                        ..
-                    },
-                args: text,
-                ..
-            },
-    }, Instruction::Assign {
-        target: extended,
-        value:
-            Rvalue::Call {
-                callee:
-                    CallTarget::Runtime {
-                        op: RuntimeOp::List(ListOp::Extend),
-                        receiver: Some(Operand::Place(receiver)),
-                        ..
-                    },
-                args: extended_with,
-                ..
-            },
-    }, ..] = instructions
-    else {
-        return None;
-    };
-    let [MirArg {
-        value: text @ Operand::Place(read),
-        ..
-    }] = text.as_slice()
-    else {
-        return None;
-    };
-    let [MirArg {
-        value: Operand::MovePlace(moved),
-        ..
-    }] = extended_with.as_slice()
-    else {
-        return None;
-    };
-    let root = |place: &'_ str| place.split('.').next().map(str::to_string);
-    (builtin.name() == "str.to_bytes"
-        && moved == bytes
-        && bytes.starts_with('%')
-        && extended != bytes
-        && root(receiver) != root(bytes)
-        && root(read) != root(bytes))
-    .then_some(text)
 }
 
 /// The temporary `%t` of `instructions` that start `x = %t.replace("a",
@@ -24089,9 +26179,13 @@ fn collect_task_start_targets(
 mod reachability;
 #[path = "native_codegen_result_slots.rs"]
 mod result_slots;
+#[path = "native_codegen_str_slots.rs"]
+mod str_slots;
 
 #[path = "native_codegen_callables.rs"]
 mod callables;
+#[path = "native_codegen_caller_chains.rs"]
+mod caller_chains;
 #[path = "native_codegen_classes.rs"]
 mod classes;
 
@@ -24103,6 +26197,8 @@ mod elements;
 mod entry_loops;
 #[path = "native_codegen_enums.rs"]
 mod enums;
+#[path = "native_codegen_event_reads.rs"]
+mod event_reads;
 #[path = "native_codegen_foreign.rs"]
 mod foreign;
 #[path = "native_codegen_foreign_reads.rs"]
@@ -24134,10 +26230,14 @@ mod machine;
 mod math;
 #[path = "native_codegen_module_state.rs"]
 mod module_state;
+#[path = "native_codegen_quiet_sinks.rs"]
+mod quiet_sinks;
 #[path = "native_codegen_range_loops.rs"]
 mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]
 mod shadow_reads;
+#[path = "native_codegen_str_chains.rs"]
+mod str_chains;
 
 #[path = "native_codegen_fixed_arrays.rs"]
 mod fixed_arrays;
@@ -24155,6 +26255,8 @@ mod sync;
 #[cfg(test)]
 #[path = "native_codegen_tests.rs"]
 mod tests;
+#[path = "native_codegen_untagged_args.rs"]
+mod untagged_args;
 
 fn is_comparison_op(op: BinaryOp) -> bool {
     matches!(

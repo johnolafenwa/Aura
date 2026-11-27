@@ -367,13 +367,23 @@ impl ModuleBackend for LlvmModule {
         let mut builder = LlvmFunction {
             module: self,
             ir: FunctionIr::new(signature.clone()),
+            deferred_frame: None,
+            frame_branches: Vec::new(),
         };
         // The body's own error comes first. The definition is checked only
         // once the body is built.
         if let Err(error) = body(&mut builder) {
             return Err(DefineError::Body(error));
         }
-        let ir = builder.ir;
+        let mut ir = builder.ir;
+        // A debug build keeps one body, as written.
+        if super::optimizes() && !self.debug_info {
+            let recursive = ir.calls(function);
+            let functions = &self.functions;
+            ir.continue_slow_paths(recursive, &|callee| {
+                functions[callee.0 as usize].linkage == Linkage::Import
+            });
+        }
         let decl = &self.functions[function.0 as usize];
         if decl.linkage == Linkage::Import {
             return Err(DefineError::Backend(format!(
@@ -487,7 +497,10 @@ impl LlvmModule {
             };
             let callee_of = |callee: &FuncRef| body.func_refs[callee.0 as usize].0 as usize;
             let mut names = Vec::new();
-            for inst in &body.insts {
+            // A call of the copy `continue_slow_paths` made stands for its
+            // call in the first body.
+            let built = body.insts.len() - body.slow_copy_insts;
+            for inst in &body.insts[..built] {
                 match &inst.op {
                     Op::Call(callee, _) => {
                         let callee = callee_of(callee);
@@ -516,7 +529,7 @@ impl LlvmModule {
             let small = decl
                 .body
                 .as_ref()
-                .is_some_and(|body| body.insts.len() <= COPIED_CALL_INLINE_WEIGHT);
+                .is_some_and(|body| body.weight() <= COPIED_CALL_INLINE_WEIGHT);
             if decl.linkage == Linkage::Local
                 && small
                 && copies[index] > 0
@@ -999,7 +1012,13 @@ struct BlockIr {
     /// A copy of a loop that runs while its checks hold at entry.
     versioned: bool,
     in_layout: bool,
+    /// Holds a branch that picks among copies where they are entered:
+    /// the branch earlier copies left, which runs when a later copy's
+    /// condition fails, or a copy of such a branch.
+    version_decision: bool,
     predecessors: Vec<u32>,
+    /// Has every predecessor it will get, though it is not sealed.
+    complete: bool,
     /// The value each variable last got in this block.
     definitions: HashMap<u32, Val>,
 }
@@ -1024,10 +1043,33 @@ struct FunctionIr {
     /// The callee of each direct call `version_blocks` copied, once per
     /// copy.
     copied_calls: Vec<FuncRef>,
-    /// The copies `version_blocks` made of each select that was not yet
+    /// The instructions that test and push a deferred frame record before
+    /// calls (see `defer_frame`), which weigh nothing for inlining or for
+    /// splitting the module.
+    frame_insts: HashSet<u32>,
+    /// The instructions of the copy `continue_slow_paths` made, the last of
+    /// `insts`, which weigh nothing for inlining.
+    slow_copy_insts: usize,
+    /// The copies `version_blocks` made of each select while it was not
     /// settled, by the select's result, so a later call for blocks that
     /// were already copied settles those copies too.
     select_copies: HashMap<Val, Vec<u32>>,
+    /// The select each copy of a select in `select_copies` was made from,
+    /// through any number of copies.
+    select_roots: HashMap<Val, Val>,
+    /// The value each select `version_blocks` settled keeps in a copy
+    /// that runs while its condition holds, by the select's result, so a
+    /// later copy of the same blocks for a stronger condition keeps it too.
+    settled_selects: HashMap<Val, Val>,
+    /// The copies `version_blocks` made of each block, and the blocks it
+    /// added beside a block that enters copied blocks. A later copy of the
+    /// block takes them along.
+    block_copies: HashMap<u32, Vec<u32>>,
+    /// The copies made since `seal_versions`, which the next call for the
+    /// same blocks leaves alone.
+    pending_copies: Vec<(u32, u32)>,
+    /// How many instructions the body may grow to through copies.
+    version_budget: Option<usize>,
     current: Option<u32>,
     params_block: Option<u32>,
     /// The source position of the instructions built from here on.
@@ -1036,6 +1078,15 @@ struct FunctionIr {
     debug_vars: BTreeMap<u32, DebugVariable>,
     /// The plain class variables a debugger shows.
     debug_records: Vec<DebugRecord>,
+}
+
+/// The versions of copied blocks the branches at an entry pick among (see
+/// `FunctionIr::pick`).
+enum Pick {
+    /// A jump to a block, with its arguments.
+    Leaf(Blk, Vec<Val>),
+    /// A branch on a condition, to the first while it holds.
+    Branch(Val, Box<Pick>, Box<Pick>),
 }
 
 /// Where a variable's value comes from at a use.
@@ -1163,7 +1214,14 @@ impl FunctionIr {
             data_refs: Vec::new(),
             sig_refs: Vec::new(),
             copied_calls: Vec::new(),
+            frame_insts: HashSet::new(),
+            slow_copy_insts: 0,
             select_copies: HashMap::new(),
+            select_roots: HashMap::new(),
+            settled_selects: HashMap::new(),
+            block_copies: HashMap::new(),
+            pending_copies: Vec::new(),
+            version_budget: None,
             current: None,
             params_block: None,
             location: None,
@@ -1264,7 +1322,15 @@ impl FunctionIr {
         // defined before the blocks that use it. A block may be created
         // long before it gets its first instruction, so the order of the
         // block numbers is not that order.
-        let set = blocks.iter().map(|block| block.0).collect::<HashSet<_>>();
+        let mut set = blocks.iter().map(|block| block.0).collect::<HashSet<_>>();
+        // The copies earlier calls made of these blocks for other
+        // conditions are copied with them, so the copy keeps every version
+        // of a loop inside it or across it.
+        let mut work = set.iter().copied().collect::<Vec<_>>();
+        while let Some(block) = work.pop() {
+            let copies = self.block_copies.get(&block).into_iter().flatten();
+            work.extend(copies.filter(|copy| set.insert(**copy)));
+        }
         let members = self
             .layout
             .iter()
@@ -1284,21 +1350,21 @@ impl FunctionIr {
         // their false one.
         let mut kept = HashMap::new();
         for (select, constant) in selects {
-            let Some(inst) = self.value_defs[select.0 as usize] else {
-                continue;
-            };
-            let inst = &mut self.insts[inst as usize];
-            if let Op::Select(_, if_true, if_false) = inst.op {
-                kept.insert(inst.results[0], constant.ok_or(if_true));
-                inst.op = Op::Copy(if_false);
-            }
-            // A copy of this select, in the copy of a loop that shares
-            // these blocks, reads memory as the blocks do. Left alone it
-            // would test the condition on every pass.
-            for copy in self.select_copies.remove(select).unwrap_or_default() {
-                let copy = &mut self.insts[copy as usize];
-                if let Op::Select(_, _, if_false) = copy.op {
-                    copy.op = Op::Copy(if_false);
+            // The select, and each copy of it in the copy of a loop that
+            // shares these blocks, reads memory where the blocks run. Left
+            // alone a copy would test the condition on every pass. The copy
+            // this call makes of each keeps the true value, which an earlier
+            // call for a weaker condition may have settled already.
+            let copies = self.select_copies.get(select).cloned().unwrap_or_default();
+            for inst in self.value_defs[select.0 as usize].into_iter().chain(copies) {
+                let inst = &mut self.insts[inst as usize];
+                let result = inst.results[0];
+                if let Op::Select(_, if_true, if_false) = inst.op {
+                    inst.op = Op::Copy(if_false);
+                    self.settled_selects.insert(result, if_true);
+                }
+                if let Some(if_true) = self.settled_selects.get(&result) {
+                    kept.insert(result, constant.ok_or(*if_true));
                 }
             }
         }
@@ -1315,11 +1381,22 @@ impl FunctionIr {
                 && self.blocks[pad.0 as usize]
                     .insts
                     .last()
-                    .is_some_and(|inst| {
-                        matches!(&self.insts[*inst as usize].op, Op::Jump(target, _) if set.contains(&target.0))
-                    })
+                    .is_some_and(|inst| self.pick(&self.insts[*inst as usize].op, &set).is_some())
         });
-        if members.is_empty() || entries.is_empty() || escapes || !enters {
+        // A body grows to a few times its size at most.
+        let size = members
+            .iter()
+            .map(|block| self.blocks[*block as usize].insts.len())
+            .sum::<usize>();
+        let budget = *self
+            .version_budget
+            .get_or_insert(self.insts.len() * 3 + 4096);
+        if members.is_empty()
+            || entries.is_empty()
+            || escapes
+            || !enters
+            || self.insts.len() + size > budget
+        {
             return false;
         }
         let mut block_map = HashMap::new();
@@ -1343,6 +1420,7 @@ impl FunctionIr {
             }
             self.blocks[copy as usize] = entry;
             block_map.insert(*block, copy);
+            self.pending_copies.push((*block, copy));
         }
         for block in &members {
             for inst in self.blocks[*block as usize].insts.clone() {
@@ -1380,7 +1458,9 @@ impl FunctionIr {
                     self.value_defs[result.0 as usize] = Some(index);
                 }
                 if let (Op::Select(..), Some(result)) = (&op, original.results.first()) {
-                    self.select_copies.entry(*result).or_default().push(index);
+                    let root = self.select_roots.get(result).copied().unwrap_or(*result);
+                    self.select_copies.entry(root).or_default().push(index);
+                    self.select_roots.insert(results[0], root);
                 }
                 self.insts.push(InstIr {
                     op,
@@ -1393,33 +1473,150 @@ impl FunctionIr {
             self.layout.push(copy);
         }
         for (pad, condition, equal) in entries {
-            let inst = *self.blocks[pad.0 as usize]
+            let last = *self.blocks[pad.0 as usize]
                 .insts
                 .last()
-                .expect("an entry ends in a jump");
-            let Op::Jump(original, args) = self.insts[inst as usize].op.clone() else {
-                unreachable!("an entry ends in a jump");
-            };
+                .expect("an entry ends in a branch");
+            let earlier = self.insts[last as usize].op.clone();
+            let pick = self.pick(&earlier, &set).expect("checked above");
             let mut condition = *condition;
             if let Some((word, constant)) = equal {
-                // The check goes in before the jump.
-                let jump = self.blocks[pad.0 as usize].insts.pop().expect("the jump");
+                // The check goes in before the pad's branch.
+                self.blocks[pad.0 as usize].insts.pop();
                 let saved = (self.current, self.location);
                 self.current = Some(pad.0);
-                self.location = self.insts[jump as usize].location;
+                self.location = self.insts[last as usize].location;
                 let same =
                     self.push_value(Op::IcmpImm(IntCC::Equal, *word, *constant), ScalarType::I8);
                 let wide = self.push_value(Op::Unary(UnaryOp::Uextend, same), ScalarType::I64);
                 condition =
                     self.push_value(Op::Binary(BinaryOp::Band, condition, wide), ScalarType::I64);
                 (self.current, self.location) = saved;
-                self.blocks[pad.0 as usize].insts.push(jump);
+                self.blocks[pad.0 as usize].insts.push(last);
             }
-            let copy = target(original);
+            let location = self.insts[last as usize].location;
+            let (copy, copy_args) = self.place_pick(pick, pad.0, &block_map, &value_map, location);
             self.blocks[copy.0 as usize].predecessors.push(pad.0);
-            self.insts[inst as usize].op = Op::Brif(condition, copy, args.clone(), original, args);
+            if let Op::Jump(original, args) = earlier {
+                self.insts[last as usize].op = Op::Brif(condition, copy, copy_args, original, args);
+                continue;
+            }
+            // Earlier copies left branches that pick among them. Where
+            // this copy's condition holds, the copies of those branches
+            // pick among this copy's versions; where it fails, the
+            // branches run as they did, from a block of their own.
+            let fallback = self.blocks.len() as u32;
+            self.insts[last as usize].block = fallback;
+            self.blocks.push(BlockIr {
+                sealed: true,
+                in_layout: true,
+                version_decision: true,
+                insts: vec![last],
+                predecessors: vec![pad.0],
+                ..BlockIr::default()
+            });
+            self.layout.push(fallback);
+            self.block_copies.entry(pad.0).or_default().push(fallback);
+            self.blocks[pad.0 as usize].insts.pop();
+            let branch = self.insts.len() as u32;
+            self.insts.push(InstIr {
+                op: Op::Brif(condition, copy, copy_args, Blk(fallback), Vec::new()),
+                results: Vec::new(),
+                block: pad.0,
+                location,
+            });
+            self.blocks[pad.0 as usize].insts.push(branch);
         }
         true
+    }
+
+    /// The versions of the blocks of `set` that `op`, the branch an entry
+    /// pad ends in, picks among, or `None` when it does not enter them.
+    /// A copy made since `seal_versions` is one for a weaker condition of
+    /// the same blocks, which a stronger copy replaces where its own
+    /// condition holds, so the pick leaves it out.
+    fn pick(&self, op: &Op, set: &HashSet<u32>) -> Option<Pick> {
+        match op {
+            Op::Jump(target, args) => self.pick_target(*target, args, set),
+            Op::Brif(condition, then_block, then_args, else_block, else_args) => {
+                let otherwise = self.pick_target(*else_block, else_args, set)?;
+                Some(match self.pick_target(*then_block, then_args, set) {
+                    Some(then) => Pick::Branch(*condition, Box::new(then), Box::new(otherwise)),
+                    None => otherwise,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// See [`FunctionIr::pick`]: a branch's target.
+    fn pick_target(&self, target: Blk, args: &[Val], set: &HashSet<u32>) -> Option<Pick> {
+        let block = &self.blocks[target.0 as usize];
+        if block.version_decision {
+            return self.pick(&self.insts[block.insts[0] as usize].op, set);
+        }
+        set.contains(&target.0)
+            .then(|| Pick::Leaf(target, args.to_vec()))
+    }
+
+    /// Builds the branches of `pick` among the copies `block_map` names,
+    /// in blocks that belong to entry `pad`, and returns where they start.
+    fn place_pick(
+        &mut self,
+        pick: Pick,
+        pad: u32,
+        block_map: &HashMap<u32, u32>,
+        value_map: &HashMap<Val, Val>,
+        location: Option<(u32, u32)>,
+    ) -> (Blk, Vec<Val>) {
+        let value = |value: Val| value_map.get(&value).copied().unwrap_or(value);
+        match pick {
+            Pick::Leaf(target, args) => (
+                Blk(block_map[&target.0]),
+                args.into_iter().map(value).collect(),
+            ),
+            Pick::Branch(condition, then, otherwise) => {
+                let (then_block, then_args) =
+                    self.place_pick(*then, pad, block_map, value_map, location);
+                let (else_block, else_args) =
+                    self.place_pick(*otherwise, pad, block_map, value_map, location);
+                let block = self.blocks.len() as u32;
+                let inst = self.insts.len() as u32;
+                self.insts.push(InstIr {
+                    op: Op::Brif(
+                        value(condition),
+                        then_block,
+                        then_args,
+                        else_block,
+                        else_args,
+                    ),
+                    results: Vec::new(),
+                    block,
+                    location,
+                });
+                self.blocks.push(BlockIr {
+                    sealed: true,
+                    in_layout: true,
+                    versioned: true,
+                    version_decision: true,
+                    insts: vec![inst],
+                    predecessors: Vec::new(),
+                    ..BlockIr::default()
+                });
+                self.blocks[then_block.0 as usize].predecessors.push(block);
+                self.blocks[else_block.0 as usize].predecessors.push(block);
+                self.layout.push(block);
+                self.block_copies.entry(pad).or_default().push(block);
+                (Blk(block), Vec::new())
+            }
+        }
+    }
+
+    /// See [`FunctionBackend::seal_versions`].
+    fn seal_versions(&mut self) {
+        for (block, copy) in std::mem::take(&mut self.pending_copies) {
+            self.block_copies.entry(block).or_default().push(copy);
+        }
     }
 
     /// A readable listing for verifier errors.
@@ -1484,9 +1681,41 @@ impl FunctionIr {
 struct LlvmFunction<'a> {
     module: &'a mut LlvmModule,
     ir: FunctionIr,
+    /// See [`FunctionBackend::defer_frame`]: the variable, the descriptor,
+    /// the callee that pushes it, and the callees that need no frame.
+    deferred_frame: Option<(Var, Val, FuncRef, Vec<FuncRef>)>,
+    /// Each `frame_branch`, as its instruction and `then` block.
+    frame_branches: Vec<(u32, Blk)>,
 }
 
 impl LlvmFunction<'_> {
+    /// Pushes the deferred frame record before a call of `callee`, or of
+    /// an indirect callee, that needs it, unless an earlier call did.
+    fn frame_for_call(&mut self, callee: Option<FuncRef>) {
+        let Some((framed, descriptor, enter, free)) = self.deferred_frame.take() else {
+            return;
+        };
+        if !callee.is_some_and(|callee| free.contains(&callee)) {
+            let before = self.ir.insts.len();
+            let pushed = self.use_var(framed);
+            let push = self.create_block();
+            let after = self.create_block();
+            self.set_cold_block(push);
+            self.frame_branch(pushed, after, push);
+            self.switch_to_block(push);
+            self.seal_block(push);
+            self.call(enter, &[descriptor]);
+            let one = self.iconst(ScalarType::I64, 1);
+            self.def_var(framed, one);
+            self.jump(after, &[]);
+            self.switch_to_block(after);
+            self.seal_block(after);
+            let guard = before as u32..self.ir.insts.len() as u32;
+            self.ir.frame_insts.extend(guard);
+        }
+        self.deferred_frame = Some((framed, descriptor, enter, free));
+    }
+
     fn unary(&mut self, op: UnaryOp, ty: ScalarType, operand: Val) -> Val {
         self.ir.push_value(Op::Unary(op, operand), ty)
     }
@@ -1549,8 +1778,75 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.ir.version_blocks(blocks, selects, entries)
     }
 
+    fn seal_versions(&mut self) {
+        self.ir.seal_versions();
+    }
+
     fn seal_block(&mut self, block: Blk) {
         self.ir.blocks[block.0 as usize].sealed = true;
+    }
+
+    fn defer_frame(&mut self, framed: Var, descriptor: Val, enter: FuncRef, free: &[FuncRef]) {
+        let mut free = free.to_vec();
+        free.push(enter);
+        self.deferred_frame = Some((framed, descriptor, enter, free));
+    }
+
+    #[cfg(test)]
+    fn calls_when_warm(&self, free: &[FuncRef]) -> bool {
+        self.calls_when_warm_where(&|callee| !free.contains(&callee))
+    }
+
+    fn calls_when_warm_where(&self, needs: &dyn Fn(FuncRef) -> bool) -> bool {
+        let ir = &self.ir;
+        let mut warm = ir.layout.first().copied().into_iter().collect::<Vec<_>>();
+        let mut seen = warm.iter().copied().collect::<HashSet<_>>();
+        let mut index = 0;
+        while let Some(block) = warm.get(index).copied() {
+            index += 1;
+            let entry = &ir.blocks[block as usize];
+            // A way that ends in a trap reports a failure, which no hot
+            // path does, so it pushes the record before its calls.
+            if entry
+                .insts
+                .last()
+                .is_some_and(|inst| matches!(ir.insts[*inst as usize].op, Op::Trap))
+            {
+                continue;
+            }
+            for inst in &entry.insts {
+                let targets = match &ir.insts[*inst as usize].op {
+                    Op::Call(callee, _) if needs(*callee) => return true,
+                    Op::CallIndirect(..) => return true,
+                    Op::Jump(target, _) => vec![target.0],
+                    Op::Brif(_, then_block, _, else_block, _) => vec![then_block.0, else_block.0],
+                    _ => Vec::new(),
+                };
+                for target in targets {
+                    if !ir.blocks[target as usize].cold && seen.insert(target) {
+                        warm.push(target);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn frame_branch(&mut self, condition: Val, then_block: Blk, else_block: Blk) {
+        self.brif(condition, then_block, &[], else_block, &[]);
+        let block = &self.ir.blocks[self.ir.current.expect("a branch's block") as usize];
+        let inst = *block.insts.last().expect("the branch");
+        self.frame_branches.push((inst, then_block));
+    }
+
+    fn settle_frame(&mut self) {
+        for (inst, then_block) in std::mem::take(&mut self.frame_branches) {
+            self.ir.insts[inst as usize].op = Op::Jump(then_block, Vec::new());
+        }
+    }
+
+    fn note_complete(&mut self, block: Blk) {
+        self.ir.blocks[block.0 as usize].complete = true;
     }
 
     fn seal_all_blocks(&mut self) {
@@ -1679,6 +1975,7 @@ impl FunctionBackend for LlvmFunction<'_> {
     }
 
     fn call(&mut self, callee: FuncRef, args: &[Val]) -> Call {
+        self.frame_for_call(Some(callee));
         let function = self.ir.func_refs[callee.0 as usize];
         let returns = self.module.functions[function.0 as usize]
             .signature
@@ -1695,6 +1992,7 @@ impl FunctionBackend for LlvmFunction<'_> {
     }
 
     fn call_indirect(&mut self, signature: SigRef, callee: Val, args: &[Val]) -> Call {
+        self.frame_for_call(None);
         let returns = self.ir.sig_refs[signature.0 as usize].returns.clone();
         self.ir
             .call_results(Op::CallIndirect(signature, callee, args.to_vec()), &returns)
@@ -1744,6 +2042,118 @@ impl FunctionBackend for LlvmFunction<'_> {
             Op::Iconst(constant) => Some(constant),
             _ => None,
         }
+    }
+
+    fn only_calls_in(&self, block: Blk, allowed: &[FuncRef]) -> bool {
+        self.ir.current == Some(block.0)
+            && self.ir.blocks[block.0 as usize].insts.iter().all(|inst| {
+                match &self.ir.insts[*inst as usize].op {
+                    Op::Call(callee, _) => allowed.contains(callee),
+                    Op::CallIndirect(..) => false,
+                    _ => true,
+                }
+            })
+    }
+
+    fn holds_since(
+        &self,
+        check: Blk,
+        taken: Blk,
+        then: Val,
+        now: Val,
+        allowed: &[FuncRef],
+    ) -> bool {
+        // A walk this long gives up.
+        const LIMIT: usize = 64;
+        let ir = &self.ir;
+        let current = ir.current.expect("a test is made in a block");
+        let check = check.0;
+        // The blocks on a way from `check` to here.
+        let mut ways = vec![current];
+        let mut work = vec![current];
+        while let Some(block) = work.pop() {
+            let entry = &ir.blocks[block as usize];
+            if !(entry.sealed || entry.complete)
+                || entry.predecessors.is_empty()
+                || ways.len() > LIMIT
+            {
+                return false;
+            }
+            for predecessor in &entry.predecessors {
+                if *predecessor != check && !ways.contains(predecessor) {
+                    ways.push(*predecessor);
+                    work.push(*predecessor);
+                }
+            }
+        }
+        // A value of a loop's blocks used after it would keep the loop from
+        // being copied (see `version_blocks`).
+        let mut back = ir.blocks[check as usize].predecessors.clone();
+        let mut seen = HashSet::new();
+        while let Some(block) = back.pop() {
+            if block == check || seen.len() > LIMIT {
+                return false;
+            }
+            if seen.insert(block) {
+                back.extend(&ir.blocks[block as usize].predecessors);
+            }
+        }
+        // The blocks a way through `taken` reaches: a call in any other
+        // block runs only where the test failed, which a later test repeats
+        // the slow way.
+        let mut after = vec![taken.0];
+        let mut grew = ways.contains(&taken.0);
+        while grew {
+            grew = false;
+            for block in &ways {
+                let reached = ir.blocks[*block as usize]
+                    .predecessors
+                    .iter()
+                    .any(|predecessor| after.contains(predecessor));
+                if reached && !after.contains(block) {
+                    after.push(*block);
+                    grew = true;
+                }
+            }
+        }
+        let calls_kept = ways
+            .iter()
+            .filter(|block| after.contains(block))
+            .all(|block| {
+                ir.blocks[*block as usize].insts.iter().all(|inst| {
+                    match &ir.insts[*inst as usize].op {
+                        Op::Call(callee, _) => allowed.contains(callee),
+                        Op::CallIndirect(..) => false,
+                        _ => true,
+                    }
+                })
+            });
+        if !calls_kept {
+            return false;
+        }
+        if now == then {
+            return true;
+        }
+        let read_of = |value: Val| {
+            let inst = ir.value_defs.get(value.0 as usize).copied().flatten()?;
+            match ir.insts[inst as usize].op {
+                Op::UseVar(var) => Some((var, ir.insts[inst as usize].block)),
+                _ => None,
+            }
+        };
+        let Some((var, _)) = read_of(now) else {
+            return false;
+        };
+        // The variable holds `then` where `check` ends.
+        let held = match ir.blocks[check as usize].definitions.get(&var.0) {
+            Some(value) => *value == then,
+            None => read_of(then) == Some((var, check)),
+        };
+        held && ways.iter().all(|block| {
+            ir.blocks[*block as usize].insts.iter().all(
+                |inst| !matches!(ir.insts[*inst as usize].op, Op::DefVar(set, _) if set == var),
+            )
+        })
     }
 
     fn only_calls_since(&self, inst: Inst, allowed: &[FuncRef]) -> bool {
@@ -3769,6 +4179,12 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             AliasClass::Any => return,
             AliasClass::FrameHeader => "aura frame stack header",
             AliasClass::FrameEntry => "aura frame stack entry",
+            AliasClass::BoxAccess => "aura box access code",
+            AliasClass::BoxElements => "aura box element address",
+            AliasClass::BoxLen => "aura box length",
+            AliasClass::BoxRoom => "aura box room",
+            AliasClass::ClassFields => "aura class fields",
+            AliasClass::ListElements => "aura list elements",
         };
         let zero = self.context.i64_type().const_zero().into();
         let root = self
@@ -4028,6 +4444,9 @@ mod x86_kernel;
 
 #[path = "native_backend_llvm_units.rs"]
 mod units;
+
+#[path = "native_backend_llvm_slow_paths.rs"]
+mod slow_paths;
 
 #[cfg(test)]
 #[path = "native_backend_llvm_tests.rs"]

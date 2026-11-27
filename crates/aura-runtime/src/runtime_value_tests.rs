@@ -4332,6 +4332,37 @@ fn fd_reads_check_deadline_and_size_before_ready_reads() {
         Some(b"abc".to_vec())
     );
 
+    // Bounds above the scratch read into a buffer of their own; smaller
+    // ones after them reuse the scratch and return only their bytes.
+    let large = vec![7u8; 70 * 1024];
+    let mut large_reader = io::Cursor::new(large.clone());
+    assert_eq!(
+        read_some_with_fd_deadline(&mut large_reader, -1, 80 * 1024, libc::POLLIN, None, None)
+            .expect("a read above the scratch bound should succeed"),
+        Some(large)
+    );
+    for _ in 0..2 {
+        let mut short_reader = io::Cursor::new(b"de".to_vec());
+        assert_eq!(
+            read_some_with_fd_deadline(&mut short_reader, -1, 4096, libc::POLLIN, None, None)
+                .expect("a scratch read should return its bytes"),
+            Some(b"de".to_vec())
+        );
+    }
+    let mut empty_some_reader = io::empty();
+    assert_eq!(
+        read_some_with_fd_deadline(
+            &mut empty_some_reader,
+            -1,
+            80 * 1024,
+            libc::POLLIN,
+            None,
+            None
+        )
+        .expect("the end of the stream is no error"),
+        None
+    );
+
     struct FailingReader;
 
     impl Read for FailingReader {
@@ -4483,7 +4514,7 @@ fn runtime_io_wait_helpers_cover_deadlines_cancellation_and_poll_edges() {
 
     let cancel_flag = Arc::new(super::RuntimeWakeSignal::new(true));
     let cancelled = CancellationContext {
-        flags: vec![cancel_flag],
+        flags: Arc::new([cancel_flag]),
     };
     let error = super::check_deadline_and_cancellation(None, Some(&cancelled))
         .expect_err("cancelled context should abort before deadline checks");
@@ -7348,7 +7379,7 @@ fn channel_runtime_helpers_cover_send_receive_and_close_paths() {
     );
     let cancel_flag = Arc::new(super::RuntimeWakeSignal::new(true));
     let cancelled = CancellationContext {
-        flags: vec![cancel_flag],
+        flags: Arc::new([cancel_flag]),
     };
     assert_eq!(
         bounded
@@ -9553,7 +9584,7 @@ fn p63_retry_cancellation_propagates_as_task_cancellation_not_a_panic_error() {
     let result = run_lightweight_root_task(move || {
         let cancellation_signal = Arc::new(super::RuntimeWakeSignal::new(false));
         let cancellation = CancellationContext {
-            flags: vec![cancellation_signal.clone()],
+            flags: Arc::new([cancellation_signal.clone()]),
         };
         let task = spawn_lightweight_task_with_cancellation(cancellation, move || {
             entered_probe.store(true, Ordering::SeqCst);
@@ -11825,7 +11856,7 @@ fn p63_task_join_reachability_tracks_weak_dependencies_and_external_wake_sources
         task_waits: Vec::new(),
         deadline: None,
         cancellation: Some(CancellationContext {
-            flags: vec![cancellation_signal.clone()],
+            flags: Arc::new([cancellation_signal.clone()]),
         }),
     });
     assert!(!joiner.unbounded_wait_has_reachable_waker());

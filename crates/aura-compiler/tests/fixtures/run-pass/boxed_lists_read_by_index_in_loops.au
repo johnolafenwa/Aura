@@ -1,0 +1,56 @@
+class Item:
+    name: str
+    weight: int64
+
+
+enum Tree:
+    Leaf(int64)
+    Group(list[Tree])
+
+
+def total(trees: list[Tree]) -> int64:
+    mut sum = 0
+    for tree in trees:
+        match tree:
+            case Tree.Leaf(value):
+                sum += value
+            case Tree.Group(inner):
+                sum += total(inner)
+    return sum
+
+
+def heaviest(items: list[Item]) -> int64:
+    mut best = 0
+    for item in items:
+        if item.weight > best:
+            best = item.weight
+    return best
+
+
+def main():
+    mut leaves: list[Tree] = []
+    for i in range(4):
+        leaves.append(Tree.Leaf(i))
+    mut groups: list[Tree] = []
+    for i in range(3):
+        mut inner: list[Tree] = []
+        for j in range(i + 1):
+            inner.append(Tree.Leaf(j * 10))
+        groups.append(Tree.Group(inner))
+    groups.append(Tree.Group(leaves))
+    print(total(groups))
+    # A copy shares the boxes until one of the lists changes.
+    mut copied = groups.copy()
+    print(total(copied))
+    copied.append(Tree.Leaf(1000))
+    copied[0] = Tree.Leaf(5)
+    print(total(groups))
+    print(total(copied))
+    mut items: list[Item] = []
+    for i in range(5):
+        items.append(Item(name="item", weight=(i * 7) % 5))
+    shared = items.copy()
+    print(heaviest(shared))
+    items[0].weight = 99
+    print(heaviest(shared))
+    print(heaviest(items))

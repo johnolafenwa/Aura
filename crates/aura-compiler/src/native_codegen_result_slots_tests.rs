@@ -4,7 +4,7 @@ use crate::lower_source_to_mir;
 use crate::mir::{MirModule, MirOwnership};
 use crate::sema::Type;
 
-use super::super::{types, validated_for_emission, MirClass};
+use super::super::{types, validated_for_emission, DirectType, MirClass, ScalarKind};
 use super::{called_function, plan, slot_parts, twin_results, ResultSlotPlan};
 
 const SOURCE: &str = r#"
@@ -161,7 +161,27 @@ fn a_slot_holds_scalars_and_single_boxes_only() {
     let int64 = || named("int64");
     assert!(slot_parts(&result(int64(), named("str")), &classes).is_some());
     assert!(slot_parts(&result(Type::Unit, named("float64")), &classes).is_some());
+    // An optional payload keeps the union's tag and payload words.
     let union = crate::sema::optional_type(int64());
+    let (ok, _) = slot_parts(&result(union, named("str")), &classes).expect("a slot holds it");
+    assert_eq!(
+        twin_results(&ok, &DirectType::Scalar(ScalarKind::Unit)).len(),
+        3
+    );
+    let text = crate::sema::optional_type(named("str"));
+    assert!(slot_parts(&result(text, named("str")), &classes).is_some());
+    // A callable member is not held.
+    let callable = Type::Function {
+        params: vec![crate::sema::FunctionParamContract {
+            keyword_only: false,
+            name: String::new(),
+            ty: int64(),
+            passing: crate::ast::ReceiverKind::Value,
+            has_default: false,
+        }],
+        return_type: Box::new(int64()),
+    };
+    let union = crate::sema::optional_type(callable);
     assert!(slot_parts(&result(union, named("str")), &classes).is_none());
     assert!(slot_parts(&result(int64(), Type::TypeParam("T".to_string())), &classes).is_none());
     assert!(slot_parts(&int64(), &classes).is_none());

@@ -1,0 +1,6 @@
+error[AU4003]: list index `2` is out of bounds for length `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/str_element_index_out_of_range.au:6:32
+  |
+6 |         return self.texts[self.pos] == text
+  |                                ^
+  = note: Aura call chain (innermost first): Tokens.is_word at 5:5 -> main at 9:1

@@ -1,0 +1,40 @@
+# `try file.write_all(text)` builds no `Result` when the write succeeds, and
+# returns the error as it is when it fails, here on a closed file.
+import fs
+import io
+
+
+def write_lines(path: str, count: int64) -> Result[int64, io.Error]:
+    with log = try fs.create(path.clone()):
+        for i in range(count):
+            try log.write_all(f"line {i}\n")
+    return Result.Ok(count)
+
+
+def write_closed(path: str) -> Result[None, io.Error]:
+    mut log = try fs.create(path.clone())
+    log.close()
+    try log.write_all("late\n")
+    print("not reached")
+    return Result.Ok(None)
+
+
+def main() -> int32:
+    path = "/tmp/aura-try-file-writes.txt"
+    match write_lines(path.clone(), 3):
+        case Result.Ok(count):
+            print(count)
+        case Result.Err(error):
+            print(error)
+    match fs.read_to_string(path.clone()):
+        case Result.Ok(text):
+            print(text.split("\n"))
+        case Result.Err(error):
+            print(error)
+    match write_closed(path.clone()):
+        case Result.Ok(_):
+            print("wrote")
+        case Result.Err(error):
+            print(f"failed: {error}")
+    _ = fs.remove_file(path)
+    return 0

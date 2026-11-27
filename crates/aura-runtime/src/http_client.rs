@@ -1842,13 +1842,19 @@ pub fn host_http_read_lines(args: Vec<Value>, _program_args: Option<&[String]>) 
     Ok(io_result(lines.map(str_list_value)))
 }
 
+/// The next server-sent event of `stream`, read as
+/// `http::__aura_read_event` reads it, under the current task's
+/// cancellation.
+pub fn read_stream_event(stream: &HttpResponseValue) -> io::Result<Option<HttpServerEvent>> {
+    let cancellation = current_lightweight_task_cancellation();
+    stream.with_body(|body| body.read_event(cancellation.as_ref()))
+}
+
 /// `http::__aura_read_event`: `(found, event, data, id, retry_ms)`.
 pub fn host_http_read_event(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
     let name = "http::__aura_read_event";
     host_expect_arity(name, &args, 1)?;
-    let cancellation = current_lightweight_task_cancellation();
-    let event =
-        stream_arg(&args, 0, name)?.with_body(|body| body.read_event(cancellation.as_ref()));
+    let event = read_stream_event(stream_arg(&args, 0, name)?);
     Ok(io_result(event.map(|event| {
         let found = event.is_some();
         let event = event.unwrap_or_default();

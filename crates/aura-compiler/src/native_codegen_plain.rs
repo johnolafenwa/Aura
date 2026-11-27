@@ -408,7 +408,11 @@ impl FunctionCompiler<'_> {
     /// The word of the scalar `leaf` names, read from its bytes at
     /// `address` plus its offset.
     pub(super) fn load_leaf(&mut self, leaf: PlainLeaf, address: Val) -> Val {
-        let flags = MemFlags::trusted();
+        self.load_leaf_in(leaf, address, MemFlags::trusted())
+    }
+
+    /// [`Self::load_leaf`] with the memory class of `flags`.
+    pub(super) fn load_leaf_in(&mut self, leaf: PlainLeaf, address: Val, flags: MemFlags) -> Val {
         match leaf.kind {
             // Integers narrower than a word widen by their signedness.
             ScalarKind::Int8 => self.builder.sload8(flags, address, leaf.offset),
@@ -433,6 +437,17 @@ impl FunctionCompiler<'_> {
     /// Stores `word` as the scalar bytes `leaf` names at `address` plus its
     /// offset.
     pub(super) fn store_leaf(&mut self, leaf: PlainLeaf, word: Val, address: Val) {
+        self.store_leaf_in(leaf, word, address, MemFlags::trusted());
+    }
+
+    /// [`Self::store_leaf`] with the memory class of `flags`.
+    pub(super) fn store_leaf_in(
+        &mut self,
+        leaf: PlainLeaf,
+        word: Val,
+        address: Val,
+        flags: MemFlags,
+    ) {
         let stored = match leaf.kind {
             ScalarKind::Int8 | ScalarKind::Uint8 => self.builder.ireduce(types::I8, word),
             ScalarKind::Int16 | ScalarKind::Uint16 => self.builder.ireduce(types::I16, word),
@@ -443,8 +458,7 @@ impl FunctionCompiler<'_> {
             ScalarKind::Bool => self.builder.icmp_imm(IntCC::NotEqual, word, 0),
             ScalarKind::Unit => return,
         };
-        self.builder
-            .store(MemFlags::trusted(), stored, address, leaf.offset);
+        self.builder.store(flags, stored, address, leaf.offset);
     }
 
     /// Stores the words of a record value as its layout bytes at `address`.
@@ -799,16 +813,14 @@ impl FunctionCompiler<'_> {
         self.builder.seal_block(fast_block);
         let flags = MemFlags::trusted();
         // A view's room is 0 while another list shares the storage.
-        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        let capacity = self.list_view_word(list, super::list_snapshots::ViewWord::Room);
         let shared = self.builder.icmp_imm(IntCC::Equal, capacity, 0);
         self.builder
             .brif(shared, slow_block, &[], unshared_block, &[]);
 
         self.builder.switch_to_block(unshared_block);
         self.builder.seal_block(unshared_block);
-        let elements = self
-            .builder
-            .load(types::I64, flags, list, layout.elements_offset);
+        let elements = self.list_view_word(list, super::list_snapshots::ViewWord::Elements);
         let left = self.emit_list_view_bounds_check(list, first, &layout, slow_block);
         let right = self.emit_list_view_bounds_check(list, second, &layout, slow_block);
         let left = self.builder.imul_imm(left, record.stride);

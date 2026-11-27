@@ -1,0 +1,77 @@
+# `stream.read_event()` on the stream a `with` keeps reads the stream
+# where it lies, and the fields of each event read where the event keeps
+# them. One helper reads each event's fields into words.
+import http
+import io
+import net
+
+
+def send_events(conn: mut net.TcpStream) -> Result[None, io.Error]:
+    try conn.write_all("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 98\r\nConnection: close\r\n\r\n")
+    try conn.write_all("event: delta\nid: 1\ndata: ab\n\nevent: delta\nid: 2\ndata: cde\nretry: 30\n\nevent: done\nid: 3\ndata: end\n\n")
+    return Result.Ok(None)
+
+
+def serve(addresses: Queue[str]) -> Result[None, io.Error]:
+    with listener = try net.listen("127.0.0.1:0"):
+        _ = addresses.put(try listener.local_addr())
+        with conn = try listener.accept(timeout=2s):
+            while true:
+                match own try conn.read_line():
+                    case str as header:
+                        if header == "" or header == "\r":
+                            break
+                    case None:
+                        break
+            try send_events(conn)
+    return Result.Ok(None)
+
+
+def run() -> Result[None, io.Error]:
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(serve, addresses)
+        match own addresses.get(timeout=2s):
+            case QueueReceive.Item(address):
+                mut events = 0
+                mut bytes = 0
+                with stream = try http.get("http://" + address + "/events"):
+                    while true:
+                        event = try stream.read_event()
+                        if event is None:
+                            break
+                        if event.event == "done":
+                            print(f"done after {events} events, {bytes} bytes, last id {event.id}")
+                            continue
+                        events += 1
+                        bytes += event.data.byte_len()
+                        match event.retry:
+                            case Duration as wait:
+                                print(f"{event.id}: {event.data} retry {wait.to_ms()}")
+                            case None:
+                                print(f"{event.id}: {event.data}")
+                    # A closed stream's read fails, and the `try` in
+                    # `read_event` returns the error.
+                    stream.close()
+                    match stream.read_event():
+                        case Result.Ok(_):
+                            print("read after close")
+                        case Result.Err(error):
+                            print(f"closed: {error}")
+            case _:
+                return Result.Err(io.Error.TimedOut)
+        match own server.result():
+            case TaskResult.Ready(result):
+                try result
+            case _:
+                print("server failed")
+    return Result.Ok(None)
+
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

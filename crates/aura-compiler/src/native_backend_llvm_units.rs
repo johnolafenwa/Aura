@@ -73,15 +73,28 @@ impl Partition {
 
     /// The units `object` splits into.
     pub(super) fn split(object: &LlvmModule) -> Self {
-        let total = object.functions.iter().map(function_weight).sum::<usize>();
+        let reached = reached_functions(object);
+        let total = object
+            .functions
+            .iter()
+            .zip(&reached)
+            .filter(|(_, reached)| **reached)
+            .map(|(decl, _)| function_weight(decl))
+            .sum::<usize>();
         Self::with_units(object, unit_count(total))
     }
 
     fn with_units(object: &LlvmModule, units: usize) -> Self {
+        // A local function nothing reaches, such as a body every caller
+        // left for its twin, weighs nothing: LLVM drops it, so it must not
+        // push its neighbours into another unit, away from callees they
+        // would inline.
+        let reached = reached_functions(object);
         let weights = object
             .functions
             .iter()
-            .map(function_weight)
+            .zip(&reached)
+            .map(|(decl, reached)| if *reached { function_weight(decl) } else { 0 })
             .collect::<Vec<_>>();
         let total = weights.iter().sum::<usize>().max(1);
         let mut start = 0;
@@ -301,6 +314,72 @@ fn called_functions(body: &super::FunctionIr) -> BTreeSet<usize> {
         .collect()
 }
 
-fn function_weight(decl: &super::FunctionDecl) -> usize {
-    decl.body.as_ref().map_or(0, |body| body.insts.len())
+/// Which functions of `object` a program can reach: every function or
+/// data object the linker sees, and whatever a reached function calls or
+/// takes the address of, or a reached data object holds the address of.
+fn reached_functions(object: &LlvmModule) -> Vec<bool> {
+    use crate::native_backend::Linkage;
+    let mut functions = object
+        .functions
+        .iter()
+        .map(|decl| decl.linkage != Linkage::Local)
+        .collect::<Vec<_>>();
+    let mut data = object
+        .data
+        .iter()
+        .map(|decl| decl.linkage != Linkage::Local)
+        .collect::<Vec<_>>();
+    let mut function_work = (0..functions.len())
+        .filter(|function| functions[*function])
+        .collect::<Vec<_>>();
+    let mut data_work = (0..data.len())
+        .filter(|index| data[*index])
+        .collect::<Vec<_>>();
+    while !function_work.is_empty() || !data_work.is_empty() {
+        while let Some(function) = function_work.pop() {
+            let Some(body) = &object.functions[function].body else {
+                continue;
+            };
+            for callee in called_functions(body) {
+                if !std::mem::replace(&mut functions[callee], true) {
+                    function_work.push(callee);
+                }
+            }
+            for target in &body.data_refs {
+                let target = target.0 as usize;
+                if !std::mem::replace(&mut data[target], true) {
+                    data_work.push(target);
+                }
+            }
+        }
+        while let Some(index) = data_work.pop() {
+            let Some(contents) = &object.data[index].contents else {
+                continue;
+            };
+            for (_, address) in &contents.addresses {
+                match address {
+                    DataAddress::Function(function) => {
+                        let function = function.0 as usize;
+                        if !std::mem::replace(&mut functions[function], true) {
+                            function_work.push(function);
+                        }
+                    }
+                    DataAddress::Data(target) => {
+                        let target = target.0 as usize;
+                        if !std::mem::replace(&mut data[target], true) {
+                            data_work.push(target);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    functions
+}
+
+/// The recorded instructions of `decl`'s body. The copy that
+/// `continue_slow_paths` made weighs nothing, so a function keeps the unit
+/// and the copies in other units that its body as built gives it.
+pub(super) fn function_weight(decl: &super::FunctionDecl) -> usize {
+    decl.body.as_ref().map_or(0, super::FunctionIr::weight)
 }

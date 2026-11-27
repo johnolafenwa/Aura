@@ -191,8 +191,9 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // String slicing and scalar indexing, `with` cleanup of a task group,
     // and task start stay in the backend, as do tests and replacements
     // with literal arguments,
-    // copies read out of a list's `str` view, and the forms of `get` and
-    // `put` a receive slot or a discarded `put` calls.
+    // copies read out of a list's `str` view, the bytes of a `str` passed
+    // as words and copied from them, and the forms of `get` and `put` a
+    // receive slot or a discarded `put` calls.
     for helper in RuntimeFn::ALL.iter().copied().filter(|helper| {
         let symbol = helper.symbol();
         (symbol.starts_with("aura_direct_string_")
@@ -208,11 +209,17 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
                     | RuntimeFn::StringReplaceLiteral
                     | RuntimeFn::StringReplaceLiteralOwned
                     | RuntimeFn::StringSplitLiteral
+                    | RuntimeFn::StringSplitLiteralWords
                     | RuntimeFn::StringFromView
+                    | RuntimeFn::StringToBytesView
+                    | RuntimeFn::StringBytes
+                    | RuntimeFn::StringClone
+                    | RuntimeFn::StringWords
                     | RuntimeFn::TaskGroupClose
                     | RuntimeFn::TaskArgBufferGuard
                     | RuntimeFn::TaskArgBufferDisarm
                     | RuntimeFn::ChannelSendDiscarded
+                    | RuntimeFn::ChannelSendDiscardedInt64
                     | RuntimeFn::ChannelRecvItem
                     | RuntimeFn::ChannelRecvInTaskGroupItem
                     | RuntimeFn::ChannelRecvWithRegisteredProducersItem
@@ -225,9 +232,11 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // element path checks its index, and a lent element's `len` and `get`
     // are read in place. A plain record element is read, appended,
     // replaced, and popped in place. An empty list literal of a known type
-    // is built and tagged in one call, its `str` literals join it without
-    // boxes, and a `str` element copied out of a
-    // list that keeps no view is read by index. A `get` whose `Lookup` is kept as its
+    // is built and tagged in one call, a short one of scalars with room
+    // for its elements, its `str` literals join it without boxes, as does
+    // a copy of a `str` read from its bytes, and a `str` element copied out of a
+    // list that keeps no view is read by index, into words where a `+`
+    // reads it. A `get` whose `Lookup` is kept as its
     // found value calls the `_payload` form of the op's helper, and one
     // whose found value is only read calls the `_lent` form. A `contains_key`
     // test that an entry loan follows probes the entry for both, and an
@@ -235,7 +244,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // borrowers read lends the value in a shadow box, a keys loop walks the
     // entries by slot, and a dict literal is sized once and filled entry by
     // entry. A callable element is called, or copied as its inline words,
-    // where the list keeps it.
+    // where the list keeps it. A constructed instance is appended from its
+    // words where the list keeps instances in place.
     let uncovered = RuntimeFn::ALL
         .iter()
         .copied()
@@ -262,9 +272,13 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecCallableCopy,
             RuntimeFn::VecStrElement,
             RuntimeFn::VecEmptyTagged,
+            RuntimeFn::VecEmptyTaggedWithRoom,
             RuntimeFn::VecPushStrLiteral,
+            RuntimeFn::VecStrElementWords,
+            RuntimeFn::VecPushStrLiterals,
             RuntimeFn::VecPushStrView,
-            RuntimeFn::VecExtendStrBytes,
+            RuntimeFn::VecExtendUtf8,
+            RuntimeFn::VecPushInstance,
             RuntimeFn::VecLend,
             RuntimeFn::VecPopScalar,
             RuntimeFn::VecCheckIndex,
@@ -279,6 +293,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecElementMapGetStrPayload,
             RuntimeFn::VecElementMapGetLent,
             RuntimeFn::VecElementMapGetStrLent,
+            RuntimeFn::VecSetIndexDiscarded,
             RuntimeFn::MapGetPayload,
             RuntimeFn::MapGetStrPayload,
             RuntimeFn::MapGetInt64Payload,

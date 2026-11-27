@@ -1,0 +1,27 @@
+# A `str` read out of a list and only split by a literal is split from the
+# bytes the list keeps, and a `str` parameter only split that way takes a
+# literal's or an element's bytes, so neither gets a box of its own.
+
+
+def count_fields(line: str) -> int64:
+    return line.split(",").len()
+
+
+def main() -> int32:
+    batch = ["1 read 20", "2 retry x", "", "é é é", "tail  "]
+    mut total = 0
+    for line in batch:
+        fields = line.split(" ")
+        total += fields.len()
+        print(fields)
+    print(total)
+    mut index = 0
+    while index < batch.len():
+        view part = batch[index]
+        print(part.split("e"))
+        index += 1
+    print(count_fields("a,b,,c"))
+    print(count_fields(batch[0]))
+    words = ["x,y", "z"]
+    print(count_fields(words[0]) + count_fields(words[1]))
+    return 0

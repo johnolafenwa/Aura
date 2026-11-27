@@ -1,0 +1,18 @@
+# A function on no call cycle that calls another only on some ways pushes
+# its frame record where it calls out, so a failure in the callee still
+# names it.
+def lookup(cells: list[int64], i: int64) -> int64:
+    return cells[i]
+
+def pick(cells: list[int64], i: int64) -> int64:
+    if i < 2:
+        return i
+    return lookup(cells, i) + 1
+
+def main():
+    cells = [10, 20, 30]
+    mut total = 0
+    for i in range(3):
+        total += pick(cells, i)
+    print(total)
+    print(pick(cells, 5))

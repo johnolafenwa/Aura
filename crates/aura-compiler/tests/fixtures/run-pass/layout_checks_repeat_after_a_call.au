@@ -1,0 +1,62 @@
+enum Cell:
+    Num(int64)
+    Word(str)
+
+class Tally:
+    count: int64
+    name: str
+
+def worth(cell: Cell) -> int64:
+    match cell:
+        case Cell.Num(n):
+            return n
+        case Cell.Word(w):
+            return len(w)
+
+def share(cell: Cell) -> int64:
+    with TaskGroup() as group:
+        task = group.start(worth, Cell.Num(worth(cell)))
+        return task.result_or(0, timeout=1s)
+
+def counted(tally: Tally) -> int64:
+    return tally.count
+
+def share_tally(tally: Tally) -> int64:
+    with TaskGroup() as group:
+        task = group.start(counted, Tally(count=counted(tally), name=tally.name.clone()))
+        return task.result_or(0, timeout=1s)
+
+def again(cell: Cell) -> int64:
+    match cell:
+        case Cell.Num(n):
+            match cell:
+                case Cell.Num(m):
+                    return n * m
+                case Cell.Word(w):
+                    return 0
+        case Cell.Word(w):
+            return len(w)
+
+def shared_between(cell: Cell) -> int64:
+    match cell:
+        case Cell.Num(n):
+            shared = share(cell)
+            match cell:
+                case Cell.Num(m):
+                    return n + m + shared
+                case Cell.Word(w):
+                    return 0
+        case Cell.Word(w):
+            return len(w) + share(cell)
+
+def fields(tally: Tally) -> int64:
+    first = tally.count
+    shared = share_tally(tally)
+    return first + tally.count + shared + len(tally.name)
+
+def main():
+    print(again(Cell.Num(6)))
+    print(again(Cell.Word("seven")))
+    print(shared_between(Cell.Num(5)))
+    print(shared_between(Cell.Word("four")))
+    print(fields(Tally(count=3, name="ab")))
