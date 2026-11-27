@@ -13168,7 +13168,7 @@ libraries = ["openblas"]
 | Key | Meaning |
 | --- | --- |
 | `libraries` | Library names as the C linker's `-l` option takes them. `sqlite3` names `libsqlite3.so` on Linux and `libsqlite3.dylib` on macOS. |
-| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. A dependency's entry must stay inside that dependency's directory, with no `..` segment. |
+| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. A dependency's entry must stay inside that dependency's directory, with no `..` segment. No entry may contain `:` or `$`, which a run path reads as a separator or a token. A Windows drive letter is the exception. |
 | `frameworks` | macOS frameworks. Other hosts ignore them. |
 
 `[ffi.linux]` and `[ffi.macos]` take the same three keys and apply on that
@@ -23616,6 +23616,8 @@ rules:
 - at most 1,024 direct dependencies per package
 - at most 4,096 packages in one resolved graph
 - every package has a readable `src/` directory and a valid package manifest
+- a package fetched from git, and every path dependency it reaches, depends
+  only on paths inside its own checkout and on remote git sources
 
 Two different paths cannot claim the same package name. The graph limits are
 observable Aura 0.17 limits. Raising them requires matching reference and
@@ -23650,7 +23652,8 @@ has nothing to update and is rejected.
 
 - Path entries record a path relative to the lockfile root.
 - Git entries record the normalized source, the exact resolved revision, and
-  the original tag or branch selector where there is one.
+  the original tag or branch selector where there is one. The revision is
+  always a hex commit id of 7 to 64 digits, whatever the selector.
 
 A conceptual example:
 
@@ -23739,7 +23742,9 @@ in a shared temporary directory, where another local user could plant one.
 - Cached entries are validated against their recorded revision.
 - Aura refuses symlinked cache paths, symlinked manifests, and symlinked
   content in a git checkout.
-- Clones disable symlink materialization.
+- Clones disable symlink materialization and submodule recursion.
+- Git runs in the checkout it works on, or in the cache directory, and does
+  not read the repository Aura was started in.
 - When placements race, Aura uses an existing checkout only if it validates to
   the same revision.
 
@@ -31053,6 +31058,12 @@ the cache without starting the solver, so verifying again after a small
 edit solves only what the edit touched. The summary line says how many
 functions the cache answered. A check the solver gave up on is never
 cached.
+
+On Linux and macOS the cache directory must belong to the current user, and
+no other user may be able to write to it. Otherwise `aura verify` solves every check and
+writes nothing. Each entry is signed with a secret kept in the cache
+directory, so an entry that `aura verify` did not write there is solved
+again.
 
 In VS Code, the Aura extension runs `aura verify` each time an Aura file
 opens or is saved. Each check it cannot prove shows as a diagnostic at the

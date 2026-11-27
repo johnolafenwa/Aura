@@ -1348,15 +1348,18 @@ fn the_proof_cache_answers_unchanged_functions() {
     let entries: Vec<_> = std::fs::read_dir(&dir)
         .expect("cache")
         .map(|entry| entry.expect("entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
         .collect();
     assert_eq!(entries.len(), 2);
     std::fs::write(&entries[0], "not json").expect("corrupt");
     // One status more than the entry holds, whichever function it is.
-    let held: Vec<Status> =
+    let mut held: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&entries[1]).expect("entry")).expect("json");
-    let longer = vec![Status::Proved; held.len() + 1];
-    std::fs::write(&entries[1], serde_json::to_string(&longer).expect("json"))
-        .expect("wrong length");
+    held["statuses"]
+        .as_array_mut()
+        .expect("statuses")
+        .push(serde_json::to_value(Status::Proved).expect("json"));
+    std::fs::write(&entries[1], serde_json::to_string(&held).expect("json")).expect("wrong length");
     let third = verify_with(source, &options).expect("a solver");
     assert_eq!(third.cached, 0);
     assert_eq!(verify_with(source, &options).expect("a solver").cached, 2);
@@ -1368,6 +1371,122 @@ fn the_proof_cache_answers_unchanged_functions() {
         ..Options::default()
     };
     assert_eq!(verify_with(source, &options).expect("a solver").cached, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_proof_cache_entry_the_verifier_did_not_write_is_solved_again() {
+    let dir = std::env::temp_dir().join(format!("aura-verify-forged-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let options = Options {
+        cache_dir: Some(dir.clone()),
+        ..Options::default()
+    };
+    let source =
+        "def double(x: int64) -> int64:\n    return x * 2\n\ndef main():\n    print(double(2))\n";
+    let Some(first) = verify_with(source, &options) else {
+        return;
+    };
+    assert!(!open_checks(&first).is_empty(), "the overflow is open");
+    // Rewrite every entry so that each of its statuses says proved, in
+    // whatever shape the entry has.
+    let proved = serde_json::to_value(Status::Proved).expect("json");
+    fn forge(value: &mut serde_json::Value, proved: &serde_json::Value) {
+        match value {
+            serde_json::Value::Array(items) => {
+                for item in items.iter_mut() {
+                    *item = proved.clone();
+                }
+            }
+            serde_json::Value::Object(fields) => {
+                if let Some(statuses) = fields.get_mut("statuses") {
+                    forge(statuses, proved);
+                }
+            }
+            _ => {}
+        }
+    }
+    let entries: Vec<_> = std::fs::read_dir(&dir)
+        .expect("cache")
+        .map(|entry| entry.expect("entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    assert!(!entries.is_empty());
+    let mut forged = 0;
+    for entry in &entries {
+        let held: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(entry).expect("entry")).expect("json");
+        let mut value = held.clone();
+        forge(&mut value, &proved);
+        if value != held {
+            forged += 1;
+            std::fs::write(entry, serde_json::to_string(&value).expect("json")).expect("forge");
+        }
+    }
+    assert!(forged > 0, "some entry holds an open check");
+    let second = verify_with(source, &options).expect("a solver");
+    // Only the entries left as written answer; a forged one is solved again.
+    assert_eq!(second.cached, entries.len() - forged);
+    assert_eq!(open_checks(&second), open_checks(&first));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_proof_cache_signs_entries_with_hmac_sha256() {
+    // RFC 4231, test case 2.
+    let mac = cache::hmac_sha256(b"Jefe", b"what do ya want for nothing?");
+    let hex: String = mac.iter().map(|byte| format!("{byte:02x}")).collect();
+    assert_eq!(
+        hex,
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_proof_cache_refuses_a_shared_directory_and_symlinked_entries() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("aura-verify-shared-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("cache dir");
+    let source = "def double(x: int64) -> int64:\n    return x * 2\n";
+    // A directory others can write to is not used.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+    let options = Options {
+        cache_dir: Some(dir.clone()),
+        ..Options::default()
+    };
+    let Some(_) = verify_with(source, &options) else {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    };
+    assert!(
+        std::fs::read_dir(&dir).expect("cache").next().is_none(),
+        "nothing is written to a shared cache directory"
+    );
+    assert_eq!(verify_with(source, &options).expect("a solver").cached, 0);
+    // A private directory is used, and the entries it writes are private.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    verify_with(source, &options).expect("a solver");
+    let entries: Vec<_> = std::fs::read_dir(&dir)
+        .expect("cache")
+        .map(|entry| entry.expect("entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    assert_eq!(entries.len(), 1);
+    let mode = std::fs::metadata(&entries[0])
+        .expect("entry")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o077, 0, "entry mode {mode:o}");
+    assert_eq!(verify_with(source, &options).expect("a solver").cached, 1);
+    // An entry that is a symlink is neither read nor written through.
+    let target = dir.join("elsewhere.txt");
+    std::fs::write(&target, "keep").expect("target");
+    std::fs::remove_file(&entries[0]).expect("remove entry");
+    std::os::unix::fs::symlink(&target, &entries[0]).expect("symlink");
+    assert_eq!(verify_with(source, &options).expect("a solver").cached, 0);
+    assert_eq!(std::fs::read_to_string(&target).expect("target"), "keep");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
