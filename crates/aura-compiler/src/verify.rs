@@ -31,10 +31,10 @@ mod frame;
 mod guard;
 #[path = "verify_integers.rs"]
 mod integers;
-#[path = "verify_recovery.rs"]
-mod recovery;
 #[path = "verify_raw_memory.rs"]
 mod raw_memory;
+#[path = "verify_recovery.rs"]
+mod recovery;
 #[path = "verify_shapes.rs"]
 mod shapes;
 #[path = "verify_smt.rs"]
