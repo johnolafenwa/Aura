@@ -4677,6 +4677,15 @@ fn handle_verify_command(args: Vec<String>) {
                 options.cache_dir = None;
                 index += 1;
             }
+            "--cross-check" => {
+                options.cross_check = true;
+                index += 1;
+            }
+            "--cross-solver" => {
+                options.cross_check = true;
+                options.cross_solver = Some(value());
+                index += 2;
+            }
             _ => {
                 rest.push(args[index].clone());
                 index += 1;
@@ -4760,6 +4769,12 @@ fn verify_summary(path: &str, report: &aura_compiler::verify::Report) -> String 
             report.not_modeled(),
             report.undecided()
         ));
+        if !report.disputes.is_empty() {
+            summary.push_str(&format!(
+                "the solvers disagree about {} of the undecided checks\n",
+                report.disputes.len()
+            ));
+        }
     }
     summary
 }
@@ -4769,8 +4784,14 @@ fn verify_report_json(path: &str, report: &aura_compiler::verify::Report) -> Jso
     let obligations = report
         .obligations
         .iter()
-        .map(|obligation| {
+        .enumerate()
+        .map(|(index, obligation)| {
             let (status, detail) = match &obligation.status {
+                // The solvers of a cross-check disagree about this one.
+                _ if report.disputed_by(index).is_some() => (
+                    "disputed",
+                    JsonValue::String(report.disputed_by(index).unwrap_or_default().to_string()),
+                ),
                 aura_compiler::verify::Status::Proved => ("proved", JsonValue::Null),
                 aura_compiler::verify::Status::Failed { counterexample } => (
                     "failed",
@@ -6403,7 +6424,7 @@ fn usage_text() -> &'static str {
        or: aura fmt [--check] [path ...]\n\
        or: aura doc [--out <dir>] [--json] [path ...]\n\
        or: aura test [--cfg name[=value]] [-k <substring>] [--format json] [--timeout-ms <n>] [--verify] [path ...]\n\
-       or: aura verify [--freestanding [--target <name>] [--kernel]] [--solver <path>] [--timeout <ms>] [--function <name>] [--deny not-modeled|undecided|all] [--must-verify <function>] [--no-cache] [--format human|json] [path ...]\n\
+       or: aura verify [--freestanding [--target <name>] [--kernel]] [--solver <path>] [--timeout <ms>] [--function <name>] [--deny not-modeled|undecided|all] [--must-verify <function>] [--cross-check] [--cross-solver <path>] [--no-cache] [--format human|json] [path ...]\n\
        or: aura deps update [--offline] [package]\n\
        or: aura upgrade\n\
        or: aura help\n\

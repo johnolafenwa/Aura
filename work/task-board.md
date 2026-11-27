@@ -115,8 +115,13 @@ Field delegation, property setters, destructor hooks and method decorators passe
   class invariants inside other values, `match` expressions, union calls,
   package mode with `--deny` and `--must-verify` (`AU5122`),
   `aura test --verify`, and module-level code.
-- Next: failure recovery, shared state, tensor shapes, fewer solver
-  timeouts, a solver watchdog and a second-solver cross-check.
+- Stage 3: `control.recover` of named functions, values inside a held
+  lock, tensor shapes, a two-step solver retry (undecided checks on the
+  run-pass fixtures 51 to 18), a solver watchdog, and
+  `aura verify --cross-check` with `AU5123`.
+- Left: contracts on local `def` functions and an in-source must-verify
+  marker (parser changes), `match` and `is_ok()` in contracts (sema),
+  element facts of comprehensions and `sum`, dict values of class type.
 
 ## Combined feature verification
 

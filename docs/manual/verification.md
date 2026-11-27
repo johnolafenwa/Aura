@@ -278,6 +278,7 @@ outcome: failed, not modeled, and undecided.
 | `AU5104` | The check is not modeled: it reads the result of a step the verifier does not model yet, such as `text.split(",")`, a stepped slice, the elements a comprehension builds, or floating-point `**`. The message names the step and its line. There is no counterexample, because the verifier does not know what the step returns. The check is not proved, and it stays a runtime check. |
 | `AU5120` | The `requires` clauses and class invariants a function assumes on entry can never hold together, as in `requires x > 0 and x < 0`. No call can meet them, so every check in the function would pass for nothing, and the function does not count as proved. |
 | `AU5122` | A function named with `--must-verify` has a check that is not proved. See [Functions That Must Verify](#functions-that-must-verify). |
+| `AU5123` | With `--cross-check`, the first solver proved the check and the second solver found inputs that break it. One of them is wrong, so the check counts as undecided. See [Cross-Checking With a Second Solver](#cross-checking-with-a-second-solver). |
 
 A failure is reported only when the program can reach it. In this function
 the verifier does not model `split`, so it cannot tell that the result has
@@ -380,8 +381,10 @@ misspelled name cannot pass. Aura has no marker in the source for this.
 | `--function <name>` | Verify only the functions whose name contains `name`. |
 | `--deny <class>` | Make a package run fail on checks that are `not-modeled`, `undecided`, or `all` of both. See [Verifying a Package](#verifying-a-package). |
 | `--must-verify <name>` | Report `AU5122` when function `name` has a check that is not proved. See [Functions That Must Verify](#functions-that-must-verify). |
+| `--cross-check` | Ask a second solver about every check the first one proves. See [Cross-Checking With a Second Solver](#cross-checking-with-a-second-solver). |
+| `--cross-solver <path>` | The second solver of a cross-check. It turns on `--cross-check`. |
 | `--no-cache` | Solve every check again, without the proof cache. |
-| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`, which is a check that is not modeled), the counts `proved`, `failed`, `not_modeled` and `undecided`, the `must_verify` functions with their count of `open` checks, the `unchecked_modules`, then the diagnostics. A package run prints one document with a `files` list of such reports, each with its `path`, the `totals`, and `unmatched_must_verify`. A file that does not compile has an `error` in place of its report. |
+| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, `unsupported`, which is a check that is not modeled, or `disputed`, which is a check the solvers of a cross-check disagree about, with the second solver as its `detail`), the counts `proved`, `failed`, `not_modeled` and `undecided`, the `must_verify` functions with their count of `open` checks, the `unchecked_modules`, then the diagnostics. A package run prints one document with a `files` list of such reports, each with its `path`, the `totals`, and `unmatched_must_verify`. A file that does not compile has an `error` in place of its report. |
 
 ### Proof Cache
 
@@ -400,6 +403,45 @@ writes nothing. Each entry is signed with a secret kept in the cache
 directory, so an entry that `aura verify` did not write there is solved
 again.
 
+### Time Limits
+
+`--timeout` limits each check. With Z3, a check first gets one second in
+the solver process that holds the function's facts. Z3 gives up on some
+checks there that it decides at once as a problem of their own. So a check
+still open after that second is asked again in two fresh solver
+processes, one with the problem on its own and one like the first, both
+with the full limit. The first answer that decides the check wins, and the
+other process stops.
+
+A watchdog guards every answer. A solver that has not answered a little
+over two seconds past the limit is stopped, the check is reported as
+undecided (`AU5102`), and the next check starts a fresh solver. Z3 does
+not always keep to its own limit on string queries, and the watchdog keeps
+such a query from stopping the run.
+
+### Cross-Checking With a Second Solver
+
+`--cross-check` asks a second solver about every check the first one
+proves. The second solver is cvc5 when the first is Z3, and Z3 when the
+first is cvc5, found on `PATH`. `--cross-solver <path>` names another one.
+
+```bash
+aura verify --cross-check src/bank.au
+aura verify --cross-solver /opt/cvc5/bin/cvc5 src/bank.au
+```
+
+When the second solver finds inputs that break a proved check, the run
+reports `AU5123` and the check counts as undecided:
+
+```text
+error[AU5123]: solvers disagree about integer result in range
+```
+
+One of the two solvers is wrong about such a check. A check the second
+solver cannot decide in time keeps its proof. A cross-check fails a package
+run on any disagreement, and it asks the second solver even for a function
+the proof cache answers. Without the second solver, the run stops with
+`AU5103` and names the solver it looked for.
 
 In VS Code, the Aura extension runs `aura verify` each time an Aura file
 opens or is saved. Each check it cannot prove shows as a diagnostic at the
@@ -499,6 +541,30 @@ booleans, with each integer type's range as a check:
   arguments the child receives, and the value of `Ready` from
   `task.result()`, `poll()`, or `result_or(...)` has `work`'s `ensures`.
   Each task's function is verified like any other
+- `control.recover(f, args...)` with a named function: the call proves
+  `f`'s `requires`, and the result is `Ok` with a value that has `f`'s
+  `ensures`, or `Err` with a trap whose contents are not modeled. The
+  verifier never assumes the call
+  returns `Ok`, since even a call free of checks can run out of stack. The
+  caller's own values are unchanged on both paths
+- state that tasks share: the value a `with m.lock():` block starts with,
+  every receive from a `Queue`, `cancelled()`, and the result of every
+  atomic and `sync.Map` call are each any value of their type, because
+  another task may change them at any time. Inside the block the guarded
+  value is a local that only this task changes, so facts about it hold
+  until the block ends
+- the shapes of `tensor.Tensor` values, not their elements: `shape()` and
+  `len()` in code and in contracts. `zeros`, `full`, `rand`, `randn`, and
+  `from_array` make a tensor of the given shape. `matmul` checks the
+  `Array.matmul` shape rules, elementwise operators and comparisons check
+  that the shapes broadcast, `reshape` with a literal shape checks the
+  element count, `sum`, `min`, `max`, and `mean` along an axis check the
+  axis, and `item()` checks that there is one element; each gives the
+  result's shape. `transpose`, `flatten`, `scalar`, and the elementwise
+  functions such as `relu` keep or rearrange the shape. A matrix product
+  of parameters needs their ranks, as in
+  `requires len(a.shape()) == 2 and len(b.shape()) == 2 and a.shape()[1] == b.shape()[0]`.
+  Other tensor members, and the device and dtype checks, are not modeled
 - calls through a function value that names one function, such as
   `g = inc` then `g(5)`: the call proves `inc`'s `requires` and assumes its
   `ensures`
@@ -654,9 +720,9 @@ relies on it.
 | Lambdas and local `def` functions that escape, or are called in a loop while they keep state | Each body is verified with its captured values unknown, and a caller learns nothing about the result. One called where it is made is followed into its body with the values it captured. A local `def` cannot have a contract. A [callable alias](/manual/contracts#callable-contracts) can. |
 | Decorated functions | A caller learns nothing from the contract, and its `requires` is reported as `AU5104`. |
 | Generator functions | Yielded values have no contract. The body is verified with the generator's `requires` known. |
-| `control.recover` | The target's `requires` is proved at the call. Nothing is known about the `Result`. |
-| `sync` values, `Queue` items, and `mem` reads | Unknown each time they are read, since another task or a device may change them. |
-| `tensor` values | Not modeled. A shape mismatch stays a runtime failure. An `Array` index is a check of the proof. |
+| `control.recover` of a lambda, and the contents of the trap in `Err` | Nothing. Recovering a named function gives `Ok` with its `ensures`, or `Err`. |
+| `sync` values, `Queue` items, atomics, and `mem` reads | Unknown each time they are read, since another task or a device may change them. Inside a held lock, the guarded value keeps what is known about it. |
+| `tensor` values, and tensor operations such as `permute`, `slice`, `cat`, `where`, and `softmax` | The numbers are not modeled. Shapes are: `matmul`, elementwise operators with broadcasting, `reshape`, `transpose`, reductions along an axis, and `item` check their shape rules and give the result's shape. Device and dtype mismatches stay runtime failures. |
 | Library calls, such as `json`, `io`, `regex`, and `time` | Nothing about the result. |
 | Recursive spec functions | Unfolded eight levels deep. A check that needs more is reported as `AU5104`. |
 

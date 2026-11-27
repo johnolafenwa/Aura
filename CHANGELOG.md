@@ -7,6 +7,16 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` decides more checks in time: with Z3, a check still open
+  after one second is asked again in two fresh solvers, as a problem on its
+  own and in a scope, and the first decisive answer wins. On the run-pass
+  fixtures this leaves about a third as many checks undecided.
+- `aura verify` stops a solver that has not answered a little past its time
+  limit, reports the check as undecided, and goes on with a fresh solver.
+  Before, a solver that ignored its own limit stopped the run.
+- `aura verify --cross-check` asks a second solver, cvc5 for Z3 and Z3 for
+  cvc5, about every check the first one proves, and reports a disagreement
+  as `AU5123`. `--cross-solver <path>` names the second solver.
 - Packages: a package fetched from git can depend only on paths inside its
   own checkout and on remote git sources. A locked git `rev` must be a hex
   commit id whatever its selector. Git runs in the checkout or the cache
@@ -232,6 +242,11 @@ in this file.
     `Result` and enum payloads, and lists; `match` as an expression and
     every decidable arm pattern; calls on a union-typed value, whose
     members' contracts now apply; `==` between unions and enum variants.
+- `aura verify` models `control.recover` of a named function (`Ok` with the
+  function's `ensures`, or `Err`), keeps what is known about a value inside
+  a held lock, and checks tensor shapes: `matmul`, broadcasting,
+  `reshape`, `transpose`, reductions along an axis, and `item`, with
+  `shape()` and `len()` readable in contracts.
 - `aura verify` names an enum variant in a counterexample instead of its
   index, and reports a recursive spec function that needs more than eight
   levels as not modeled instead of failed.

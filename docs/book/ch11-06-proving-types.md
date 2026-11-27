@@ -522,10 +522,12 @@ These are the unknown values and unmodeled features to expect today:
   [Chapter 13](/book/ch13-01-closures) shows the alternative that does
   verify.
 - The values a generator yields, which carry no contract.
-- The result of `control.recover`, and the contents of queues, mutexes, and
-  atomics, which other tasks can change. Starting a task is modeled;
-  [Chapter 15](/book/ch15-01-tasks-and-task-groups) shows it.
-- Tensor shapes.
+- The contents of queues, mutexes, and atomics, which other tasks can
+  change, except a value inside a lock you hold. Starting a task and
+  recovering a named function are modeled;
+  [Chapter 15](/book/ch15-01-tasks-and-task-groups) shows tasks.
+- The numbers in a tensor. Its shape is modeled, so a `matmul` of
+  mismatched shapes is reported before the program runs.
 
 Two more things are about how the tool works. Given one file, `aura verify`
 verifies that file and uses the contracts of what it imports. Given a
