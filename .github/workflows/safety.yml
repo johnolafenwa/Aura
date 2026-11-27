@@ -90,7 +90,7 @@ jobs:
       # retaining headroom inside the hosted runner's 45-minute job budget.
       - run: AURA_STRESS_RUNS=10 scripts/stress-scheduler.sh
       - run: npm run test:scheduler-model
-      - run: cargo bench -p aura-compiler --bench compiler_pipeline | tee compiler-benchmark.jsonl
+      - run: cargo bench --locked -p aura-compiler --bench compiler_pipeline | tee compiler-benchmark.jsonl
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: compiler-benchmark

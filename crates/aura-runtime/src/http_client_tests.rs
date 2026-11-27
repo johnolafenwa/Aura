@@ -1442,3 +1442,187 @@ fn the_pool_can_be_cleared() {
     pool_discard(port);
     server.join().expect("the server");
 }
+
+#[test]
+fn chunk_framing_is_read_strictly() {
+    let replies: Vec<Vec<u8>> = vec![
+        // A space before the size.
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n 4\r\nWiki\r\n0\r\n\r\n".to_vec(),
+        // A bare LF inside the size line.
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\n\r\nWiki\r\n0\r\n\r\n".to_vec(),
+        // A control byte in an extension.
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4;a\x01\r\nWiki\r\n0\r\n\r\n"
+            .to_vec(),
+        // A trailer line that is not a field.
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nnot a field\r\n\r\n".to_vec(),
+    ];
+    let count = replies.len();
+    let mut trailer = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n".to_vec();
+    for _ in 0..(MAX_TRAILER_BYTES / 16 + 1) {
+        trailer.extend_from_slice(b"X-Padding: 0123\r\n");
+    }
+    trailer.extend_from_slice(b"\r\n");
+    let mut all = replies;
+    all.push(trailer);
+    let (base, port, server) = serve(count + 1, move |request| {
+        let index: usize = request
+            .line()
+            .split(['/', ' '])
+            .nth(2)
+            .unwrap()
+            .parse()
+            .unwrap();
+        Reply::SendAndClose(all[index].clone())
+    });
+    for index in 0..=count {
+        let mut response = get(&format!("{base}/{index}")).expect("a response head");
+        let error = response
+            .read_all(1 << 20, None)
+            .expect_err("the framing is refused");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "reply {index}");
+    }
+    pool_discard(port);
+    server.join().expect("the server");
+}
+
+#[test]
+fn a_server_cannot_send_interim_responses_without_end() {
+    let mut reply = Vec::new();
+    for _ in 0..=MAX_INTERIM_RESPONSES {
+        reply.extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
+    }
+    reply.extend_from_slice(&ok("late"));
+    let (base, port, server) = serve(1, move |_| Reply::SendAndClose(reply.clone()));
+    let error = get(&base).err().expect("too many interim responses");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("interim responses"));
+    pool_discard(port);
+    server.join().expect("the server");
+}
+
+#[test]
+fn a_compressed_body_is_decoded_in_bounded_steps() {
+    // 16 MiB of zeros compress to a few kilobytes.
+    let plain = vec![0u8; 16 << 20];
+    let zipped = gzip(&plain);
+    let reply = encoded("gzip", &zipped);
+    let (base, port, server) = serve(1, move |_| Reply::SendAndClose(reply.clone()));
+    let mut response = get(&base).expect("an encoded response");
+    let deadline = response.read_deadline().unwrap();
+    let mut most = 0;
+    while response.pull(deadline, None).expect("a step") {
+        most = most.max(response.available());
+        let count = response.available();
+        response.consume(count);
+    }
+    assert!(most <= DECODE_STEP_BYTES * 1100, "{most}");
+    pool_discard(port);
+    server.join().expect("the server");
+    // A whole-body read stops at its limit.
+    let reply = encoded("gzip", &zipped);
+    let (base, port, server) = serve(1, move |_| Reply::SendAndClose(reply.clone()));
+    let mut response = get(&base).expect("an encoded response");
+    let error = response
+        .read_all(1 << 20, None)
+        .expect_err("over the limit");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    pool_discard(port);
+    server.join().expect("the server");
+}
+
+#[test]
+fn a_redirect_from_https_to_http_is_refused() {
+    let key = |url: &str| parse_request_url(url).expect("a URL").1;
+    let secure = key("https://127.0.0.1:1/");
+    let clear = key("http://127.0.0.1:1/");
+    let error = check_redirect_scheme(&secure, &clear, "http://127.0.0.1:1/")
+        .expect_err("a downgrade is refused");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("from https"));
+    assert!(check_redirect_scheme(&clear, &secure, "").is_ok());
+    assert!(check_redirect_scheme(&secure, &secure, "").is_ok());
+    assert!(check_redirect_scheme(&clear, &clear, "").is_ok());
+}
+
+#[test]
+fn a_finished_https_connection_is_kept_and_used_for_the_next_request() {
+    pool_test_lock::share();
+    let timeout = StdDuration::from_secs(10);
+    let root = std::env::temp_dir().join(format!(
+        "aura-https-pool-{}-{:?}",
+        std::process::id(),
+        thread::current().id()
+    ));
+    std::fs::create_dir_all(&root).expect("a temporary directory");
+    let certificate =
+        rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).expect("a certificate");
+    let cert_path = root.join("cert.pem");
+    let key_path = root.join("key.pem");
+    std::fs::write(&cert_path, certificate.cert.pem()).expect("the certificate writes");
+    std::fs::write(&key_path, certificate.key_pair.serialize_pem()).expect("the key writes");
+    let cert = cert_path.to_str().expect("a UTF-8 path").to_string();
+    let listener = TlsListenerValue::bind(
+        "127.0.0.1:0",
+        &cert,
+        key_path.to_str().expect("a UTF-8 path"),
+    )
+    .expect("a TLS listener");
+    let address = listener.local_addr().expect("an address");
+    let port: u16 = address
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse().ok())
+        .expect("a port");
+    let server = thread::spawn(move || {
+        // One connection only: a second request must come over it.
+        let stream = listener
+            .accept(Some(timeout), Some(&CancellationContext::default()))
+            .expect("a TLS connection");
+        let mut requests = 0;
+        loop {
+            let mut head_lines = 0;
+            loop {
+                // The client drops the connection without a TLS close.
+                let line = stream.read_line(Some(timeout), Some(&CancellationContext::default()));
+                let Ok(Some(line)) = line else {
+                    stream.close();
+                    listener.close();
+                    return requests;
+                };
+                if line.is_empty() {
+                    break;
+                }
+                head_lines += 1;
+            }
+            assert!(head_lines > 0);
+            requests += 1;
+            let body = format!("reply {requests}");
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(&reply, Some(timeout), Some(&CancellationContext::default()))
+                .expect("a reply");
+        }
+    });
+    let options = HttpRequestOptions {
+        ca_pem_path: cert.clone(),
+        ..options()
+    };
+    let url = format!("https://127.0.0.1:{port}/");
+    for expected in ["reply 1", "reply 2"] {
+        let mut response =
+            http_send("GET", &url, Vec::new(), b"", &options, None).expect("an HTTPS response");
+        assert_eq!(text(&mut response), expected);
+    }
+    let pooled = PoolKey {
+        tls: true,
+        host: "127.0.0.1".to_string(),
+        port,
+        ca_pem_path: cert,
+    };
+    // The connection went back to the pool after each whole body.
+    drop(pool_take(&pooled).expect("the kept TLS connection"));
+    assert_eq!(server.join().expect("the server"), 2);
+    let _ = std::fs::remove_dir_all(&root);
+}

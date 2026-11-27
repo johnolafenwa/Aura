@@ -1373,3 +1373,33 @@ fn other_lists_take_an_appended_instance_in_its_own_box() {
 fn meta_value(prefix: &str, name: &str, count: i64) -> Value {
     meta(prefix, name, count)
 }
+
+#[test]
+fn shared_typed_fields_support_overlapping_and_concurrent_reads() {
+    let typed = typed_book("SharedRead", FIRST_TEST_ACCESS + 90);
+    let first = typed.get("title");
+    let second = typed.get("title");
+    assert_eq!(first, Some(Cow::Borrowed(&text("t"))));
+    assert_eq!(second, first);
+    assert!(typed.contains_key("title"));
+    assert_eq!(typed.len(), 7);
+
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            let shared = &typed;
+            scope.spawn(move || {
+                for _ in 0..200 {
+                    let a = shared.get("title");
+                    let b = shared.get("items");
+                    assert_eq!(a.as_deref(), Some(&text("t")));
+                    assert_eq!(b.as_deref(), Some(&ints(&[1, 2])));
+                    assert!(shared.contains_key("title"));
+                    assert_eq!(shared.iter().count(), 7);
+                }
+            });
+        }
+    });
+
+    typed.refresh_views();
+    assert_eq!(typed.get("title").as_deref(), Some(&text("t")));
+}

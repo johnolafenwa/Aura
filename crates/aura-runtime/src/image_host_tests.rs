@@ -189,6 +189,8 @@ fn resize_and_crop_check_their_targets() {
     assert!(resize(&[3, 2, 3, 4, 4, 3]).contains("knows no filter numbered `3`"));
     assert!(resize(&[3, 2, 3, 1 << 20, 1 << 20, 1]).contains("requires at most"));
     assert!(resize(&[3, 2, 3, i64::MAX, i64::MAX, 1]).contains("requires at most"));
+    // The product fits a usize but not an int64.
+    assert!(resize(&[3, 2, 3, 1 << 32, (1 << 31) + 1, 1]).contains("requires at most"));
 
     let crop = |numbers: &[i64]| message(call("image::__aura_crop", bytes(&PIXELS), numbers));
     assert!(crop(&[3, 2, 3, -1, 0, 1, 1]).contains("a left edge of at least 0"));

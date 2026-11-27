@@ -1,0 +1,36 @@
+class Alpha:
+    a: int64
+
+class Zeta:
+    z: int64
+
+def extract[T](u: T | int64) -> int64:
+    match u:
+        case int64 as n:
+            return n + 10
+        case _:
+            return -1
+
+def extract_text[T](u: T | str) -> int64:
+    match u:
+        case str as s:
+            return len(s)
+        case _:
+            return -1
+
+def extract_zeta[T](u: T | Zeta) -> int64:
+    match u:
+        case Zeta as z:
+            return z.z
+        case _:
+            return -1
+
+def main():
+    u1: bool | int64 = 42
+    u2: bool | int64 = true
+    print(extract[bool](u1))
+    print(extract[bool](u2))
+    t1: int64 | str = "abc"
+    print(extract_text[int64](t1))
+    z1: Alpha | Zeta = Zeta(z=7)
+    print(extract_zeta[Alpha](z1))

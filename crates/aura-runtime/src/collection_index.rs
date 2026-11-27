@@ -472,9 +472,21 @@ fn key_equals(candidate: &Value, key: &Value) -> bool {
     }
 }
 
+/// Whether `candidate` equals `key`, a `str` value holding `bytes`. Only a
+/// union candidate takes the general equality.
+#[inline(always)]
+fn key_has_bytes(candidate: &Value, bytes: &[u8], key: &Value) -> bool {
+    match candidate {
+        Value::String(candidate) => short_bytes_eq(candidate.as_bytes(), bytes),
+        Value::Union(_) => key_equals(candidate, key),
+        _ => false,
+    }
+}
+
 /// `a == b`, comparing up to sixteen bytes in two overlapping words
 /// instead of calling `memcmp`. Keys, enum names, and variant names are
 /// mostly short.
+#[inline(always)]
 pub(crate) fn short_bytes_eq(a: &[u8], b: &[u8]) -> bool {
     fn word<const N: usize>(bytes: &[u8], at: usize) -> [u8; N] {
         bytes[at..at + N].try_into().expect("in range")
@@ -1304,6 +1316,21 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 
     /// The slot of the entry whose key equals `key`, for [`Self::at_slot`].
     pub fn position(&self, key: &Value) -> Option<usize> {
+        // A `str` key, the common case, takes its bytes once: each entry a
+        // small dict scans is then one tag and one length compare, and only
+        // a union key needs the general equality.
+        if let Value::String(text) = key {
+            let bytes = text.as_bytes();
+            if let Storage::Small(entries) = &self.storage {
+                return entries
+                    .iter()
+                    .position(|entry| key_has_bytes(entry.key(), bytes, key));
+            }
+            return self.lookup(
+                || hash_str(text.as_str()),
+                |candidate| key_has_bytes(candidate, bytes, key),
+            );
+        }
         self.lookup(|| hash_value(key), |candidate| key_equals(candidate, key))
     }
 

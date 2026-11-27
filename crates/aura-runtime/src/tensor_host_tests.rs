@@ -876,7 +876,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
     /// Runs `plan` through its generated kernels on the CPU and gives each
     /// of its outputs.
     pub(super) fn run_all(plan: &Plan, leaves: &[Storage], tag: usize) -> Option<Vec<ArrayValue>> {
-        let program = tensor_codegen::generate(plan);
+        let program = tensor_codegen::generate(plan).unwrap();
         let library = compile(&program.source, tag)?;
         // SAFETY: the harness defines `aura_thread` with this signature.
         let set_thread = unsafe {
@@ -1114,7 +1114,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
             for (tag, reduction) in [0, 1, 2, 3].into_iter().enumerate() {
                 let waiting = reduce(&doubled, reduction, None).unwrap();
                 let (plan, storage) = Plan::collect(node(&waiting));
-                let program = tensor_codegen::generate(&plan);
+                let program = tensor_codegen::generate(&plan).unwrap();
                 let threads: Vec<usize> = program
                     .actions
                     .iter()
@@ -1146,7 +1146,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
             )
             .unwrap();
             let (plan, _) = Plan::collect(node(&chain));
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             assert_eq!(program.actions.len(), 1, "three steps are one kernel");
             assert_eq!(program.buffers, plan.slots.len(), "no scratch buffer");
             let Action::Kernel {
@@ -1162,7 +1162,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
 
             let total = reduce(&chain, 0, None).unwrap();
             let (plan, _) = Plan::collect(node(&total));
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             assert_eq!(
                 program.actions.len(),
                 1,
@@ -1172,7 +1172,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
 
             let product = matmul(&chain, &l.tall).unwrap();
             let (plan, _) = Plan::collect(node(&product));
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             assert!(matches!(
                 program.actions[..],
                 [
@@ -1191,3 +1191,44 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
 
 #[path = "tensor_ops_tests.rs"]
 mod indexed_and_gradients;
+
+#[test]
+fn tensor_size_checks_reject_byte_and_axis_overflow() {
+    // The element count fits, but its float64 bytes do not.
+    let shape = [1_usize << 60, 1];
+    let error =
+        checked_tensor_byte_len(&shape, ArrayDType::Float64).expect_err("the byte size overflows");
+    assert_eq!(error.code, "AU4005");
+    assert!(
+        error.message.contains("tensor byte size overflows") && error.message.contains("float64"),
+        "{}",
+        error.message
+    );
+    // A zero dimension empties the tensor without hiding an overflow in the
+    // other dimensions.
+    assert_eq!(
+        checked_tensor_byte_len(&[3, 0, 2], ArrayDType::Int32).expect("an empty tensor"),
+        (0, 0)
+    );
+    assert_eq!(
+        checked_tensor_byte_len(&[2, 3], ArrayDType::Bool).expect("a small tensor"),
+        (6, 6)
+    );
+
+    assert_eq!(checked_concat_axis(2, 3).expect("a small axis"), 5);
+    let error = checked_concat_axis(usize::MAX, 1).expect_err("the axis overflows");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "tensor concatenation axis overflows host allocation bounds"
+    );
+
+    let error = checked_non_null_buffer_ptr(std::ptr::null_mut(), "test")
+        .expect_err("a null buffer is refused");
+    assert_eq!(error.code, "AU4007");
+    let mut byte = 0_u8;
+    assert_eq!(
+        checked_non_null_buffer_ptr(&mut byte, "test").expect("a live buffer"),
+        &mut byte as *mut u8
+    );
+}

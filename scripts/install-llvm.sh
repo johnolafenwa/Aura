@@ -148,7 +148,7 @@ else
   work=$(mktemp -d)
   trap 'rm -rf "$work"' EXIT
   echo "Downloading ${url}"
-  curl --fail --location --retry 3 --silent --show-error --output "$work/$archive" "$url"
+  curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --silent --show-error --output "$work/$archive" -- "$url"
   actual=$(sha256_of "$work/$archive")
   if [ "$actual" != "$sha256" ]; then
     echo "install-llvm.sh: ${archive} has SHA-256 ${actual}, expected ${sha256}" >&2

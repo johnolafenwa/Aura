@@ -33592,6 +33592,69 @@ def run() -> None:
 }
 
 #[test]
+fn extern_c_rejects_oversized_nested_array_structs() {
+    let four_gib = r#"extern "C" class Huge:
+    data: array[array[uint8, 65536], 65536]
+"#;
+    let err = check_ffi_source_for_test(four_gib)
+        .expect_err("oversized nested C array struct must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+
+    let too_many_leaves = r#"extern "C" class ManyLeaves:
+    data: array[array[uint8, 2048], 1024]
+"#;
+    let err = check_ffi_source_for_test(too_many_leaves)
+        .expect_err("C array struct exceeding leaf limit must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+
+    let union_overflow = r#"extern "C" union HugeUnion:
+    a: array[array[uint64, 65536], 65536]
+    b: uint64
+"#;
+    let err =
+        check_ffi_source_for_test(union_overflow).expect_err("oversized C union must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+}
+
+#[test]
+fn union_clone_rejects_collections_with_opaque_handles_or_resources() {
+    let list_handle = r#"extern "C" opaque class Handle
+extern "C" def open_h() -> Handle
+
+def run() -> None:
+    xs: list[Handle] | None = [open_h()]
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(list_handle)
+        .expect_err("cloning list[Handle] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+
+    let dict_handle = r#"extern "C" opaque class Handle
+extern "C" def open_h() -> Handle
+
+def run() -> None:
+    xs: dict[str, Handle] | None = {"a": open_h()}
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(dict_handle)
+        .expect_err("cloning dict[str, Handle] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+
+    let list_resource = r#"import fs
+
+def run(f: own fs.File) -> None:
+    xs: list[fs.File] | None = [f]
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(list_resource)
+        .expect_err("cloning list[fs.File] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+}
+
+#[test]
 fn ffi_admits_named_functions_as_c_callbacks() {
     let program = check_ffi_source_for_test(
         r#"
@@ -33784,6 +33847,36 @@ extern "C" def rows(cursor: Cursor) -> int32
         let error = check_ffi_source_for_test(source).expect_err(message);
         assert_eq!(error.code, "AU2005", "{source}");
         assert!(error.message.contains(message), "{}", error.message);
+    }
+}
+
+#[test]
+fn ffi_drop_rejects_float_return_types() {
+    for ret in ["float32", "float64"] {
+        let source = format!(
+            "extern \"C\" opaque class Handle drop close_h\nextern \"C\" def close_h(h: own Handle) -> {ret}\n"
+        );
+        let error = check_ffi_source_for_test(&source)
+            .expect_err(&format!("drop returning `{ret}` must be rejected"));
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert!(
+            error.message.contains("floating-point"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn ffi_drop_rejects_contracted_extern_functions() {
+    for clause in ["requires true", "ensures result == 0"] {
+        let source = format!(
+            "extern \"C\" opaque class Handle drop close_h\nextern \"C\" def close_h(h: own Handle) -> int32:\n    {clause}\n"
+        );
+        let error = check_ffi_source_for_test(&source)
+            .expect_err(&format!("drop with `{clause}` must be rejected"));
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert!(error.message.contains("contracts"), "{}", error.message);
     }
 }
 
@@ -34229,6 +34322,173 @@ fn numbers_require_explicit_conversion_for_arithmetic() {
 }
 
 #[test]
+fn calling_a_callable_field_borrows_its_owner_and_respects_view_locks() {
+    let cases = [
+        (
+            "mut argument overlapping callable field owner",
+            r#"
+class Holder:
+    cb: Callable[def(x: int64) -> int64]
+
+def replace(h: mut Holder) -> int64:
+    h.cb = lambda x: x + 1
+    return 1
+
+def main():
+    mut h = Holder(cb=lambda x: x)
+    _ = h.cb(replace(h))
+"#,
+        ),
+        (
+            "mutable callable field with mut overlapping argument",
+            r#"
+class Count:
+    value: int64
+
+    def bump(mut self, x: int64) -> int64:
+        self.value += x
+        return self.value
+
+class Holder:
+    cb: Callable[mut def(x: int64) -> int64]
+
+def replace(h: mut Holder) -> int64:
+    c = Count(value=10)
+    h.cb = lambda [own c] x: c.bump(x)
+    return 1
+
+def main():
+    c = Count(value=0)
+    mut h = Holder(cb=lambda [own c] x: c.bump(x))
+    _ = h.cb(replace(h))
+"#,
+        ),
+        (
+            "own argument overlapping callable field owner",
+            r#"
+class Holder:
+    cb: Callable[def(x: int64) -> int64]
+
+def consume(h: own Holder) -> int64:
+    return 1
+
+def main():
+    h = Holder(cb=lambda x: x)
+    _ = h.cb(consume(h))
+"#,
+        ),
+        (
+            "mutable callable field called under live shared view",
+            r#"
+class Count:
+    value: int64
+
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+class Counter:
+    cb: Callable[mut def() -> int64]
+
+def make_counter() -> Counter:
+    count = Count(value=0)
+    return Counter(cb=lambda [own count]: count.bump())
+
+def main():
+    mut c = make_counter()
+    view v = c
+    _ = c.cb()
+    _ = v
+"#,
+        ),
+        (
+            "mutable local callable called under live shared view",
+            r#"
+class Count:
+    value: int64
+
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+def make_cb() -> Callable[mut def() -> int64]:
+    count = Count(value=0)
+    return lambda [own count]: count.bump()
+
+def main():
+    mut cb = make_cb()
+    view v = cb
+    _ = cb()
+    _ = v
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let error = crate::check_source(source)
+            .expect_err(&format!("expected `{label}` to be rejected with AU3002"));
+        assert_eq!(error.code, "AU3002", "{label}: {error:?}");
+    }
+}
+
+#[test]
+fn sync_map_get_rejects_non_cloneable_values() {
+    let cases = [
+        (
+            "TaskCallable[mut def]",
+            "AU3007",
+            r#"
+import sync
+
+def main():
+    m = sync.Map[str, TaskCallable[mut def() -> int64]]()
+    _ = m.get("k")
+"#,
+        ),
+        (
+            "TaskCallable[own def]",
+            "AU3007",
+            r#"
+import sync
+
+def main():
+    m = sync.Map[str, TaskCallable[own def() -> int64]]()
+    _ = m.get("k")
+"#,
+        ),
+        (
+            "Task[list[int64]]",
+            "AU3009",
+            r#"
+import sync
+
+def main():
+    m = sync.Map[str, Task[list[int64]]]()
+    _ = m.get("k")
+"#,
+        ),
+        (
+            "dyn TransferTrait",
+            "AU3007",
+            r#"
+import sync
+
+trait Job: Transfer:
+    def id(self) -> int64
+
+def main():
+    m = sync.Map[str, dyn Job]()
+    _ = m.get("k")
+"#,
+        ),
+    ];
+    for (label, expected_code, source) in cases {
+        let error = crate::check_source(source)
+            .expect_err(&format!("expected `{label}` in sync.Map.get to fail"));
+        assert_eq!(error.code, expected_code, "{label}: {error:?}");
+    }
+}
+
+#[test]
 fn fixed_arrays_check_element_counts_and_iteration() {
     let good = include_str!("../tests/fixtures/run-pass/fixed_arrays.au");
     crate::check_source(good).expect("the inline array should type check");
@@ -34249,6 +34509,162 @@ fn fixed_array_layouts_reject_heap_elements_and_oversized_objects() {
         );
         let error = crate::check_source(&source).expect_err(ty);
         assert_eq!(error.code, "AU2081", "{ty}: {error}");
+    }
+}
+
+#[test]
+fn loan_closure_cannot_be_stored_in_tuple_literal() {
+    let cases = [
+        (
+            "match_tuple_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    match (lambda [xs]: len(xs), 1):
+        case (g, _):
+            xs.append(4)
+            print(g())
+"#,
+        ),
+        (
+            "destructure_tuple_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    g, _ = (lambda [xs]: len(xs), 1)
+    xs.append(4)
+    print(g())
+"#,
+        ),
+        (
+            "index_tuple_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    print((lambda [xs]: len(xs), 1)[0]())
+"#,
+        ),
+        (
+            "list_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    items = [lambda [xs]: len(xs)]
+    xs.append(4)
+    print(items[0]())
+"#,
+        ),
+        (
+            "dict_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    items = {"k": lambda [xs]: len(xs)}
+    xs.append(4)
+    print(items["k"]())
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let error = crate::check_source(source)
+            .expect_err(&format!("expected `{label}` to fail with AU3010"));
+        assert_eq!(error.code, "AU3010", "{label}: {error:?}");
+    }
+}
+
+#[test]
+fn extern_c_layouts_beyond_the_size_and_scalar_bounds_are_rejected() {
+    let size = "exceeds the maximum C layout size of 16777216 bytes";
+    let leaves = "exceeds the maximum C layout scalar count of 1048576";
+    for (source, owner, reason) in [
+        // Nested array lengths multiply past the byte bound.
+        (
+            "extern \"C\" class P:\n    v: array[array[uint64, 4096], 4096]\n",
+            "class `P`",
+            size,
+        ),
+        // Nested array lengths multiply past the scalar bound.
+        (
+            "extern \"C\" class P:\n    v: array[array[uint8, 2048], 1024]\n",
+            "class `P`",
+            leaves,
+        ),
+        // Fields that fit alone add up past the scalar bound.
+        (
+            "extern \"C\" class P:\n    a: array[uint8, 1048576]\n    b: uint8\n",
+            "class `P`",
+            leaves,
+        ),
+        // Overlapping union members still count every scalar.
+        (
+            "extern \"C\" union U:\n    a: array[uint8, 1048576]\n    b: uint8\n",
+            "union `U`",
+            leaves,
+        ),
+        // A nested class carries its scalars into its holder.
+        (
+            "extern \"C\" class Q:\n    v: array[uint8, 1048576]\nextern \"C\" class P:\n    q: Q\n    w: uint8\n",
+            "class `P`",
+            leaves,
+        ),
+        // Padded elements fill the byte bound, and one more field ends past it.
+        (
+            "extern \"C\" align(4096) class Q:\n    b: uint8\nextern \"C\" class P:\n    v: array[Q, 4096]\n    w: uint8\n",
+            "class `P`",
+            size,
+        ),
+    ] {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the oversized layout must fail");
+        assert_eq!(diagnostic.code, "AU2002", "{source}: {}", diagnostic.message);
+        assert_eq!(
+            diagnostic.message,
+            format!("`extern \"C\"` {owner} {reason}"),
+            "{source}"
+        );
+        assert!(diagnostic
+            .help
+            .iter()
+            .any(|help| help.contains("at most 16777216 bytes and 1048576 scalar")));
+    }
+    check_ffi_source_for_test("extern \"C\" class P:\n    v: array[array[uint64, 1024], 1024]\n")
+        .expect("a layout at both bounds is accepted");
+}
+
+#[test]
+fn a_mutable_callable_called_through_a_mutable_view_respects_the_view_lock() {
+    let prelude = r#"
+class Count:
+    value: int64
+
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+class Counter:
+    cb: Callable[mut def() -> int64]
+
+def make_counter() -> Counter:
+    count = Count(value=0)
+    return Counter(cb=lambda [own count]: count.bump())
+"#;
+    for body in [
+        "def main():\n    mut c = make_counter()\n    view mut v = c\n    _ = v.cb()\n",
+        "def run(c: mut Counter) -> int64:\n    view mut v = c\n    return v.cb()\n\ndef main():\n    pass\n",
+    ] {
+        crate::check_source(&format!("{prelude}\n{body}"))
+            .unwrap_or_else(|error| panic!("{body}: {error:?}"));
+    }
+    for body in [
+        "def main():\n    mut c = make_counter()\n    view mut v = c\n    view w = v\n    _ = v.cb()\n    _ = w\n",
+        "def main():\n    mut c = make_counter()\n    view v = c\n    _ = v.cb()\n",
+    ] {
+        let error = crate::check_source(&format!("{prelude}\n{body}"))
+            .expect_err("calling the callable must not bypass a view");
+        assert!(
+            matches!(error.code.as_str(), "AU3002" | "AU3003"),
+            "{body}: {error:?}"
+        );
     }
 }
 

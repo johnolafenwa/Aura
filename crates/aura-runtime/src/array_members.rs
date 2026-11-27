@@ -15,8 +15,8 @@ use crate::integer::IntegerValue;
 use crate::runtime_value::host_builtins::{math_rounding, math_unary, MathFunction};
 use crate::runtime_value::{
     array_bool_scalar, array_float32_scalar, array_float64_scalar, array_int32_scalar,
-    array_int64_scalar, cast_numeric_value, float_power, mask_error, try_array_buffer, ArrayDType,
-    ArrayStorage, ArrayValue, FloatPowerWidth, Value,
+    array_int64_scalar, cast_numeric_value, checked_array_element_count, float_power, mask_error,
+    try_array_buffer, ArrayDType, ArrayStorage, ArrayValue, FloatPowerWidth, Value,
 };
 
 macro_rules! coded_operations {
@@ -370,6 +370,7 @@ impl ArrayValue {
         }
         let shape =
             array_layout::broadcast_shape(&self.shape, &array.shape).ok_or_else(mismatch)?;
+        checked_array_element_count(&shape)?;
         Ok((
             Operand {
                 array: Some(array),
@@ -694,6 +695,7 @@ impl ArrayValue {
                     .ok_or_else(|| mismatch(array))?;
             }
         }
+        checked_array_element_count(&shape)?;
         let mask_layout = array_layout::broadcast_layout(&self.shape, &self.layout(), &shape);
         let scalar_layout = repeated(&shape);
         let layout_of = |value: &Value| match value {

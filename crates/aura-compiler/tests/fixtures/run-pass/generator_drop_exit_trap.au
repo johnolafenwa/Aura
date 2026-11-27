@@ -1,0 +1,28 @@
+import control
+from iter import Generator, Step
+
+class Boom:
+    def __enter__(mut self):
+        print("enter")
+    def __exit__(mut self):
+        print("exit")
+        assert false, "boom in exit"
+
+def gen() -> Generator[int64]:
+    with b = Boom():
+        yield 1
+        yield 2
+
+def work() -> int64:
+    mut gs: list[Generator[int64]] = [gen()]
+    for g in mut gs:
+        _ = g.next()
+    gs.clear()
+    return 99
+
+def main():
+    match control.recover(work):
+        case Result.Ok(v):
+            print(f"ok:{v}")
+        case Result.Err(t):
+            print(f"err:{t.code}:{t.message}")

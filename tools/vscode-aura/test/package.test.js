@@ -692,6 +692,7 @@ test("extension exposes the compiler path setting, a restart command, and untitl
   const verify = manifest.contributes.configuration.properties["aura.verifyOnSave"];
   assert.equal(verify.type, "boolean");
   assert.equal(verify.default, true);
+  assert.equal(verify.scope, "machine", "a workspace must not override automatic verification");
 });
 
 test("Aura newline indentation inherits the current block indent", () => {

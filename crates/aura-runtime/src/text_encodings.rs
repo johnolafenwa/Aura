@@ -33,6 +33,45 @@ pub enum EncodingError {
     /// Encoding: the index, in Unicode scalar values, of the first
     /// character the encoding cannot represent.
     Unencodable { index: usize },
+    /// The result would be longer than a byte list or a `str` may be, or
+    /// the memory for it could not be had.
+    TooLarge,
+}
+
+/// The longest text `decode` builds: the runtime's string limit.
+pub const MAX_DECODED_BYTES: usize = crate::runtime_value::MAX_STRING_BYTES;
+
+/// The longest byte list `encode` builds.
+pub const MAX_ENCODED_BYTES: usize = crate::bytes_codec::MAX_CODEC_OUTPUT_LEN;
+
+/// An empty vector with room for `len` bytes, when `len` is at most
+/// `limit` and the memory can be had.
+fn reserved(len: usize, limit: usize) -> Result<Vec<u8>, EncodingError> {
+    if len > limit {
+        return Err(EncodingError::TooLarge);
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(len)
+        .map_err(|_| EncodingError::TooLarge)?;
+    Ok(bytes)
+}
+
+/// An empty text with room for `len` bytes, as [`reserved`] gives.
+fn reserved_text(len: usize) -> Result<String, EncodingError> {
+    let mut text = String::new();
+    text.try_reserve_exact(len.min(MAX_DECODED_BYTES))
+        .map_err(|_| EncodingError::TooLarge)?;
+    Ok(text)
+}
+
+/// `text` when it fits the string limit.
+fn within_limit(text: String) -> Result<String, EncodingError> {
+    if text.len() > MAX_DECODED_BYTES {
+        Err(EncodingError::TooLarge)
+    } else {
+        Ok(text)
+    }
 }
 
 /// The characters Windows-1252 assigns to bytes 0x80 to 0x9F. Zero marks
@@ -86,28 +125,39 @@ impl Encoding {
 
 /// The bytes of `text` in `encoding`.
 pub fn encode(text: &str, encoding: Encoding) -> Result<Vec<u8>, EncodingError> {
+    // A single-byte encoding writes at most one byte a character.
     let single_byte = |limit: u32| {
-        text.chars()
-            .enumerate()
-            .map(|(index, ch)| {
+        let mut bytes = reserved(text.len(), MAX_ENCODED_BYTES)?;
+        for (index, ch) in text.chars().enumerate() {
+            bytes.push(
                 u8::try_from(u32::from(ch))
                     .ok()
                     .filter(|byte| u32::from(*byte) < limit)
-                    .ok_or(EncodingError::Unencodable { index })
-            })
-            .collect::<Result<Vec<u8>, _>>()
+                    .ok_or(EncodingError::Unencodable { index })?,
+            );
+        }
+        Ok(bytes)
     };
     match encoding {
-        Encoding::Utf8 => Ok(text.as_bytes().to_vec()),
+        Encoding::Utf8 => {
+            let mut bytes = reserved(text.len(), MAX_ENCODED_BYTES)?;
+            bytes.extend_from_slice(text.as_bytes());
+            Ok(bytes)
+        }
         Encoding::Utf8Sig => {
-            let mut bytes = Vec::with_capacity(text.len() + 3);
+            let mut bytes = reserved(text.len().saturating_add(3), MAX_ENCODED_BYTES)?;
             bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
             bytes.extend_from_slice(text.as_bytes());
             Ok(bytes)
         }
         Encoding::Utf16 | Encoding::Utf16Le | Encoding::Utf16Be => {
             let big = encoding == Encoding::Utf16Be;
-            let mut bytes = Vec::with_capacity(text.len() * 2 + 2);
+            // A UTF-16 unit is two bytes and stands for at least one
+            // byte of UTF-8; a surrogate pair stands for four.
+            let mut bytes = reserved(
+                text.len().saturating_mul(2).saturating_add(2),
+                MAX_ENCODED_BYTES,
+            )?;
             let marked = (encoding == Encoding::Utf16).then_some(0xFEFF_u16);
             for unit in marked.into_iter().chain(text.encode_utf16()) {
                 bytes.extend_from_slice(&if big {
@@ -120,7 +170,15 @@ pub fn encode(text: &str, encoding: Encoding) -> Result<Vec<u8>, EncodingError> 
         }
         Encoding::Utf32 | Encoding::Utf32Le | Encoding::Utf32Be => {
             let big = encoding == Encoding::Utf32Be;
-            let mut bytes = Vec::with_capacity(text.len() * 4 + 4);
+            let scalars = if text.is_ascii() {
+                text.len()
+            } else {
+                text.chars().count()
+            };
+            let mut bytes = reserved(
+                scalars.saturating_mul(4).saturating_add(4),
+                MAX_ENCODED_BYTES,
+            )?;
             let marked = (encoding == Encoding::Utf32).then_some(0xFEFF_u32);
             for scalar in marked.into_iter().chain(text.chars().map(u32::from)) {
                 bytes.extend_from_slice(&if big {
@@ -133,22 +191,45 @@ pub fn encode(text: &str, encoding: Encoding) -> Result<Vec<u8>, EncodingError> 
         }
         Encoding::Latin1 => single_byte(0x100),
         Encoding::Ascii => single_byte(0x80),
-        Encoding::Windows1252 => text
-            .chars()
-            .enumerate()
-            .map(|(index, ch)| {
+        Encoding::Windows1252 => {
+            let mut bytes = reserved(text.len(), MAX_ENCODED_BYTES)?;
+            for (index, ch) in text.chars().enumerate() {
                 let scalar = u32::from(ch);
-                if scalar < 0x80 || (0xA0..0x100).contains(&scalar) {
-                    return Ok(scalar as u8);
-                }
-                WINDOWS_1252_HIGH
-                    .iter()
-                    .position(|high| *high != 0 && u32::from(*high) == scalar)
-                    .map(|offset| 0x80 + offset as u8)
-                    .ok_or(EncodingError::Unencodable { index })
-            })
-            .collect(),
+                let byte = if scalar < 0x80 || (0xA0..0x100).contains(&scalar) {
+                    scalar as u8
+                } else {
+                    WINDOWS_1252_HIGH
+                        .iter()
+                        .position(|high| *high != 0 && u32::from(*high) == scalar)
+                        .map(|offset| 0x80 + offset as u8)
+                        .ok_or(EncodingError::Unencodable { index })?
+                };
+                bytes.push(byte);
+            }
+            Ok(bytes)
+        }
     }
+}
+
+/// The text of single-byte `bytes`, each read by `decode_byte`. The
+/// length of the text is counted first, so a text over the string limit
+/// is refused before it is built.
+fn decode_single_byte(
+    bytes: &[u8],
+    decode_byte: impl Fn(usize, u8) -> Result<char, EncodingError>,
+) -> Result<String, EncodingError> {
+    let mut len = 0usize;
+    for (index, &byte) in bytes.iter().enumerate() {
+        len += decode_byte(index, byte)?.len_utf8();
+    }
+    if len > MAX_DECODED_BYTES {
+        return Err(EncodingError::TooLarge);
+    }
+    let mut text = reserved_text(len)?;
+    for (index, &byte) in bytes.iter().enumerate() {
+        text.push(decode_byte(index, byte)?);
+    }
+    Ok(text)
 }
 
 /// The text `bytes` spell in `encoding`.
@@ -173,29 +254,30 @@ pub fn decode(bytes: &[u8], encoding: Encoding) -> Result<String, EncodingError>
         },
         Encoding::Utf32Le => decode_utf32(bytes, false, 0),
         Encoding::Utf32Be => decode_utf32(bytes, true, 0),
-        Encoding::Latin1 => Ok(bytes.iter().map(|byte| char::from(*byte)).collect()),
+        Encoding::Latin1 => decode_single_byte(bytes, |_, byte| Ok(char::from(byte))),
         Encoding::Ascii => match bytes.iter().position(|byte| !byte.is_ascii()) {
             Some(index) => Err(EncodingError::Invalid { index }),
-            None => Ok(bytes.iter().map(|byte| char::from(*byte)).collect()),
+            None => decode_single_byte(bytes, |_, byte| Ok(char::from(byte))),
         },
-        Encoding::Windows1252 => bytes
-            .iter()
-            .enumerate()
-            .map(|(index, byte)| match byte {
-                0x80..=0x9F => {
-                    char::from_u32(u32::from(WINDOWS_1252_HIGH[usize::from(byte - 0x80)]))
-                        .filter(|ch| *ch != '\0')
-                        .ok_or(EncodingError::Invalid { index })
-                }
-                _ => Ok(char::from(*byte)),
-            })
-            .collect(),
+        Encoding::Windows1252 => decode_single_byte(bytes, |index, byte| match byte {
+            0x80..=0x9F => char::from_u32(u32::from(WINDOWS_1252_HIGH[usize::from(byte - 0x80)]))
+                .filter(|ch| *ch != '\0')
+                .ok_or(EncodingError::Invalid { index }),
+            _ => Ok(char::from(byte)),
+        }),
     }
 }
 
 fn decode_utf8(bytes: &[u8], skipped: usize) -> Result<String, EncodingError> {
     match std::str::from_utf8(bytes) {
-        Ok(text) => Ok(text.to_string()),
+        Ok(text) => {
+            if text.len() > MAX_DECODED_BYTES {
+                return Err(EncodingError::TooLarge);
+            }
+            let mut owned = reserved_text(text.len())?;
+            owned.push_str(text);
+            Ok(owned)
+        }
         Err(error) => Err(EncodingError::Invalid {
             index: skipped + error.valid_up_to(),
         }),
@@ -207,7 +289,7 @@ fn decode_utf16<const BIG_ENDIAN: bool>(
     skipped: usize,
 ) -> Result<String, EncodingError> {
     let (pairs, trailing) = bytes.as_chunks::<2>();
-    let mut text = String::with_capacity(pairs.len());
+    let mut text = reserved_text(pairs.len())?;
     let mut units = pairs
         .iter()
         .map(|&pair| {
@@ -245,11 +327,11 @@ fn decode_utf16<const BIG_ENDIAN: bool>(
             index: skipped + pairs.len() * 2,
         });
     }
-    Ok(text)
+    within_limit(text)
 }
 
 fn decode_utf32(bytes: &[u8], big: bool, skipped: usize) -> Result<String, EncodingError> {
-    let mut text = String::with_capacity(bytes.len() / 4);
+    let mut text = reserved_text(bytes.len() / 4)?;
     let mut chunks = bytes.chunks_exact(4);
     for (position, chunk) in chunks.by_ref().enumerate() {
         let word = [chunk[0], chunk[1], chunk[2], chunk[3]];
@@ -267,7 +349,7 @@ fn decode_utf32(bytes: &[u8], big: bool, skipped: usize) -> Result<String, Encod
             index: skipped + bytes.len() - chunks.remainder().len(),
         });
     }
-    Ok(text)
+    within_limit(text)
 }
 
 #[cfg(test)]

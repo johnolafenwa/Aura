@@ -167,9 +167,10 @@ public def __entries(
                     case Lookup.Missing:
                         pass
                 index -= 1
+            # Popping the reversed list gives document order.
             mut entries: list[(str, json.Value)] = []
-            for entry in own reversed:
-                entries.insert(0, entry)
+            while reversed.len() > 0:
+                entries.append(reversed.pop())
             return Result.Ok(entries)
         case None:
             return Result.Err(

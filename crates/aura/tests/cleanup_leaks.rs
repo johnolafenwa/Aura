@@ -625,3 +625,89 @@ def main() -> None:
         }
     }
 }
+
+#[test]
+fn trait_dispatch_preserves_returned_unions_and_callables() {
+    let source = r#"
+trait Producer:
+    def label(self) -> str | None
+    def items(self) -> list[int64] | None
+    def counter(self) -> Callable[def() -> int64]
+
+class Alpha:
+    prefix: str
+    base: int64
+
+impl Producer for Alpha:
+    def label(self) -> str | None:
+        return f"{self.prefix}-alpha-{self.base}"
+
+    def items(self) -> list[int64] | None:
+        return [self.base, self.base + 1, self.base + 2]
+
+    def counter(self) -> Callable[def() -> int64]:
+        tag = f"{self.prefix}-{self.base}"
+        offset = self.base
+        return lambda [own tag, own offset]: tag.len() + offset
+
+class Beta:
+    base: int64
+
+impl Producer for Beta:
+    def label(self) -> str | None:
+        return None
+
+    def items(self) -> list[int64] | None:
+        return [self.base * 10]
+
+    def counter(self) -> Callable[def() -> int64]:
+        offset = self.base
+        return lambda [own offset]: offset * 2
+
+def inspect(p: dyn Producer) -> str:
+    text = match own p.label():
+        case str as s:
+            s
+        case None:
+            "none"
+    mut total = 0
+    match p.items():
+        case list[int64] as xs:
+            for x in xs:
+                total += x
+        case None:
+            total = -1
+    cb = p.counter()
+    return f"{text}|{total}|{cb()}"
+
+def inspect_generic[T: Producer](p: T) -> str:
+    text = match own p.label():
+        case str as s:
+            s
+        case None:
+            "none"
+    mut total = 0
+    match p.items():
+        case list[int64] as xs:
+            for x in xs:
+                total += x
+        case None:
+            total = -1
+    cb = p.counter()
+    return f"{text}|{total}|{cb()}"
+
+def main() -> None:
+    a: dyn Producer = Alpha(prefix="hello", base=10)
+    b: dyn Producer = Beta(base=5)
+    print(inspect(a))
+    print(inspect(b))
+    print(inspect_generic(Alpha(prefix="world", base=3)))
+    print(inspect_generic(Beta(base=4)))
+"#;
+    assert_frees_everything(
+        "trait-dispatch-union-callable",
+        source,
+        "hello-alpha-10|33|18\nnone|50|10\nworld-alpha-3|12|10\nnone|40|8\n",
+        0,
+    );
+}

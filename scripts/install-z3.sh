@@ -3,8 +3,8 @@
 #
 # Z3 comes from the `z3-solver` Python wheel, which carries a prebuilt `z3`
 # executable for Linux and macOS on x86-64 and arm64 and for Windows on
-# x86-64, into a private
-# virtual environment. pip checks the wheel's hash against PyPI's index.
+# x86-64, into a private virtual environment. pip verifies the downloaded
+# binary wheel against the SHA-256 digests pinned in scripts/z3-requirements.txt.
 #
 # Usage: scripts/install-z3.sh [prefix]
 #
@@ -17,6 +17,8 @@ set -euo pipefail
 
 version=5.3.3.0
 prefix="${1:-$HOME/.cache/aura/z3/$version}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+requirements="$script_dir/z3-requirements.txt"
 
 case "$(uname -s)" in
   MINGW* | MSYS*)
@@ -26,7 +28,12 @@ case "$(uname -s)" in
     # without a privilege.
     if [ ! -x "$prefix/bin/z3.exe" ]; then
       "$(command -v python3 || command -v python)" -m venv "$prefix"
-      "$prefix/Scripts/python.exe" -m pip install --quiet --disable-pip-version-check "z3-solver==$version"
+      requirements_arg="$requirements"
+      if command -v cygpath >/dev/null 2>&1; then
+        requirements_arg="$(cygpath -w "$requirements")"
+      fi
+      "$prefix/Scripts/python.exe" -m pip install --quiet --disable-pip-version-check \
+        --only-binary=:all: --require-hashes -r "$requirements_arg"
     fi
     mkdir -p "$prefix/solver"
     cp "$prefix/bin/z3.exe" "$prefix/solver/z3.exe"
@@ -35,7 +42,8 @@ case "$(uname -s)" in
   *)
     if [ ! -x "$prefix/bin/z3" ]; then
       python3 -m venv "$prefix"
-      "$prefix/bin/python" -m pip install --quiet --disable-pip-version-check "z3-solver==$version"
+      "$prefix/bin/python" -m pip install --quiet --disable-pip-version-check \
+        --only-binary=:all: --require-hashes -r "$requirements"
     fi
     mkdir -p "$prefix/solver"
     ln -sf "$prefix/bin/z3" "$prefix/solver/z3"

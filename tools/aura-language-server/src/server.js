@@ -454,21 +454,34 @@ function completionKind(kind) {
   }
 }
 
-function toDocumentSymbol(document, symbol) {
-  const line = Math.max(0, Math.min(symbol.line, document.lineCount - 1));
-  const range = {
-    start: { line, character: symbol.startCharacter || 0 },
-    end: { line, character: symbol.endCharacter || symbol.startCharacter || 0 }
+function toDocumentSymbol(document, rootSymbol) {
+  const makeNode = (symbol) => {
+    const line = Math.max(0, Math.min(symbol.line, document.lineCount - 1));
+    const range = {
+      start: { line, character: symbol.startCharacter || 0 },
+      end: { line, character: symbol.endCharacter || symbol.startCharacter || 0 }
+    };
+    return {
+      name: symbol.name,
+      detail: symbol.detail || "",
+      kind: symbolKind(symbol.kind),
+      range,
+      selectionRange: range,
+      children: []
+    };
   };
-
-  return {
-    name: symbol.name,
-    detail: symbol.detail || "",
-    kind: symbolKind(symbol.kind),
-    range,
-    selectionRange: range,
-    children: (symbol.children || []).map((child) => toDocumentSymbol(document, child))
-  };
+  const rootNode = makeNode(rootSymbol);
+  const stack = [{ source: rootSymbol, target: rootNode }];
+  while (stack.length > 0) {
+    const { source, target } = stack.pop();
+    const children = source.children || [];
+    for (const child of children) {
+      const childNode = makeNode(child);
+      target.children.push(childNode);
+      stack.push({ source: child, target: childNode });
+    }
+  }
+  return rootNode;
 }
 
 function validateDocument(document) {

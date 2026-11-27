@@ -30,7 +30,41 @@ script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 downloads="$(mktemp -d "${TMPDIR:-/tmp}/aura-apt-debs.XXXXXX")"
 trap 'rm -rf "$downloads"' EXIT HUP INT TERM
 gh release download "$tag" --repo "$repository" --pattern 'aura-*.deb' --pattern SHA256SUMS --dir "$downloads"
-(cd "$downloads" && grep -E '  aura-[^/]*\.deb$' SHA256SUMS | sha256sum -c - && rm SHA256SUMS)
+if [[ ! -f "$downloads/SHA256SUMS" ]]; then
+  echo "publish-apt-repository.sh: SHA256SUMS was not downloaded for $tag" >&2
+  exit 1
+fi
+shopt -s nullglob
+debs=("$downloads"/*.deb)
+if (( ${#debs[@]} == 0 )); then
+  echo "publish-apt-repository.sh: no .deb files were downloaded for $tag" >&2
+  exit 1
+fi
+for deb in "${debs[@]}"; do
+  if [[ ! -f "$deb" || -L "$deb" ]]; then
+    echo "publish-apt-repository.sh: expected a regular .deb file: $deb" >&2
+    exit 1
+  fi
+  name="$(basename "$deb")"
+  entry="$(awk -v name="$name" '
+    NF == 2 && $1 ~ /^[0-9a-fA-F]{64}$/ {
+      file = $2
+      sub(/^\*/, "", file)
+      if (file == name) {
+        print $1 "  " file
+        count++
+      }
+    }
+    END {
+      if (count != 1) exit 1
+    }
+  ' "$downloads/SHA256SUMS")" || {
+    echo "publish-apt-repository.sh: $name does not have a unique valid entry in SHA256SUMS" >&2
+    exit 1
+  }
+  (cd "$downloads" && printf '%s\n' "$entry" | sha256sum -c -)
+done
+rm -f "$downloads/SHA256SUMS"
 
 if ! command -v apt-ftparchive >/dev/null 2>&1 || ! command -v dpkg-scanpackages >/dev/null 2>&1; then
   sudo apt-get update

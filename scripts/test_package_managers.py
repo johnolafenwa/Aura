@@ -279,6 +279,155 @@ class DebianPackageTests(unittest.TestCase):
             self.assertIn("::notice::APT_SIGNING_KEY is not configured", result.stdout)
             self.assertFalse(output.exists())
 
+    @unittest.skipUnless(
+        all(shutil.which(tool) for tool in ("apt-ftparchive", "dpkg-scanpackages", "gpg", "gpgv")),
+        "needs apt-ftparchive, dpkg-scanpackages and gpg",
+    )
+    def test_publish_apt_repository_rejects_unlisted_and_duplicate_debs(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aura-apt-publish-") as temp:
+            root = Path(temp)
+            assets = root / "assets"
+            assets.mkdir()
+            work = root / "work"
+            work.mkdir()
+            archive = write_linux_archive(work, "x86_64")
+            built = run(["bash", SCRIPTS / "package-deb.sh", archive], cwd=assets)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            deb = assets / f"aura-{TAG}-amd64.deb"
+            digest = hashlib.sha256(deb.read_bytes()).hexdigest()
+
+            gnupg = root / "gnupg"
+            gnupg.mkdir(mode=0o700)
+            gpg_env = dict(os.environ, GNUPGHOME=str(gnupg))
+            self.assertEqual(
+                run(
+                    ["gpg", "--batch", "--quiet", "--passphrase", "", "--quick-generate-key",
+                     "Aura test <test@example.invalid>", "ed25519", "sign", "never"],
+                    env=gpg_env,
+                ).returncode,
+                0,
+            )
+            key = run(["gpg", "--batch", "--armor", "--export-secret-keys"], env=gpg_env).stdout
+            run(["gpgconf", "--kill", "all"], env=gpg_env)
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"$1\" == \"api\" ]]; then\n"
+                f"  echo '{TAG}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "dir=''\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  if [[ \"$1\" == \"--dir\" ]]; then dir=\"$2\"; shift 2; continue; fi\n"
+                "  shift\n"
+                "done\n"
+                "cp \"$FAKE_ASSETS\"/* \"$dir/\"\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+            env = dict(
+                os.environ,
+                PATH=f"{fake_bin}:{os.environ['PATH']}",
+                FAKE_ASSETS=str(assets),
+                APT_SIGNING_KEY=key,
+            )
+
+            # Case 1: an extra downloaded .deb not listed in SHA256SUMS must fail.
+            extra = assets / f"aura-{TAG}-extra.deb"
+            shutil.copy(deb, extra)
+            (assets / "SHA256SUMS").write_text(f"{digest}  {deb.name}\n", encoding="utf-8")
+            out_unlisted = root / "out-unlisted"
+            res_unlisted = run(["bash", SCRIPTS / "publish-apt-repository.sh", out_unlisted], env=env)
+            self.assertNotEqual(res_unlisted.returncode, 0, res_unlisted.stdout + res_unlisted.stderr)
+            self.assertFalse(out_unlisted.exists())
+            extra.unlink()
+
+            # Case 2: duplicate SHA256SUMS entries for the same .deb must fail.
+            (assets / "SHA256SUMS").write_text(
+                f"{digest}  {deb.name}\n{digest}  {deb.name}\n", encoding="utf-8"
+            )
+            out_dup = root / "out-dup"
+            res_dup = run(["bash", SCRIPTS / "publish-apt-repository.sh", out_dup], env=env)
+            self.assertNotEqual(res_dup.returncode, 0, res_dup.stdout + res_dup.stderr)
+            self.assertFalse(out_dup.exists())
+
+            # Case 3: exact unique match succeeds.
+            (assets / "SHA256SUMS").write_text(f"{digest}  {deb.name}\n", encoding="utf-8")
+            out_ok = root / "out-ok"
+            res_ok = run(["bash", SCRIPTS / "publish-apt-repository.sh", out_ok], env=env)
+            self.assertEqual(res_ok.returncode, 0, res_ok.stderr)
+            self.assertTrue((out_ok / "dists/stable/InRelease").is_file())
+
+    @unittest.skipUnless(
+        all(shutil.which(tool) for tool in ("apt-ftparchive", "dpkg-scanpackages", "gpg", "gpgv")),
+        "needs apt-ftparchive, dpkg-scanpackages and gpg",
+    )
+    def test_build_apt_repository_rejects_invalid_control_metadata(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aura-apt-meta-") as temp:
+            root = Path(temp)
+            debs = root / "debs"
+            debs.mkdir()
+            (debs / "aura-test.deb").write_bytes(b"placeholder")
+
+            gnupg = root / "gnupg"
+            gnupg.mkdir(mode=0o700)
+            gpg_env = dict(os.environ, GNUPGHOME=str(gnupg))
+            self.assertEqual(
+                run(
+                    ["gpg", "--batch", "--quiet", "--passphrase", "", "--quick-generate-key",
+                     "Aura test <test@example.invalid>", "ed25519", "sign", "never"],
+                    env=gpg_env,
+                ).returncode,
+                0,
+            )
+            key = run(["gpg", "--batch", "--armor", "--export-secret-keys"], env=gpg_env).stdout
+            run(["gpgconf", "--kill", "all"], env=gpg_env)
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_dpkg_deb = fake_bin / "dpkg-deb"
+            fake_dpkg_deb.write_text(
+                "#!/usr/bin/env bash\n"
+                "field=\"${@: -1}\"\n"
+                "case \"$field\" in\n"
+                "  Package) echo aura ;;\n"
+                "  Architecture) echo \"$FAKE_ARCH\" ;;\n"
+                "  Version) echo \"$FAKE_VER\" ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_dpkg_deb.chmod(0o755)
+
+            for arch, ver in (
+                ("i386", "0.17.0"),
+                ("amd64 -o", "0.17.0"),
+                ("../amd64", "0.17.0"),
+                ("amd64", "../escape"),
+                ("amd64", "1.0..2"),
+                ("amd64", "-0.17.0"),
+                ("amd64", "0.17.0/extra"),
+            ):
+                with self.subTest(arch=arch, ver=ver):
+                    output = root / f"out-{hash((arch, ver)) & 0xffff}"
+                    res = run(
+                        ["bash", SCRIPTS / "build-apt-repository.sh", debs, output],
+                        env=dict(
+                            os.environ,
+                            PATH=f"{fake_bin}:{os.environ['PATH']}",
+                            APT_SIGNING_KEY=key,
+                            FAKE_ARCH=arch,
+                            FAKE_VER=ver,
+                        ),
+                    )
+                    self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+                    self.assertIn("invalid Debian", res.stderr)
+                    self.assertFalse((output / "pool").exists())
+                    self.assertFalse((output / "dists/stable/InRelease").exists())
+
 
 class ChocolateyPackageTests(unittest.TestCase):
     def stage(self, temp: str, name: str):
@@ -401,25 +550,44 @@ class PackageWorkflowTests(unittest.TestCase):
                 self.assertIn(f"::notice::{secret} is not configured", job)
                 # Only the publishing step receives the secret itself.
                 self.assertEqual(job.count(f"${{{{ secrets.{secret} }}}}"), 1)
-        self.assertIn("contents: read\n", self.job("publish-homebrew"))
-        self.assertIn("persist-credentials: false\n", self.job("publish-homebrew"))
-        self.assertIn("HOMEBREW_TAP: johnolafenwa/homebrew-aura\n", self.job("publish-homebrew"))
-        self.assertIn("--source https://push.chocolatey.org/", self.job("publish-chocolatey"))
+        homebrew = self.job("publish-homebrew")
+        self.assertIn("contents: read\n", homebrew)
+        self.assertIn("persist-credentials: false\n", homebrew)
+        self.assertIn("HOMEBREW_TAP: johnolafenwa/homebrew-aura\n", homebrew)
+        self.assertNotIn("x-access-token:$HOMEBREW_TAP_TOKEN@", homebrew)
+        self.assertIn('GIT_CONFIG_KEY_0="http.https://github.com/.extraHeader"', homebrew)
+        self.assertIn('git clone --depth 1 "https://github.com/$HOMEBREW_TAP.git" "$tap"', homebrew)
+        choco = self.job("publish-chocolatey")
+        self.assertIn("--source https://push.chocolatey.org/", choco)
+        self.assertNotIn("grep -F", choco)
+        self.assertIn('awk -v name="$nupkg"', choco)
+        self.assertIn("if (count != 1) exit 1", choco)
+        self.assertIn("sha256sum -c -", choco)
 
     def test_release_starts_the_site_deployment_that_carries_apt(self) -> None:
         job = self.job("publish-apt")
         self.assertIn("    permissions:\n      actions: write\n", job)
         self.assertIn('gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref main\n', job)
         docs = DOCS_WORKFLOW.read_text(encoding="utf-8")
-        build = docs[docs.index("\n  build:\n"):docs.index("\n  examples:\n")]
-        step = build[build.index("      - name: Add the apt repository\n"):]
-        step = step[:step.index("\n\n")]
-        self.assertIn("if: github.event_name != 'pull_request'\n", step)
-        self.assertIn("APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}\n", step)
-        self.assertIn("run: scripts/publish-apt-repository.sh docs/.vitepress/dist/apt", step)
+        build = docs[docs.index("\n  build:\n"):docs.index("\n  apt:\n")]
+        apt = docs[docs.index("\n  apt:\n"):docs.index("\n  examples:\n")]
+        deploy = docs[docs.index("\n  deploy:\n"):]
+        self.assertNotIn("APT_SIGNING_KEY", build)
+        self.assertNotIn("publish-apt-repository.sh", build)
+        self.assertIn("if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'\n", apt)
+        self.assertIn("    environment: apt-signing\n", apt)
+        self.assertIn("APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}\n", apt)
+        self.assertIn("scripts/publish-apt-repository.sh apt-repository", apt)
+        self.assertNotIn("setup-node", apt)
+        self.assertNotIn("npm ci", apt)
+        self.assertNotIn("docs:build", apt)
         self.assertEqual(docs.count("secrets.APT_SIGNING_KEY"), 1)
+        self.assertIn("rm -rf pages-site/apt\n", deploy)
+        self.assertIn("cp docs/public/install.sh pages-site/install.sh\n", deploy)
+        self.assertIn("cp docs/public/install.ps1 pages-site/install.ps1\n", deploy)
         self.assertLess(
-            build.index("- name: Add the apt repository"), build.index("- name: Upload Pages artifact")
+            deploy.index("uses: actions/upload-pages-artifact@"),
+            deploy.index("uses: actions/deploy-pages@"),
         )
 
     def test_ci_installs_every_package_before_a_release_depends_on_it(self) -> None:

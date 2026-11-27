@@ -2821,6 +2821,7 @@ fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
                     target: "process_id".to_string(),
                     value: Rvalue::Call {
                         callee: CallTarget::Extern(MirExternCall {
+                            module_name: String::new(),
                             name: String::new(),
                             symbol: "getpid".to_string(),
                             abi: "C".to_string(),
@@ -2912,6 +2913,202 @@ fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
 }
 
 #[test]
+fn mir_lowering_omits_mem_wrappers_without_import_and_public_mir_rejects_mem_calls() {
+    let plain = crate::lower_source_to_mir("def main():\n    pass\n")
+        .expect("plain source should lower to MIR");
+    assert!(
+        plain
+            .functions
+            .iter()
+            .all(|function| !function.name.starts_with("mem::")),
+        "plain MIR without `import mem` should not emit mem::* wrapper functions"
+    );
+
+    let make_module = |functions: Vec<MirFunction>| MirModule {
+        foreign_link: Default::default(),
+        unions: Vec::new(),
+        enums: Vec::new(),
+        constants: Vec::new(),
+        functions,
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+        ownership: Default::default(),
+        borrowing: Default::default(),
+    };
+
+    let make_main = |instructions: Vec<Instruction>, local_types: Vec<MirLocalType>| MirFunction {
+        name: "main".to_string(),
+        module_name: "<test>".to_string(),
+        source_path: Some("/tmp/mem_gate.au".to_string()),
+        span: Span::new(1, 1),
+        receiver: None,
+        params: Vec::new(),
+        local_types,
+        return_type: Type::Unit,
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions,
+            terminator: Terminator::Return(Operand::Unit),
+        }],
+    };
+
+    let by_name = make_module(vec![make_main(
+        vec![Instruction::Assign {
+            target: "res".to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Name("mem::fence".to_string()),
+                args: Vec::new(),
+                type_args: Default::default(),
+            },
+        }],
+        vec![MirLocalType {
+            name: "res".to_string(),
+            ty: Type::Unit,
+        }],
+    )]);
+
+    let fence_op = crate::runtime_ops::HostBuiltin::from_name("mem::fence")
+        .expect("mem::fence host builtin should exist");
+    let by_host_op = make_module(vec![make_main(
+        vec![Instruction::Assign {
+            target: "res".to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Runtime {
+                    op: crate::runtime_ops::RuntimeOp::Host(fence_op),
+                    receiver: None,
+                    receiver_place: None,
+                },
+                args: Vec::new(),
+                type_args: Default::default(),
+            },
+        }],
+        vec![MirLocalType {
+            name: "res".to_string(),
+            ty: Type::Unit,
+        }],
+    )]);
+
+    let read_sig = Type::Function {
+        params: vec![crate::sema::FunctionParamContract {
+            name: "address".to_string(),
+            ty: Type::named("uint64"),
+            passing: crate::ast::ReceiverKind::Value,
+            has_default: false,
+            keyword_only: false,
+        }],
+        return_type: Box::new(Type::named("uint64")),
+    };
+    let by_function_operand = make_module(vec![make_main(
+        vec![Instruction::Assign {
+            target: "fn_val".to_string(),
+            value: Rvalue::Use(Operand::Function {
+                name: "mem::read_uint64".to_string(),
+                signature: Box::new(read_sig.clone()),
+            }),
+        }],
+        vec![MirLocalType {
+            name: "fn_val".to_string(),
+            ty: read_sig,
+        }],
+    )]);
+
+    let with_mem_def = make_module(vec![
+        make_main(Vec::new(), Vec::new()),
+        MirFunction {
+            name: "mem::fence".to_string(),
+            module_name: "mem".to_string(),
+            source_path: None,
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: Vec::new(),
+            return_type: Type::Unit,
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(Operand::Unit),
+            }],
+        },
+    ]);
+
+    let by_terminator = make_module(vec![MirFunction {
+        name: "main".to_string(),
+        module_name: "<test>".to_string(),
+        source_path: Some("/tmp/mem_gate.au".to_string()),
+        span: Span::new(1, 1),
+        receiver: None,
+        params: Vec::new(),
+        local_types: Vec::new(),
+        return_type: Type::Unit,
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::Function {
+                name: "mem::fence".to_string(),
+                signature: Box::new(Type::Function {
+                    params: Vec::new(),
+                    return_type: Box::new(Type::Unit),
+                }),
+            }),
+        }],
+    }]);
+
+    for (label, module) in [
+        ("CallTarget::Name", by_name),
+        ("RuntimeOp::Host", by_host_op),
+        ("Operand::Function", by_function_operand),
+        ("mem::* definition", with_mem_def),
+        ("Terminator::Return", by_terminator),
+    ] {
+        let direct =
+            crate::run_mir(&module).expect_err(&format!("{label}: run_mir must reject mem::*"));
+        assert_eq!(direct.code, "AU4001", "{label}: {direct:?}");
+
+        let serialized = serde_json::to_vec(&module).expect("module should serialize");
+        let via_json = crate::run_serialized_mir(&serialized, "/tmp/mem_gate.au", "")
+            .expect_err(&format!("{label}: run_serialized_mir must reject mem::*"));
+        assert_eq!(via_json.code, "AU4001", "{label}: {via_json:?}");
+    }
+
+    let entry_err = crate::run_mir_entry(&plain, Some("mem::fence"), None, Vec::new())
+        .expect_err("run_mir_entry must reject mem::* entry names");
+    assert_eq!(entry_err.code, "AU4001", "{entry_err:?}");
+
+    let mut untrusted = MirRuntime::new_with_stdout_sink_and_program_args(
+        plain.clone(),
+        Arc::new(Mutex::new(String::new())),
+        None,
+        CancellationContext::default(),
+        Arc::new(Vec::new()),
+        false,
+    );
+    let mut env = Env::default();
+    let builtin_err = untrusted
+        .evaluate_named_builtin("mem::fence", &[], &mut env, None)
+        .expect_err("untrusted runtime must reject mem::* builtins");
+    assert_eq!(builtin_err.code, "AU4001", "{builtin_err:?}");
+
+    let with_import_ast =
+        crate::parse_source("import mem\ndef main():\n    mem.fence()\n").expect("should parse");
+    let with_import_program =
+        crate::check_module_with_builtin_imports(with_import_ast).expect("should check");
+    let with_import_mir = crate::lower_to_mir(&with_import_program);
+    assert!(
+        with_import_mir
+            .functions
+            .iter()
+            .any(|function| function.name == "mem::fence"),
+        "MIR lowering must retain mem::* wrappers when `import mem` is present"
+    );
+    super::run_trusted(&with_import_mir)
+        .expect("trusted execution of MIR with `import mem` should succeed");
+}
+
+#[test]
 fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque_handles() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
@@ -2944,6 +3141,7 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
     );
 
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "aura_test_exchange".to_string(),
         abi: "C".to_string(),
@@ -3065,6 +3263,7 @@ fn mir_runtime_ffi_maps_noncanonical_bool_returns_to_au4001() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "bad_bool".to_string(),
         abi: "C".to_string(),
@@ -3083,6 +3282,130 @@ fn mir_runtime_ffi_maps_noncanonical_bool_returns_to_au4001() {
     assert_eq!(
         error.message,
         "FFI call to `bad_bool` failed: FFI bool return must be encoded as 0 or 1, but received 2"
+    );
+}
+
+#[test]
+fn mir_runtime_ffi_commits_handle_writeback_before_flag_validation_trap() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static OLD_DROPS: AtomicUsize = AtomicUsize::new(0);
+    extern "C" fn count_old_drop(_ptr: *mut c_void) {
+        OLD_DROPS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    OLD_DROPS.store(0, Ordering::SeqCst);
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let old_ptr = 0x1111usize as *mut c_void;
+    let new_ptr = 0x2222usize as *mut c_void;
+    let nullable_token = Type::normalize_union(
+        vec![Type::named("Token"), Type::Unit],
+        "main",
+        &Default::default(),
+    )
+    .expect("nullable token union");
+
+    env.define_typed(
+        "flags",
+        Type::Named("list".to_string(), vec![Type::named("bool")]),
+        Value::Vec(VecValue::new(
+            Type::named("bool"),
+            vec![Value::Bool(false)].into(),
+        )),
+    );
+    let old_handle =
+        FfiHandleValue::owned("Token".to_string(), old_ptr, Some(count_old_drop)).expect("old");
+    let Type::Union(union_def) = &nullable_token else {
+        panic!("expected union");
+    };
+    let token_index = union_def
+        .members
+        .iter()
+        .position(|member| *member == Type::named("Token"))
+        .expect("Token member");
+    env.define_typed(
+        "slot",
+        nullable_token.clone(),
+        Value::Union(Box::new(crate::runtime_value::UnionValue {
+            union_type: nullable_token.clone().into(),
+            member_index: token_index,
+            payload: Value::FfiHandle(old_handle),
+        })),
+    );
+
+    let call = MirExternCall {
+        module_name: String::new(),
+        name: String::new(),
+        symbol: "replace_and_flag".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            MirExternParam {
+                name: "flags".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: Type::Named("list".to_string(), vec![Type::named("bool")]),
+                c_string: false,
+                pointer: true,
+                c_struct: None,
+            },
+            MirExternParam {
+                name: "slot".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: nullable_token.clone(),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+        ],
+        return_type: Type::Unit,
+        c_string_result: false,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
+    };
+    let args = vec![
+        MirArg {
+            name: None,
+            value: Operand::Place("flags".to_string()),
+            writeback_place: Some("flags".to_string()),
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("slot".to_string()),
+            writeback_place: Some("slot".to_string()),
+        },
+    ];
+
+    let error = runtime
+        .evaluate_extern_call_with(&call, &args, &mut env, |_symbol, _sig, arguments| {
+            // Simulate C writing non-canonical bool byte `2` to flags[0]
+            // and replacing *slot with `new_ptr` after freeing `old_ptr`.
+            let crate::ffi::FfiValue::Elements(_, words) = &mut arguments[0] else {
+                panic!("expected bool elements");
+            };
+            words[0] = 2;
+            arguments[1] = crate::ffi::FfiValue::OpaqueHandle(
+                crate::ffi::OpaqueHandle::new(new_ptr).expect("new handle"),
+            );
+            Ok(crate::ffi::FfiValue::Unit)
+        })
+        .expect_err("non-canonical bool element must trap");
+    assert_eq!(error.code, "AU4001");
+
+    // `slot` must already hold `new_ptr`, and `old_ptr` must have been given up
+    // so dropping `env` does not double-free `old_ptr`.
+    let updated = env.read_place("slot").expect("slot remains live");
+    match updated {
+        Value::Union(union) => match &union.payload {
+            Value::FfiHandle(handle) => assert_eq!(handle.as_ptr(), new_ptr),
+            other => panic!("expected updated FfiHandle, got {other:?}"),
+        },
+        other => panic!("expected union value, got {other:?}"),
+    }
+    drop(env);
+    assert_eq!(
+        OLD_DROPS.load(Ordering::SeqCst),
+        0,
+        "old handle must be given up before AU4001 trap so drop does not run again"
     );
 }
 
@@ -3189,6 +3512,7 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
         ),
     ];
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "aura_test_observe_all".to_string(),
         abi: "C".to_string(),
@@ -3276,6 +3600,7 @@ fn mir_runtime_ffi_unmarshals_every_fixed_width_scalar_result() {
         returned: crate::ffi::FfiValue,
     ) -> Value {
         let call = MirExternCall {
+            module_name: String::new(),
             name: String::new(),
             symbol: "aura_test_scalar_result".to_string(),
             abi: "C".to_string(),
@@ -3440,6 +3765,7 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
 
     fn call() -> MirExternCall {
         MirExternCall {
+            module_name: String::new(),
             name: String::new(),
             symbol: "aura_test_writeback_order".to_string(),
             abi: "C".to_string(),
@@ -3584,6 +3910,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
     let unsupported_abi = runtime
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_bad_abi".to_string(),
                 abi: "stdcall".to_string(),
@@ -3611,6 +3938,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
     let unknown_argument = runtime
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_bad_binding".to_string(),
                 abi: "C".to_string(),
@@ -3663,6 +3991,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
         runtime
             .evaluate_extern_call_with(
                 &MirExternCall {
+                    module_name: String::new(),
                     name: String::new(),
                     symbol: "aura_test_shape_guard".to_string(),
                     abi: "C".to_string(),
@@ -3751,6 +4080,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let mutated_shape = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_mutable_shape_guard".to_string(),
                 abi: "C".to_string(),
@@ -3791,6 +4121,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let binding_error = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_binding_guard".to_string(),
                 abi: "C".to_string(),
@@ -3832,6 +4163,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let missing_writeback = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_missing_writeback".to_string(),
                 abi: "C".to_string(),
@@ -3873,6 +4205,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let foreign_failure = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_foreign_failure".to_string(),
                 abi: "C".to_string(),
@@ -3895,6 +4228,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let result_shape = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_result_shape_guard".to_string(),
                 abi: "C".to_string(),
@@ -3917,6 +4251,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let unit = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_success".to_string(),
                 abi: "C".to_string(),
@@ -22102,6 +22437,7 @@ fn ffi_pointer_parameters_cross_as_elements_and_write_a_mut_list_back() {
         ),
     );
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "aura_test_pointers".to_string(),
         abi: "C".to_string(),
@@ -22175,6 +22511,7 @@ fn ffi_out_parameters_write_the_scalar_and_handle_back_to_their_places() {
         crate::union_runtime::coerce_union_boundary(Value::Unit, &nullable_handle),
     );
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "aura_test_out".to_string(),
         abi: "C".to_string(),
@@ -25131,6 +25468,7 @@ def main() -> int32:
         super::ffi_type_for_extern_param(&param).expect("a callback parameter"),
         FfiType::Callback
     );
+    let closures = std::sync::Mutex::new(HashMap::new());
     for (value, ty) in [
         (Value::Bool(true), nothing.clone()),
         (
@@ -25138,7 +25476,7 @@ def main() -> int32:
             Type::named("int32"),
         ),
     ] {
-        let error = super::ffi_callback_from_runtime(&value, &ty)
+        let error = super::ffi_callback_from_runtime(&closures, &value, &ty)
             .expect_err("a callback is a named function of a callback type");
         assert_eq!(error.code, "AU4005");
         assert!(
@@ -25147,12 +25485,18 @@ def main() -> int32:
             error.message
         );
     }
-    let first =
-        super::ffi_callback_from_runtime(&super::mir_function_value("visit", &nothing), &nothing)
-            .expect("a named function");
-    let again =
-        super::ffi_callback_from_runtime(&super::mir_function_value("visit", &nothing), &nothing)
-            .expect("a named function");
+    let first = super::ffi_callback_from_runtime(
+        &closures,
+        &super::mir_function_value("visit", &nothing),
+        &nothing,
+    )
+    .expect("a named function");
+    let again = super::ffi_callback_from_runtime(
+        &closures,
+        &super::mir_function_value("visit", &nothing),
+        &nothing,
+    )
+    .expect("a named function");
     assert_eq!(first, again, "one function and signature share their code");
 
     // Outside a foreign call there is no interpreter to re-enter, and the
@@ -25164,6 +25508,126 @@ def main() -> int32:
         &mut frame,
     );
     assert_eq!(frame, [7]);
+}
+
+#[test]
+fn mir_runtime_nested_reentrant_callbacks_and_panic_containment() {
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" def outer_c(cb: def(x: int32) -> int32, n: int32) -> int32
+extern "C" def inner_c(cb: def(x: int32) -> int32, n: int32) -> int32
+
+def inner_cb(x: int32) -> int32:
+    return x * 3
+
+def outer_cb(x: int32) -> int32:
+    return inner_c(inner_cb, x + 1)
+
+def run() -> int32:
+    return outer_c(outer_cb, 4)
+"#,
+    );
+    // Verify RAII restore when dispatch panics mid-call and nested re-entry
+    // runs without aliasing `&mut MirRuntime`.
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(std::sync::Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+    let cb_ty = Type::Function {
+        params: vec![aura_core::types::FunctionParamContract {
+            keyword_only: false,
+            name: "x".to_string(),
+            passing: crate::ast::ReceiverKind::Borrow,
+            ty: Type::named("int32"),
+            has_default: false,
+        }],
+        return_type: Box::new(Type::named("int32")),
+    };
+    let outer_call = MirExternCall {
+        module_name: String::new(),
+        name: String::new(),
+        symbol: "outer_c".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            MirExternParam {
+                name: "cb".to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: cb_ty.clone(),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+            MirExternParam {
+                name: "n".to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: Type::named("int32"),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+        ],
+        return_type: Type::named("int32"),
+        c_string_result: false,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
+    };
+    let args = vec![
+        MirArg {
+            name: None,
+            value: Operand::Function {
+                name: "inner_cb".to_string(),
+                signature: Box::new(cb_ty.clone()),
+            },
+            writeback_place: None,
+        },
+        MirArg {
+            name: None,
+            value: Operand::Int(5),
+            writeback_place: None,
+        },
+    ];
+
+    // Re-entrant nested invocation via the scoped callback trampoline.
+    let nested_result = runtime
+        .evaluate_extern_call_with(&outer_call, &args, &mut env, |_sym, _sig, ffi_args| {
+            let crate::ffi::FfiValue::Callback(code) = ffi_args[0] else {
+                panic!("expected callback");
+            };
+            let cb_fn: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(code) };
+            // Invoke callback twice inside one foreign call (and while runtime is
+            // owned by CALLBACK_RUNTIME).
+            let a = cb_fn(5);
+            let b = cb_fn(a);
+            Ok(crate::ffi::FfiValue::I32(b))
+        })
+        .expect("re-entrant callback call should succeed");
+    assert_eq!(nested_result.render(), "45");
+
+    // Panicking inside dispatch must still restore CALLBACK_RUNTIME to None
+    // and return the live MirRuntime cleanly to the caller.
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = runtime.evaluate_extern_call_with(&outer_call, &args, &mut env, |_, _, _| {
+            panic!("simulated dispatch panic");
+        });
+    }));
+    assert!(caught.is_err());
+    assert!(
+        super::CALLBACK_RUNTIME.with(|cell| cell.borrow().is_none()),
+        "CALLBACK_RUNTIME must be cleared after unwind"
+    );
+    // Runtime remains usable after the caught dispatch panic.
+    let after = runtime
+        .evaluate_extern_call_with(&outer_call, &args, &mut env, |_sym, _sig, ffi_args| {
+            let crate::ffi::FfiValue::Callback(code) = ffi_args[0] else {
+                panic!("expected callback");
+            };
+            let cb_fn: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(code) };
+            Ok(crate::ffi::FfiValue::I32(cb_fn(7)))
+        })
+        .expect("runtime must remain intact after unwound dispatch");
+    assert_eq!(after.render(), "21");
 }
 
 // The program calls `posix_memalign` from the C library by name.
@@ -25440,6 +25904,105 @@ def main():
             crate::run_source(&format!("import math\n\ndef main():\n{body}")).expect_err(body);
         assert_eq!(error.code, code, "{body}");
         assert!(error.message.contains(message), "{body}: {}", error.message);
+    }
+}
+
+#[test]
+fn trapping_generators_in_wrappers_and_reassignments_propagate_traps_in_mir() {
+    let header = r#"from iter import Generator, Iterator
+from collections import Deque
+
+class TrappingGuard:
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        assert false, "generator exit trap"
+
+def trapping_stream() -> Generator[int64]:
+    with _g = TrappingGuard():
+        yield 1
+        yield 2
+
+def plain_stream() -> Generator[int64]:
+    yield 9
+"#;
+
+    let cases = [
+        (
+            "dict",
+            r#"
+def drop_holder() -> None:
+    mut g = trapping_stream()
+    _ = g.next()
+    mut d: dict[str, Generator[int64]] = {}
+    d["k"] = g
+
+def main():
+    drop_holder()
+"#,
+        ),
+        (
+            "trait_object",
+            r#"
+def drop_holder() -> None:
+    mut g = trapping_stream()
+    _ = g.next()
+    boxed: dyn Iterator[int64] = g
+
+def main():
+    drop_holder()
+"#,
+        ),
+        (
+            "closure",
+            r#"
+def consume_gen(g: own Generator[int64]) -> int64:
+    return 0
+
+def drop_holder() -> None:
+    mut g = trapping_stream()
+    _ = g.next()
+    cb = lambda [own g]: consume_gen(g)
+
+def main():
+    drop_holder()
+"#,
+        ),
+        (
+            "deque",
+            r#"
+def drop_holder() -> None:
+    mut g = trapping_stream()
+    _ = g.next()
+    mut q = Deque[Generator[int64]]()
+    q.push_back(g)
+
+def main():
+    drop_holder()
+"#,
+        ),
+        (
+            "reassign",
+            r#"
+def main():
+    mut g = trapping_stream()
+    _ = g.next()
+    g = plain_stream()
+"#,
+        ),
+    ];
+
+    for (label, body) in cases {
+        let source = format!("{header}{body}");
+        let err = crate::run_source(&source).expect_err(&format!(
+            "case `{label}` must propagate the suspended generator's __exit__ trap"
+        ));
+        assert_eq!(err.code, "AU4001", "case `{label}`: {err:?}");
+        assert!(
+            err.message.contains("generator exit trap"),
+            "case `{label}`: {err:?}"
+        );
     }
 }
 

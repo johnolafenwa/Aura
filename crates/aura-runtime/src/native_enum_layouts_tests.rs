@@ -1074,10 +1074,11 @@ fn a_variant_of_one_scalar_keeps_its_block_in_itself() {
     };
     assert_eq!(typed_copy.take(0), Some(Value::Float(2.5)));
     assert_eq!(typed_copy.scalar_bits(0).map(|(_, bits)| bits), Some(0));
-    let VariantPayloads::Typed(typed_copy) = std::mem::replace(
+    let crate::runtime_value::PayloadParts::Typed(typed_copy) = std::mem::replace(
         &mut variant.payloads,
         VariantPayloads::from(Vec::<Value>::new()),
-    ) else {
+    )
+    .into_parts() else {
         panic!("typed payloads");
     };
     assert_eq!(typed_copy.into_vec(), vec![Value::Float(0.0)]);
@@ -1802,6 +1803,140 @@ fn a_variant_that_drops_a_payload_in_place_keeps_its_boxes_to_its_drop() {
         register_enum_layout(&descriptor, FIRST_TEST_ACCESS + 88).expect("the enum is laid out");
     let mut payloads = TypedPayloads::new(layout, 0);
     assert!(!payloads.release_boxes(|_| panic!("the variant keeps its boxes")));
+}
+
+#[test]
+fn shared_typed_payloads_support_overlapping_and_concurrent_reads() {
+    let prefix = "SharedPayloads";
+    let access = FIRST_TEST_ACCESS + 90;
+    let circle = typed(prefix, access, "Circle", vec![Value::Float(2.5)]);
+    let named = typed(prefix, access, "Named", vec![text("hello"), int32(9)]);
+    let pair = typed(prefix, access, "Pair", vec![circle.clone(), named.clone()]);
+    let payloads = typed_payloads(&pair);
+
+    let first = payloads.get(0);
+    let second = payloads.get(0);
+    let first_box = payloads.payload_box(0);
+    let second_box = payloads.payload_box(0);
+    assert_eq!(first.as_deref(), Some(&circle));
+    assert_eq!(second, first);
+    assert!(first_box.is_some() && second_box.is_some());
+
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            let shared = payloads;
+            let expected_circle = &circle;
+            let expected_named = &named;
+            scope.spawn(move || {
+                for _ in 0..200 {
+                    let a = shared.get(0);
+                    let b = shared.get(1);
+                    let box_a = shared.payload_box(0);
+                    assert_eq!(a.as_deref(), Some(expected_circle));
+                    assert_eq!(b.as_deref(), Some(expected_named));
+                    assert!(box_a.is_some());
+                    assert!(shared.boxed_payloads_all(|_| true));
+                    let copied = shared.copy_with_boxes(
+                        [expected_circle.clone(), expected_named.clone()].into_iter(),
+                    );
+                    assert_eq!(copied.get(0).as_deref(), Some(expected_circle));
+                }
+            });
+        }
+    });
+
+    payloads.refresh_views();
+    assert_eq!(payloads.get(0).as_deref(), Some(&circle));
+}
+
+#[test]
+fn typed_payloads_from_values_drops_only_initialized_slots_on_unwind() {
+    use std::cell::Cell;
+    use std::sync::Arc;
+
+    use aura_core::layout::{LayoutId, LayoutTable};
+
+    use crate::native_runtime::typed_layout::{FieldOps, FIELD_OPS};
+    use crate::native_runtime::RuntimeTypeTag;
+
+    thread_local! {
+        static BOX_CALLS: Cell<usize> = const { Cell::new(0) };
+        static DROP_CALLS: Cell<usize> = const { Cell::new(0) };
+        static FAIL_ON_CALL: Cell<usize> = const { Cell::new(usize::MAX) };
+    }
+
+    fn panicking_tagged_box(value: Value, tag: Option<&RuntimeTypeTag>) -> ElementBox {
+        let call = BOX_CALLS.with(|c| {
+            let n = c.get();
+            c.set(n + 1);
+            n
+        });
+        if call == FAIL_ON_CALL.with(Cell::get) {
+            panic!("simulated construction unwind");
+        }
+        (FIELD_OPS.tagged_box)(value, tag)
+    }
+
+    unsafe fn counting_drop(table: &LayoutTable, id: LayoutId, ptr: *mut u8) {
+        let index = DROP_CALLS.with(|c| {
+            let n = c.get();
+            c.set(n + 1);
+            n
+        });
+        // Only drop genuinely initialized slots so the reproduction test
+        // detects the extra drop call without dereferencing uninitialized bytes.
+        let initialized = FAIL_ON_CALL.with(Cell::get);
+        if index < initialized {
+            unsafe { (FIELD_OPS.drop)(table, id, ptr) };
+        }
+    }
+
+    static TEST_OPS: FieldOps = FieldOps {
+        tagged_box: panicking_tagged_box,
+        drop: counting_drop,
+        ..FIELD_OPS
+    };
+
+    let mut custom = EnumLayout::from_descriptor(descriptor("UnwindTest"), FIRST_TEST_ACCESS + 91)
+        .expect("descriptor builds");
+    custom.ops = &TEST_OPS;
+    let custom: &'static EnumLayout = Box::leak(Box::new(custom));
+
+    let first_val = Value::EnumVariant(EnumVariantValue {
+        enum_name: custom.enum_name().clone(),
+        variant_name: RuntimeName::from("Point"),
+        payloads: VariantPayloads::Values(Vec::new()),
+    });
+    let second_val = first_val.clone();
+
+    // Panic while constructing slot 1 of a 2-payload variant: only slot 0 was initialized.
+    BOX_CALLS.with(|c| c.set(0));
+    DROP_CALLS.with(|c| c.set(0));
+    FAIL_ON_CALL.with(|c| c.set(1));
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = TypedPayloads::from_values(custom, "Pair", vec![first_val.clone(), second_val]);
+    }));
+    assert!(unwound.is_err(), "expected simulated panic on slot 1");
+    assert_eq!(
+        DROP_CALLS.with(Cell::get),
+        1,
+        "only the initialized slot 0 must be dropped on unwind"
+    );
+
+    // Panic while constructing slot 0 of a 1-payload variant: 0 slots were initialized.
+    BOX_CALLS.with(|c| c.set(0));
+    DROP_CALLS.with(|c| c.set(0));
+    FAIL_ON_CALL.with(|c| c.set(0));
+    let _ = Arc::strong_count(&custom.tag);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = TypedPayloads::from_values(custom, "Pair", vec![first_val.clone(), first_val]);
+    }));
+    assert!(unwound.is_err(), "expected simulated panic on slot 0");
+    assert_eq!(
+        DROP_CALLS.with(Cell::get),
+        0,
+        "no uninitialized slot may be dropped when slot 0 unwinds"
+    );
 }
 
 #[test]

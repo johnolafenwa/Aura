@@ -128,7 +128,19 @@ pub struct JsonTape {
     /// The source, then the text of each string that held an escape,
     /// unescaped.
     text: Box<str>,
+    /// For each large object a lookup searched, its keys by text, so that
+    /// looking up many keys of one object costs one pass over it.
+    key_index: KeyIndexes,
 }
+
+/// The value nodes of a large object's entries, by key.
+type KeyIndex = std::collections::HashMap<Box<str>, u32>;
+
+/// The key indexes of a tape's objects, by the object's node.
+type KeyIndexes = std::sync::Mutex<std::collections::HashMap<u32, Arc<KeyIndex>>>;
+
+/// The fewest entries an object has before a lookup indexes its keys.
+const INDEXED_OBJECT_ENTRIES: u32 = 16;
 
 impl std::fmt::Debug for JsonTape {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -177,6 +189,7 @@ impl JsonTape {
             Arc::new(Self {
                 nodes: Box::from(parser.nodes.as_slice()),
                 text: parser.text.into_boxed_str(),
+                key_index: KeyIndexes::default(),
             })
         });
         let (mut nodes, mut keys) = (parser.nodes, parser.keys);
@@ -302,6 +315,7 @@ impl TapeBuilder {
         let tape = Arc::new(JsonTape {
             nodes: Box::from(self.nodes.as_slice()),
             text: Box::from(self.text.as_str()),
+            key_index: KeyIndexes::default(),
         });
         // Buffers a huge document grew are not kept.
         if self.nodes.capacity() > SCRATCH_NODES_KEPT || self.text.capacity() > SCRATCH_TEXT_KEPT {
@@ -598,6 +612,9 @@ impl JsonNode {
         if node.tag != JsonTag::Object {
             return None;
         }
+        if node.a >= INDEXED_OBJECT_ENTRIES {
+            return self.key_index().get(key).copied();
+        }
         // Most keys differ from `key` in length, which a key's node holds,
         // so the text is read only for a key as long as `key`.
         let text = self.tape.text.as_bytes();
@@ -613,6 +630,27 @@ impl JsonNode {
             index = self.tape.next(index + 1);
         }
         None
+    }
+
+    /// The key index of this object node, built on first use. The first
+    /// entry of a key wins, as a search from the front finds it.
+    fn key_index(&self) -> Arc<KeyIndex> {
+        let mut indexes = self
+            .tape
+            .key_index
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(indexes.entry(self.index).or_insert_with(|| {
+            let count = self.tape.node(self.index).a;
+            let mut keys = KeyIndex::with_capacity(count as usize);
+            let mut index = self.index + 1;
+            for _ in 0..count {
+                let text = self.tape.str_at(self.tape.node(index));
+                keys.entry(Box::from(text)).or_insert(index + 1);
+                index = self.tape.next(index + 1);
+            }
+            Arc::new(keys)
+        }))
     }
 
     /// The number of nodes this value spans, keys included.

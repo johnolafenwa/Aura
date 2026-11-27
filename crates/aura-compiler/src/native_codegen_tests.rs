@@ -3571,6 +3571,7 @@ fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mi
 fn direct_ffi_codegen_calls_the_foreign_symbol_itself() {
     let call = Rvalue::Call {
         callee: CallTarget::Extern(MirExternCall {
+            module_name: String::new(),
             name: String::new(),
             symbol: "getpid".to_string(),
             abi: "C".to_string(),
@@ -3654,6 +3655,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "read_count".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "read".to_string(),
                                 abi: "C".to_string(),
@@ -3699,6 +3701,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "handle".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "malloc".to_string(),
                                 abi: "C".to_string(),
@@ -3727,6 +3730,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "released".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "free".to_string(),
                                 abi: "C".to_string(),
@@ -3755,6 +3759,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "narrow".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "htons".to_string(),
                                 abi: "C".to_string(),
@@ -3818,6 +3823,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let invalid_abi = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "Rust".to_string(),
@@ -3838,6 +3844,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let wrong_arity = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "C".to_string(),
@@ -3867,6 +3874,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let unexpected_writeback = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "C".to_string(),
@@ -3937,6 +3945,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                         target: "%t0".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "read".to_string(),
                                 abi: "C".to_string(),
@@ -17642,6 +17651,90 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_ffi_codegen_sanitizes_all_flag_lists_before_trapping() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" def writes_two(first: mut ptr[bool], second: mut ptr[bool]) -> None
+
+def main() -> int32:
+    mut a: list[bool] = [false]
+    mut b: list[bool] = [false]
+    writes_two(a, b)
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("multi-flag-list call should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "writes_two",
+        "aura_direct_ffi_sanitize_flags",
+        "aura_direct_ffi_bad_bool",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn direct_ffi_codegen_commits_handle_writeback_before_flag_and_scalar_checks() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" opaque class Store drop st_close
+extern "C" def st_close(store: own Store) -> None
+extern "C" def replace_and_check(
+    flags: mut ptr[bool],
+    ok: mut bool,
+    out: mut Store | None
+) -> None
+
+def main() -> int32:
+    mut flags: list[bool] = [false]
+    mut ok: bool = false
+    mut slot: Store | None = None
+    replace_and_check(flags, ok, slot)
+    return 0
+"#,
+    );
+    let object_bytes =
+        emit_unoptimized_object(&module).expect("handle + flag writeback call should emit");
+    let file = object::File::parse(&*object_bytes).expect("parse object");
+    let mut call_offsets: HashMap<String, u64> = HashMap::new();
+    for section in file.sections() {
+        for (offset, reloc) in section.relocations() {
+            if let RelocationTarget::Symbol(sym_idx) = reloc.target() {
+                if let Ok(sym) = file.symbol_by_index(sym_idx) {
+                    if let Ok(name) = sym.name() {
+                        let clean = name.trim_start_matches('_').to_string();
+                        call_offsets.entry(clean).or_insert(offset);
+                    }
+                }
+            }
+        }
+    }
+    let stored = *call_offsets
+        .get("aura_direct_ffi_stored_handle")
+        .expect("missing aura_direct_ffi_stored_handle");
+    let check_flags = *call_offsets
+        .get("aura_direct_ffi_check_flags")
+        .expect("missing aura_direct_ffi_check_flags");
+    let bad_bool = *call_offsets
+        .get("aura_direct_ffi_bad_bool")
+        .expect("missing aura_direct_ffi_bad_bool");
+    assert!(
+        stored < check_flags,
+        "handle writeback ({stored}) must precede flag validation ({check_flags})"
+    );
+    assert!(
+        stored < bad_bool,
+        "handle writeback ({stored}) must precede bool scalar validation ({bad_bool})"
+    );
+}
+
+#[test]
 fn direct_ffi_codegen_lowers_every_boundary_type_to_c_arguments() {
     let module = lower_ffi_source_to_mir(
         r#"
@@ -18121,6 +18214,48 @@ def main() -> int32:
             "the object should reference `{symbol}`: {referenced:?}"
         );
     }
+
+    // A separate function calling an extern symbol without any callback
+    // parameter must still check for callback failures registered elsewhere.
+    let split = lower_ffi_source_to_mir(
+        r#"
+extern "C" def reg(cb: def(x: int32) -> int32) -> None
+extern "C" def fire() -> int32
+
+def handler(x: int32) -> int32:
+    return x + 1
+
+def setup() -> None:
+    reg(handler)
+
+def trigger() -> int32:
+    return fire()
+
+def main() -> int32:
+    setup()
+    return trigger()
+"#,
+    );
+    let split_obj = emit_unoptimized_object(&split).expect("split callback module should emit");
+    let file = object::File::parse(&*split_obj).expect("parse object");
+    let mut callback_checks = 0usize;
+    for section in file.sections() {
+        for (_, reloc) in section.relocations() {
+            if let RelocationTarget::Symbol(sym_idx) = reloc.target() {
+                if let Ok(sym) = file.symbol_by_index(sym_idx) {
+                    if sym.name().is_ok_and(|name| {
+                        name.trim_start_matches('_') == "aura_direct_ffi_callback_check"
+                    }) {
+                        callback_checks += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        callback_checks >= 2,
+        "both `reg` and `fire` must emit aura_direct_ffi_callback_check, found {callback_checks}"
+    );
 
     // C text reaches a callback as a pointer, which the body copies into
     // a `str` and frees when the function returns.
@@ -19460,6 +19595,88 @@ def main():
 }
 
 #[test]
+fn typed_enum_handle_payload_copies_into_a_fresh_box() {
+    let source = r#"
+enum Holder:
+    QueueBox(Queue[int64])
+    Empty
+
+def extract(h: Holder) -> Queue[int64]:
+    match h:
+        case Holder.QueueBox(q):
+            return q
+        case Holder.Empty:
+            return Queue[int64](capacity=1)
+
+def main():
+    q = Queue[int64](capacity=1)
+    h = Holder.QueueBox(q)
+    out = extract(h)
+    _ = out.put(1)
+"#;
+    let mir = lower_source_to_mir(source).expect("the enum extraction should lower");
+    let object = emit_unoptimized_object(&mir).expect("the enum extraction should emit");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_instance_copy_field"),
+        "extracting a handle payload from a typed enum must copy into a fresh box instead of retaining the container's ElementBox: {referenced:?}"
+    );
+}
+
+#[test]
+fn array_holder_count_loads_atomically_on_direct_and_loop_writes() {
+    let source = r#"
+def single_write(xs: mut Array[int64], i: int64, v: int64) -> None:
+    xs[i] = v
+
+def loop_write(xs: mut Array[int64], n: int64) -> None:
+    for i in range(n):
+        xs[i] = i
+
+def main() -> None:
+    mut xs = Array[int64].zeros([4])
+    single_write(xs, 0, 7)
+    loop_write(xs, 4)
+"#;
+    let mir = lower_source_to_mir(source).expect("array writes should lower");
+    let validated = super::validated_for_emission(&mir).expect("MIR validates");
+    let ir = super::NativeCodegen::with_validated_loans(&validated, "<test>", source)
+        .expect("codegen initializes")
+        .emit_ir()
+        .expect("LLVM IR emits");
+
+    // Extract the IR definitions of single_write and loop_write and assert each
+    // performs an atomic i64 load of `ArrayOwner.holders`.
+    for fn_name in ["aura_fn_single_write", "aura_fn_loop_write"] {
+        let needle = format!("@{fn_name}(");
+        let def_start = ir
+            .match_indices(&needle)
+            .find_map(|(pos, _)| {
+                let line_start = ir[..pos].rfind('\n').map_or(0, |i| i + 1);
+                ir[line_start..pos]
+                    .starts_with("define ")
+                    .then_some(line_start)
+            })
+            .unwrap_or_else(|| panic!("missing definition for `{fn_name}` in IR"));
+        let rest = &ir[def_start..];
+        let end = rest.find("\n}\n").unwrap_or(rest.len());
+        let body = &rest[..end];
+        let atomic_loads = body.matches("load atomic i64").count();
+        assert!(
+            atomic_loads >= 1,
+            "expected atomic i64 load for ArrayOwner.holders in `{fn_name}`:\n{body}"
+        );
+        if fn_name == "aura_fn_loop_write" {
+            // Loop snapshot preheader + fallback element-write path both check `ArrayOwner.holders`.
+            assert!(
+                atomic_loads >= 2,
+                "expected atomic i64 loads in both loop snapshot preheader and direct write path in `{fn_name}` (got {atomic_loads}):\n{body}"
+            );
+        }
+    }
+}
+
+#[test]
 fn compiled_constant_data_has_no_initializer_call_at_entry() {
     let source = "def make() -> list[int64]:\n    return [11, 19]\nconst values = make()\ndef main():\n    print(values[0])\n";
     let mir = lower_source_to_mir(source).expect("constant should lower");
@@ -19605,6 +19822,37 @@ fn mixed_width_mir_comparisons_only_box_the_full_unsigned_and_signed_pair() {
             );
         }
     }
+}
+
+#[test]
+fn direct_ffi_codegen_reinterprets_a_large_struct_through_a_zeroed_slot() {
+    // Both layouts are wider than the slot size the stores are unrolled
+    // for, so the slot is zeroed by a loop.
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" class Big:
+    data: array[uint64, 40]
+
+extern "C" class Other:
+    words: array[uint32, 82]
+
+extern "C" def widen(big: Big) -> Other symbol "aura.reinterpret"
+extern "C" def narrow(other: Other) -> Big symbol "aura.reinterpret"
+
+def run(big: Big) -> uint64:
+    other = widen(big)
+    print(other.words[81])
+    return narrow(other).data[39]
+
+def main() -> int32:
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("a large reinterpret should emit");
+    let referenced = object_referenced_symbols(&object);
+    assert!(!referenced
+        .iter()
+        .any(|name| name.trim_start_matches('_') == crate::ffi::REINTERPRET_SYMBOL));
 }
 
 #[test]

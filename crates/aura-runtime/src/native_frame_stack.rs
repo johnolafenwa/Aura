@@ -108,6 +108,14 @@ pub struct DirectFrameStack {
     /// deepest depth whose pop has runtime work to do. A pop above it
     /// changes no record, so generated code makes it.
     pop_guard: usize,
+    /// The runtime boundaries (`task_runtime_boundary`) active on this
+    /// task's machine stack. Kept here, next to the task's frames, so a
+    /// boundary counts itself without looking the task's state up.
+    pub(super) rust_boundary_depth: usize,
+    /// Whether the task's runtime state holds an exit a dropped generator
+    /// recorded inside the current runtime boundary. Kept here so a
+    /// boundary that returns normally checks it without a lookup.
+    pub(super) generator_drop_exit_armed: bool,
 }
 
 impl DirectFrameStack {
@@ -130,6 +138,8 @@ impl DirectFrameStack {
             inline: [0; DIRECT_FRAME_STACK_INLINE_ENTRIES],
             owned_values: DirectOwnedValues::new(),
             pop_guard: 0,
+            rust_boundary_depth: 0,
+            generator_drop_exit_armed: false,
         })));
         // SAFETY: the box was just leaked, so nothing else refers to it.
         let header = unsafe { &mut *stack.as_ptr() };
@@ -466,7 +476,7 @@ fn frame_from_word(word: usize) -> DirectRuntimeCallFrame {
     }
 }
 
-fn release_frame_word(word: usize) {
+pub(super) fn release_frame_word(word: usize) {
     if word & DIRECT_OWNED_FRAME_TAG != 0 {
         let frame = (word & !DIRECT_OWNED_FRAME_TAG) as *mut DirectRuntimeCallFrame;
         // SAFETY: the entry owned the record, and it was just removed.

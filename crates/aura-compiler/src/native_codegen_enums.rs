@@ -608,7 +608,7 @@ impl FunctionCompiler<'_> {
 
     /// Reads payload `index` of variant `variant_name` from the variant box
     /// `scrutinee` into a value of direct type `target`: a scalar where it
-    /// lies, or a new reference to the payload's box, when the variant keeps
+    /// lies, or a fresh copy of the payload's box, when the variant keeps
     /// its payloads in place, and with `slow` otherwise. `None` when the
     /// enum is not kept in place or generated code cannot read the payload
     /// as `target`. A read for a lent payload (see `lend_element`) holds the
@@ -761,7 +761,10 @@ impl FunctionCompiler<'_> {
                 if lend {
                     vec![boxed, self.builder.iconst(types::I64, 1)]
                 } else {
-                    vec![self.retain_opaque_handle(boxed)]
+                    let copy = self
+                        .builder
+                        .call(self.runtime[RuntimeFn::InstanceCopyField], &[boxed]);
+                    vec![copy.results[0]]
                 }
             }
         };

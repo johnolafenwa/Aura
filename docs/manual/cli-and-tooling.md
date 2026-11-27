@@ -82,8 +82,8 @@ Runtime diagnostics include source context where possible.
 
 By default, task execution uses the available parallelism that the host
 reports. The provisional `AURA_WORKERS` environment override accepts a
-positive integer, including a count larger than the host's available-core
-count.
+positive integer up to 4096, including a count larger than the host's
+available-core count.
 
 - `AURA_WORKERS=4 aura run app.au` selects four pinned task workers.
 - `AURA_WORKERS=1` keeps single-worker cooperative execution through the same
@@ -146,8 +146,9 @@ contributor convenience.
 Use the same target for source checks and object generation, for example
 `aura check --freestanding --target x86_64-unknown-none --kernel kernel.au`
 and `aura build --freestanding --target x86_64-unknown-none --kernel -o kernel.o kernel.au`.
-The optional x86-64 kernel profile disables the red zone, uses the kernel
-code model and passes floating-point values in integer registers.
+The optional x86-64 kernel profile uses the kernel code model and passes
+floating-point values in integer registers. No freestanding x86-64 build
+uses the red zone.
 Set `aura.freestandingTarget` in VS Code to check a board for its target.
 The formatter preserves the contents of assembly strings. Verification
 reports AU4035 when it encounters assembly.

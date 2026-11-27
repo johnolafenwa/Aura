@@ -151,6 +151,21 @@ impl ExpansionBudget {
         check_key_shape(ty, module_name, canonical_names, None, self.limits, span)
     }
 
+    /// Checks that a type the checker builds from an expression, such as
+    /// the type of a tuple of tuples, stays within the per-result node and
+    /// depth limits. Each such type is a tree, so nesting can make it grow
+    /// by a power of the source length.
+    pub fn check_inferred(&self, ty: &Type, span: Span) -> Result<()> {
+        prospective_nodes(
+            ty,
+            &HashMap::new(),
+            self.limits.result_nodes,
+            self.limits.recursion_depth,
+            span,
+        )
+        .map(|_| ())
+    }
+
     /// Retains per-expansion limits for MIR lowering after semantic checking,
     /// without charging the semantic compilation aggregate a second time.
     pub fn for_checked_lowering(&self) -> Self {

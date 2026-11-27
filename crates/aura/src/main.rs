@@ -257,7 +257,25 @@ fn main() {
             }
         }
         "build" => {
-            let remaining = args.collect::<Vec<_>>();
+            let mut remaining = args.collect::<Vec<_>>();
+            // `--` ends the options: the one argument after it is the source
+            // path, even when it begins with `-`.
+            let literal_path = remaining
+                .iter()
+                .position(|arg| arg == "--")
+                .map(|delimiter| {
+                    let tail = remaining.split_off(delimiter);
+                    match <[String; 2]>::try_from(tail) {
+                        Ok([_, path]) => path,
+                        Err(_) => print_usage_and_exit(2),
+                    }
+                });
+            if let Some(path) = &literal_path {
+                if remaining.iter().any(|arg| arg == "--freestanding") {
+                    // `build_freestanding` reads its own path argument.
+                    remaining.push(path.clone());
+                }
+            }
             if remaining.iter().any(|arg| arg == "--freestanding") {
                 build_freestanding(remaining);
                 return;
@@ -271,7 +289,11 @@ fn main() {
             let remaining = apply_build_target(remaining);
             let remaining = apply_target_cpu(remaining);
             let (output_path, debug, embed_rpath, input_args) = parse_build_args(remaining);
-            let input = read_input(&mut input_args.into_iter());
+            let input = match literal_path {
+                Some(path) if input_args.is_empty() => read_input_path(path),
+                Some(_) => print_usage_and_exit(2),
+                None => read_input(&mut input_args.into_iter()),
+            };
             let _target = build_options::target_scope(
                 aura_compiler::hosted_target().map(|target| target.name()),
                 debug,
@@ -4548,10 +4570,7 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, bool, bool, Vec<String>) {
     }
 
     let output = output.unwrap_or_else(|| print_usage_and_exit(2));
-    if input_args.is_empty() {
-        print_usage_and_exit(2);
-    }
-
+    // `read_input` rejects a missing path.
     (output, debug, embed_rpath, input_args)
 }
 
@@ -4583,7 +4602,11 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
         print_usage_and_exit(2);
     }
 
-    let path = first;
+    read_input_path(first)
+}
+
+/// Reads the source file at `path`, a literal path rather than an option.
+fn read_input_path(path: String) -> Input {
     let source = match fs::read_to_string(&path) {
         Ok(source) => source,
         Err(error) => {

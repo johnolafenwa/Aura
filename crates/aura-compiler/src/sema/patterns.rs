@@ -10,6 +10,66 @@ fn pattern_has_root_type_arm(pattern: &Pattern) -> bool {
     }
 }
 
+/// What a match guard did to an outer binding: its move state and its union
+/// narrowing facts after the guard ran.
+struct GuardEffect {
+    name: String,
+    binding: LocalBinding,
+}
+
+/// Collects the outer bindings whose move state or narrowing a guard changed.
+/// Names the arm's pattern binds shadow outer names inside the guard, so the
+/// outer binding they hide is left alone.
+fn guard_effects(
+    before: &HashMap<String, LocalBinding>,
+    after: &HashMap<String, LocalBinding>,
+    pattern_names: &BTreeSet<String>,
+) -> Vec<GuardEffect> {
+    after
+        .iter()
+        .filter(|(name, _)| !pattern_names.contains(*name))
+        .filter_map(|(name, binding)| {
+            let previous = before.get(name)?;
+            let changed = previous.moved != binding.moved
+                || previous.moved_fields != binding.moved_fields
+                || previous.narrowed != binding.narrowed
+                || previous.stale_narrowing != binding.stale_narrowing;
+            changed.then(|| GuardEffect {
+                name: name.clone(),
+                binding: binding.clone(),
+            })
+        })
+        .collect()
+}
+
+fn apply_guard_effects(effects: &[GuardEffect], locals: &mut HashMap<String, LocalBinding>) {
+    for effect in effects {
+        let Some(binding) = locals.get_mut(&effect.name) else {
+            continue;
+        };
+        // Moves only accumulate. A fact the guard established holds only when
+        // the guard is true, so only the facts it invalidated carry over.
+        if effect.binding.moved && !binding.moved {
+            binding.moved = true;
+            binding.moved_at = effect.binding.moved_at;
+        }
+        for (path, span) in &effect.binding.moved_fields {
+            binding.moved_fields.entry(path.clone()).or_insert(*span);
+        }
+        binding
+            .narrowed
+            .retain(|path, fact| effect.binding.narrowed.get(path) == Some(fact));
+        for (path, stale) in &effect.binding.stale_narrowing {
+            if !binding.narrowed.contains_key(path) {
+                binding
+                    .stale_narrowing
+                    .entry(path.clone())
+                    .or_insert_with(|| stale.clone());
+            }
+        }
+    }
+}
+
 fn pattern_contains_type_arm(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Type(_) => true,
@@ -347,8 +407,10 @@ impl FunctionChecker<'_> {
                 let mut prior = Vec::new();
                 let mut arm_states = Vec::new();
                 let mut all_return = true;
+                // A failed guard has already run when the next arm is tried.
+                let mut guard_state = locals.clone();
                 for arm in &match_stmt.arms {
-                    let mut arm_locals = locals.clone();
+                    let mut arm_locals = guard_state.clone();
                     if let Some(place) = shared_match_place.as_ref() {
                         self.retain_shared_match_place(place, match_stmt.span, &mut arm_locals);
                     }
@@ -372,6 +434,7 @@ impl FunctionChecker<'_> {
                         &arm.pattern,
                         match_stmt.capability,
                         &mut arm_locals,
+                        &mut guard_state,
                     )?;
                     self.expire_views_unused_in_branch(
                         &arm.body,
@@ -427,8 +490,10 @@ impl FunctionChecker<'_> {
                 let mut all_return = true;
                 let mut arm_states = Vec::new();
 
+                // A failed guard has already run when the next arm is tried.
+                let mut guard_state = locals.clone();
                 for (index, arm) in match_stmt.arms.iter().enumerate() {
-                    let mut arm_locals = locals.clone();
+                    let mut arm_locals = guard_state.clone();
                     if self.is_copy_type(&scrutinee_ty) || pattern_contains_type_arm(&arm.pattern) {
                         if let Some(place) = shared_match_place.as_ref() {
                             self.retain_shared_match_place(place, match_stmt.span, &mut arm_locals);
@@ -637,6 +702,7 @@ impl FunctionChecker<'_> {
                         &arm.pattern,
                         match_stmt.capability,
                         &mut arm_locals,
+                        &mut guard_state,
                     )?;
                     self.expire_views_unused_in_branch(
                         &arm.body,
@@ -743,8 +809,10 @@ impl FunctionChecker<'_> {
             let mut covered_bools = BTreeSet::<bool>::new();
             let mut arm_states = Vec::new();
 
+            // A failed guard has already run when the next arm is tried.
+            let mut guard_state = locals.clone();
             for (index, arm) in match_stmt.arms.iter().enumerate() {
-                let mut arm_locals = locals.clone();
+                let mut arm_locals = guard_state.clone();
                 if self.is_copy_type(&scrutinee_ty) || pattern_contains_type_arm(&arm.pattern) {
                     if let Some(place) = shared_match_place.as_ref() {
                         self.retain_shared_match_place(place, match_stmt.span, &mut arm_locals);
@@ -873,6 +941,7 @@ impl FunctionChecker<'_> {
                     &arm.pattern,
                     match_stmt.capability,
                     &mut arm_locals,
+                    &mut guard_state,
                 )?;
                 self.expire_views_unused_in_branch(&arm.body, &control_last_uses, &mut arm_locals);
                 let arm_flow = self.check_block(
@@ -1327,8 +1396,10 @@ impl FunctionChecker<'_> {
                 let mut result_ty = expected.cloned();
                 let mut prior = Vec::new();
                 let mut arm_states = Vec::new();
+                // A failed guard has already run when the next arm is tried.
+                let mut guard_state = locals.clone();
                 for arm in arms {
-                    let mut arm_locals = locals.clone();
+                    let mut arm_locals = guard_state.clone();
                     if let Some(place) = shared_match_place.as_ref() {
                         self.retain_shared_match_place(place, span, &mut arm_locals);
                     }
@@ -1352,6 +1423,7 @@ impl FunctionChecker<'_> {
                         &arm.pattern,
                         borrow_mode,
                         &mut arm_locals,
+                        &mut guard_state,
                     )?;
                     let arm_ty = self.type_of_match_arm_value(
                         &arm.value,
@@ -1400,8 +1472,10 @@ impl FunctionChecker<'_> {
                 let mut wildcard_seen = false;
                 let mut arm_states = Vec::new();
 
+                // A failed guard has already run when the next arm is tried.
+                let mut guard_state = locals.clone();
                 for (index, arm) in arms.iter().enumerate() {
-                    let mut arm_locals = locals.clone();
+                    let mut arm_locals = guard_state.clone();
                     if self.is_copy_type(&scrutinee_ty) || pattern_contains_type_arm(&arm.pattern) {
                         if let Some(place) = shared_match_place.as_ref() {
                             self.retain_shared_match_place(place, span, &mut arm_locals);
@@ -1599,6 +1673,7 @@ impl FunctionChecker<'_> {
                         &arm.pattern,
                         borrow_mode,
                         &mut arm_locals,
+                        &mut guard_state,
                     )?;
                     let arm_ty = self.type_of_match_arm_value(
                         &arm.value,
@@ -1701,8 +1776,10 @@ impl FunctionChecker<'_> {
             let mut covered_bools = BTreeSet::<bool>::new();
             let mut arm_states = Vec::new();
 
+            // A failed guard has already run when the next arm is tried.
+            let mut guard_state = locals.clone();
             for (index, arm) in arms.iter().enumerate() {
-                let mut arm_locals = locals.clone();
+                let mut arm_locals = guard_state.clone();
                 if self.is_copy_type(&scrutinee_ty) || pattern_contains_type_arm(&arm.pattern) {
                     if let Some(place) = shared_match_place.as_ref() {
                         self.retain_shared_match_place(place, span, &mut arm_locals);
@@ -1817,6 +1894,7 @@ impl FunctionChecker<'_> {
                     &arm.pattern,
                     borrow_mode,
                     &mut arm_locals,
+                    &mut guard_state,
                 )?;
                 let arm_ty = self.type_of_match_arm_value(
                     &arm.value,
@@ -2104,17 +2182,19 @@ impl FunctionChecker<'_> {
         pattern: &Pattern,
         borrow_mode: ReceiverKind,
         locals: &mut HashMap<String, LocalBinding>,
+        guard_state: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
         let Some(guard) = guard else {
             return Ok(());
         };
+        let mut pattern_names = BTreeSet::new();
+        Self::collect_pattern_binding_names(pattern, &mut pattern_names);
+        let before_guard = locals.clone();
         let mut candidate_locals;
         let guard_locals = if borrow_mode == ReceiverKind::Value {
             candidate_locals = locals.clone();
-            let mut names = BTreeSet::new();
-            Self::collect_pattern_binding_names(pattern, &mut names);
-            for name in names {
-                if let Some(binding) = candidate_locals.get_mut(&name) {
+            for name in &pattern_names {
+                if let Some(binding) = candidate_locals.get_mut(name) {
                     if !self.is_copy_type(&binding.ty) {
                         binding.passing = ReceiverKind::Borrow;
                         binding.borrowed_at = Some(guard.span);
@@ -2123,7 +2203,7 @@ impl FunctionChecker<'_> {
             }
             &mut candidate_locals
         } else {
-            locals
+            &mut *locals
         };
         self.reject_mutable_returned_view_value(guard, guard_locals, false)?;
         let actual = match self.type_of_expr(guard, guard_locals) {
@@ -2149,6 +2229,13 @@ impl FunctionChecker<'_> {
                 format!("match guard expects exactly `bool`, found `{actual}`"),
             ));
         }
+        // The guard runs before the arm commits. Its moves and mutations of
+        // outer places hold in the arm body and in every later arm.
+        let effects = guard_effects(&before_guard, guard_locals, &pattern_names);
+        if borrow_mode == ReceiverKind::Value {
+            apply_guard_effects(&effects, locals);
+        }
+        apply_guard_effects(&effects, guard_state);
         Ok(())
     }
 
@@ -2604,6 +2691,41 @@ impl FunctionChecker<'_> {
         self.pattern_rows_cover_type_union(&rows, element_types)
     }
 
+    /// Whether a value of `ty` can exist, as far as splitting a pattern
+    /// column on it is concerned: a tuple needs each element, a union a
+    /// member, and an enum a variant whose payloads can all exist. Any
+    /// other type is not split on unless a pattern names its parts.
+    fn column_type_is_inhabited(&self, ty: &Type) -> bool {
+        self.type_is_inhabited_within(ty, 0)
+    }
+
+    fn type_is_inhabited_within(&self, ty: &Type, depth: usize) -> bool {
+        // Too deep to tell: answer no, which keeps the full split.
+        if depth > 32 {
+            return false;
+        }
+        match ty {
+            Type::Tuple(elements) => elements
+                .iter()
+                .all(|element| self.type_is_inhabited_within(element, depth + 1)),
+            Type::Union(union) => union
+                .members
+                .iter()
+                .any(|member| self.type_is_inhabited_within(member, depth + 1)),
+            _ => match self.enum_variants_for_type(ty) {
+                Some(variants) => {
+                    variants.iter().any(|(_, payloads)| payloads.is_empty())
+                        || variants.iter().any(|(_, payloads)| {
+                            payloads
+                                .iter()
+                                .all(|payload| self.type_is_inhabited_within(payload, depth + 1))
+                        })
+                }
+                None => true,
+            },
+        }
+    }
+
     pub(super) fn pattern_rows_cover_type_union(
         &self,
         rows: &[Vec<Pattern>],
@@ -2613,6 +2735,18 @@ impl FunctionChecker<'_> {
             return !rows.is_empty();
         };
         let irrefutable = |pattern: &Pattern| self.pattern_covers_entire_type(pattern, first_ty);
+
+        // When no row tells the values of an inhabited first column apart,
+        // splitting on them gives the same rows for each value: the rows
+        // cover the types exactly when they cover the remaining ones. This
+        // keeps a match on a wide tuple from branching on every column.
+        if !rows.is_empty()
+            && rows.iter().all(|row| row.first().is_some_and(&irrefutable))
+            && self.column_type_is_inhabited(first_ty)
+        {
+            let specialized = rows.iter().map(|row| row[1..].to_vec()).collect::<Vec<_>>();
+            return self.pattern_rows_cover_type_union(&specialized, remaining_types);
+        }
 
         if matches!(first_ty, Type::Union(_) | Type::Unit) {
             let members = match first_ty {

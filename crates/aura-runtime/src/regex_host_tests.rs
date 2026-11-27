@@ -230,3 +230,119 @@ fn the_thread_cache_starts_again_when_it_is_full_and_recompiles_from_the_text() 
         .expect("the thread ends");
     assert!(matched);
 }
+
+#[test]
+fn replacement_expands_group_references_as_the_regex_crate_does() {
+    let pattern = r"(?P<word>\w+)@(\w+)";
+    let regex = Regex::new(pattern).unwrap();
+    let a = number(pattern);
+    let text = "a@b, c@d and e@f@g";
+    for replacement in [
+        "",
+        "x",
+        "$1",
+        "$2-$1",
+        "${2}x",
+        "$2x",
+        "$word",
+        "${word}!",
+        "$$",
+        "$$1",
+        "$",
+        "a$",
+        "${",
+        "${1",
+        "$9",
+        "${9}",
+        "$nope",
+        "${+1}",
+        "$-",
+        "${}",
+        "$1$1$1",
+        "\u{e9}$1\u{e9}",
+    ] {
+        for all in [false, true] {
+            let name = if all {
+                "regex::__aura_replace_all"
+            } else {
+                "regex::__aura_replace"
+            };
+            let expected = if all {
+                regex.replace_all(text, replacement)
+            } else {
+                regex.replace(text, replacement)
+            };
+            let found =
+                evaluate_regex_builtin(name, a, text, RegexArgument::Text(replacement)).unwrap();
+            assert_eq!(
+                text_of(&found),
+                expected.as_ref(),
+                "{replacement:?} all={all}"
+            );
+        }
+    }
+    let empty = number("x*");
+    let found = evaluate_regex_builtin(
+        "regex::__aura_replace_all",
+        empty,
+        "abc",
+        RegexArgument::Text("-"),
+    )
+    .unwrap();
+    assert_eq!(
+        text_of(&found),
+        Regex::new("x*").unwrap().replace_all("abc", "-").as_ref()
+    );
+}
+
+fn text_of(value: &Value) -> String {
+    text(value)
+}
+
+#[test]
+fn a_large_replacement_over_many_matches_stops_at_the_limit() {
+    // 100000 matches of a 50000-byte replacement would be 5 GB.
+    let a = number("a");
+    let source = "a".repeat(100_000);
+    let replacement = "b".repeat(50_000);
+    let error = evaluate_regex_builtin(
+        "regex::__aura_replace_all",
+        a,
+        &source,
+        RegexArgument::Text(&replacement),
+    )
+    .expect_err("over the string limit");
+    assert_eq!(error.code.as_str(), "AU4005");
+    // Group references count toward the limit too.
+    let group = number("(a)");
+    let replacement = "$1".repeat(40_000);
+    let error = evaluate_regex_builtin(
+        "regex::__aura_replace_all",
+        group,
+        &source,
+        RegexArgument::Text(&replacement),
+    )
+    .expect_err("over the string limit");
+    assert_eq!(error.code.as_str(), "AU4005");
+}
+
+#[test]
+fn the_pattern_table_is_bounded() {
+    let mut table = PatternTable::default();
+    assert_eq!(table.number("a", 2, 4), Ok(0));
+    assert_eq!(table.number("a", 2, 4), Ok(0));
+    assert_eq!(table.number("bc", 2, 4), Ok(1));
+    assert!(table.number("d", 2, 4).unwrap_err().contains("more than 2"));
+    let mut table = PatternTable::default();
+    assert_eq!(table.number("abc", 8, 4), Ok(0));
+    assert!(table.number("de", 8, 4).is_err());
+    assert_eq!(table.number("d", 8, 4), Ok(1));
+}
+
+#[test]
+fn escape_refuses_a_result_over_the_string_limit() {
+    let dots = ".".repeat(MAX_STRING_BYTES / 2 + 1);
+    let error =
+        host("regex::__aura_escape", vec![Value::string(dots)]).expect_err("over the string limit");
+    assert_eq!(error.code.as_str(), "AU4005");
+}

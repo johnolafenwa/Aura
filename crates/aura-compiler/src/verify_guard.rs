@@ -167,11 +167,12 @@ fn references(
 
 /// Decides which of `candidates` keep their assumption. `entry` is the
 /// module being verified, and `top_level` names its module-level code.
-pub(crate) fn guards(
-    functions: &BTreeMap<&str, &MirFunction>,
+pub(crate) fn guards<'a>(
+    functions: &BTreeMap<&str, &'a MirFunction>,
     candidates: &BTreeSet<&str>,
     entry: &str,
     top_level: Option<&str>,
+    owner_of: impl Fn(&'a MirFunction) -> &'a str,
 ) -> Guards {
     let generic: BTreeSet<&str> = functions
         .values()
@@ -203,19 +204,20 @@ pub(crate) fn guards(
         }
         reached.push((function, unproved));
     }
-    let module_of = |name: &str| functions[name].module_name.as_str();
+    let module_of = |name: &str| owner_of(functions[name]);
     let mut guarded: BTreeSet<String> = candidates.iter().map(|name| name.to_string()).collect();
     for (function, unproved) in &reached {
+        let caller_module = owner_of(function);
         for target in unproved {
             let home = module_of(target);
-            if home == entry || home == function.module_name {
+            if home == entry || home == caller_module {
                 guarded.remove(target);
             }
         }
     }
     let mut charged = BTreeMap::new();
     for (function, unproved) in &reached {
-        if function.module_name != entry {
+        if owner_of(function) != entry {
             continue;
         }
         if let Some(target) = unproved.iter().find(|target| guarded.contains(*target)) {

@@ -1220,3 +1220,28 @@ fn a_str_view_cache_counts_early_misses_without_a_view() {
         assert_eq!(counted.get_or_create().misses, 1);
     }
 }
+
+#[test]
+fn try_append_appends_like_append() {
+    let mut list = ListElements::from(vec![int(1), int(2)]);
+    list.try_append(ListElements::from(vec![int(3)]))
+        .expect("room for one more");
+    assert_eq!(list.len(), 3);
+    let mut empty = ListElements::default();
+    empty
+        .try_append(ListElements::from(vec![int(4)]))
+        .expect("an empty list takes the other");
+    assert_eq!(empty.len(), 1);
+}
+
+#[test]
+fn a_bool_byte_keeps_its_raw_byte_until_sanitized() {
+    assert_eq!(BoolByte::from_bool(true).raw(), 1);
+    assert_eq!(BoolByte::from_bool(false).raw(), 0);
+    let mut foreign = BoolByte(7);
+    assert_eq!(foreign.raw(), 7, "a C write can leave any byte");
+    assert!(foreign.as_bool());
+    assert_eq!(foreign.sanitize(), Some(7));
+    assert_eq!(foreign.raw(), 1);
+    assert_eq!(foreign.sanitize(), None);
+}

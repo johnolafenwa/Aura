@@ -567,7 +567,7 @@ aura build --freestanding --target x86_64-unknown-none --kernel -o kernel.o kern
 | --- | --- | --- |
 | Code placement | Position independent, default code model | Static relocations, kernel code model for addresses in the high 2 GiB |
 | Floating point | SSE2, System V float ABI | Software floating point, integer-register float ABI |
-| Stack | A leaf can use the 128 bytes below the stack pointer, the red zone | Each function reserves the stack space it needs |
+| Stack | Each function reserves the stack space it needs; no code uses the red zone below the stack pointer | The same |
 
 Kernel mode disables MMX, SSE, SSE2 and x87 in compiler-generated code.
 Use the same register and stack conventions for foreign code and assembly.
