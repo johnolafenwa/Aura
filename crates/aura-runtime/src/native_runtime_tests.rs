@@ -34173,34 +34173,3 @@ fn a_str_element_box_has_its_words_where_it_lies() {
         unsafe { super::release_untracked_value(value) };
     }
 }
-
-#[test]
-fn a_split_list_has_its_str_view_from_the_start() {
-    use super::DirectListAccess;
-    let long = "a field long enough to live on the heap";
-    let line = format!("a,bb,,{long}");
-    let expected: Vec<String> = line.split(',').map(str::to_owned).collect();
-    // A literal separator, on a box and on words, and a boxed separator.
-    let text = string_value(&line);
-    let split = super::aura_direct_string_split_literal(text, ",".as_ptr(), 1);
-    let words =
-        super::aura_direct_string_split_literal_words(line.as_ptr(), line.len(), ",".as_ptr(), 1);
-    let separator = string_value(",");
-    let boxed = super::aura_direct_string_split(text, separator);
-    let multi = super::aura_direct_string_split_literal(text, ",,".as_ptr(), 2);
-    for list in [split, words, boxed] {
-        assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
-        assert_eq!(str_view_texts(list), expected);
-    }
-    assert_eq!(list_view_access(multi), DirectListAccess::Str as u32);
-    assert_eq!(
-        str_view_texts(multi),
-        vec!["a,bb".to_owned(), long.to_owned()]
-    );
-    // A write to the list switches the view back until it is rebuilt.
-    super::aura_direct_vec_push_in_place(split, string_value("tail"));
-    assert_ne!(list_view_access(split), DirectListAccess::Str as u32);
-    for value in [split, words, boxed, multi, separator, text] {
-        unsafe { release_value(value) };
-    }
-}

@@ -1632,8 +1632,12 @@ fn direct_value_thread_identity() -> usize {
 impl OpaqueValue {
     fn new(value: Value, runtime_type_name: Option<RuntimeName>) -> Self {
         // A new box has no room yet, so boxing a value costs no more. The
-        // first write to a list gives it room.
-        let view = list_view_of(&value);
+        // first write to a list gives it room. A `str` gets its view only
+        // where its box lies (see `follow_inline_block`).
+        let view = match &value {
+            Value::String(_) => EMPTY_VALUE_VIEW,
+            value => list_view_of(value),
+        };
         Self::with_view(value, runtime_type_name, view)
     }
 
@@ -2398,7 +2402,11 @@ fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue 
 }
 
 fn boxed_value_with_type(value: Value, runtime_type_name: Option<RuntimeName>) -> *mut OpaqueValue {
-    let view = list_view_of(&value);
+    // A `str` gets its view where its box lies (see `follow_inline_block`).
+    let view = match &value {
+        Value::String(_) => EMPTY_VALUE_VIEW,
+        value => list_view_of(value),
+    };
     let layout = std::alloc::Layout::new::<OpaqueValue>();
     // SAFETY: a box is not zero-sized.
     let boxed = unsafe { std::alloc::alloc(layout) }.cast::<OpaqueValue>();
@@ -2462,8 +2470,16 @@ unsafe fn follow_inline_block(header: &OpaqueValue) {
             payloads: VariantPayloads::Typed(typed),
             ..
         }) if typed.is_inline() => header.list_elements.set(typed.data()),
-        // A short text moved with the value, so its words follow it.
-        Value::String(text) => header.list_elements.set(text.as_str().as_ptr() as usize),
+        // A short text lies inside the value, so its words are taken where
+        // the box now holds it.
+        Value::String(text) => {
+            let text = text.as_str();
+            header.list_elements.set(text.as_ptr() as usize);
+            header.list_len.set(text.len());
+            header
+                .list_access
+                .store(TEXT_VIEW_ACCESS, Ordering::Relaxed);
+        }
         _ => {}
     }
 }
@@ -8498,7 +8514,7 @@ fn push_format_text(builder: *mut OpaqueValue, text: &str) {
 /// f-string `builder`. A part that fits in the room a builder confined to
 /// this thread already has, as a builder generated code makes is, goes in
 /// place without taking an access.
-#[inline]
+#[inline(always)]
 fn push_format_text_with(builder: *mut OpaqueValue, text: &str, ascii: bool) {
     // SAFETY: the builder is a live box. Only a `list` keeps elements apart
     // from its value, so a `str` has none to take in, and no other access
@@ -9084,29 +9100,15 @@ pub extern "C-unwind" fn aura_direct_string_split_literal_words(
     })
 }
 
-/// A new `list[str]` box of `parts`, every one a `str`, with its `Str` view
-/// made: a split list is read soon after it is made, often only a few
-/// times, so its first reads find the words in place instead of paying
-/// for misses before the view is built.
+/// A new `list[str]` box of `parts`, every one a `str`. Its `Str` view is
+/// left for enough reads to pay for it: most split lists are read once or
+/// twice, and building the view costs two allocations and a pass.
 fn boxed_str_list(parts: Vec<Value>) -> *mut OpaqueValue {
-    let list = boxed_value(Value::Vec(VecValue {
+    boxed_value(Value::Vec(VecValue {
         element_type: SharedType::named("str"),
         elements: parts.into(),
         str_view: Default::default(),
-    }));
-    // SAFETY: the list was just made, so it is confined and nothing else
-    // reads it or its view yet.
-    unsafe {
-        let header = &*list;
-        if let Value::Vec(vector) = &*header.value.get() {
-            if let ListElements::Values(values) = &vector.elements {
-                if !values.is_empty() {
-                    header.fill_str_view(values, vector.str_view.get_or_create());
-                }
-            }
-        }
-    }
-    list
+    }))
 }
 
 /// A new `list[str]` box of the parts of the `str` box `value` between
