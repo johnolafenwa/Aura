@@ -2081,6 +2081,20 @@ fn a_split_read_at_known_positions_finds_its_parts_in_the_text() {
             assert!(!calls(name, list), "{name} calls {list}");
         }
     }
+    // A trim whose text is read and released in its block makes no text.
+    for name in [
+        "aura_fn_blank",
+        "aura_fn_tag_name",
+        "aura_fn_padded",
+        "aura_fn_ends",
+        "aura_fn_swapped",
+        "aura_fn_copied",
+    ] {
+        assert!(calls(name, "aura_direct_str_trim_view"), "{name}");
+        assert!(!calls(name, "aura_direct_string_trim"), "{name}");
+    }
+    assert!(calls("aura_fn_late", "aura_direct_string_trim"));
+    assert!(!calls("aura_fn_late", "aura_direct_str_trim_view"));
     // The loops of `main` read parts, and its split into lines is walked.
     assert!(calls("aura_fn_main", "aura_direct_string_split_part_words"));
     assert!(calls("aura_fn_main", "aura_direct_string_split_literal"));

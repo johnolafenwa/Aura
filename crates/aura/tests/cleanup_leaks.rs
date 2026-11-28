@@ -403,6 +403,19 @@ fn fstrings_built_in_a_last_read_str_free_every_box() {
     assert_frees_everything("leak-fstring-last-read", source, expected, 0);
 }
 
+/// A split or a trim that makes no list or text holds the text it reads
+/// until its last read ends: the recovered traps of a missing part, in a
+/// caller and in a callee, and the texts released late free every box.
+#[test]
+fn parts_read_in_the_text_free_every_box() {
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/split_parts_read_in_the_text.au");
+    let expected = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/split_parts_read_in_the_text.stdout"
+    );
+    assert_frees_everything("leak-split-parts", source, expected, 0);
+}
+
 /// An overflow in a function that reads an element a list keeps in place
 /// where it lies, called by a loop and by a key sort, names both frames
 /// and frees every box.

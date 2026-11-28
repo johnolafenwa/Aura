@@ -2,7 +2,8 @@
 # makes it, makes no list in native code: each read finds its part in the
 # text that was split. The text may be an element of a list, a parameter,
 # or a local, and it is not released before the last read of a part. A
-# list that is read any other way is made as before.
+# list that is read any other way is made as before. A trim whose text is
+# read and released in its block is read the same way, with no new text.
 import control
 
 
@@ -119,6 +120,43 @@ def callee_trap_task():
     print(callee_trap(4))
 
 
+def blank(text: str) -> bool:
+    return text.trim() == ""
+
+
+def tag_name(raw: str) -> str:
+    return raw.trim().to_lower()
+
+
+def padded(seed: int64) -> int64:
+    line = f"  {seed} \t"
+    return to_int(line.trim())
+
+
+def ends(text: str) -> str:
+    return f"[{text.trim_start()}|{text.trim_end()}]"
+
+
+def swapped(text: str) -> str:
+    return text.trim().replace("a", "b")
+
+
+def copied(text: str) -> str:
+    return text.trim().clone()
+
+
+def inner(seed: int64) -> int64:
+    line = f" [{seed}] "
+    return line.trim().trim_start().len()
+
+
+def late(text: str) -> int64:
+    trimmed = text.trim()
+    if trimmed == "":
+        return 0
+    return trimmed.len()
+
+
 def short_task():
     print(short("only three parts"))
 
@@ -185,6 +223,19 @@ def main() -> int32:
             print(trap.message)
         case _:
             print("expected failure")
+    mut blanks = 0
+    for word in ["  a ", "", " \t", "é "]:
+        if word.trim() != "":
+            blanks += 1
+    b2 = blank(" \n ")
+    b3 = blank(" x ")
+    print(f"{blanks} {b2} {b3}")
+    print(tag_name("  DIV "))
+    print(f"{padded(41)} {padded(-7)}")
+    print(ends("  both  "))
+    print(swapped("  banana "))
+    print(copied(" kept\n"))
+    print(f"{inner(12)} {late("  ")} {late(" ab ")}")
     print(dated("2026-11-28,7"))
     for task in [fresh_short_task, callee_trap_task]:
         match control.recover(task):

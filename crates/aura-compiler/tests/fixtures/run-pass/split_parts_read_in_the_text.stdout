@@ -14,6 +14,13 @@ two|one two three
 6
 1 11
 list index `3` is out of bounds for length `3`
+2 true false
+div
+41 -7
+[both  |  both]
+bbnbnb
+kept
+4 0 2
 1107
 list index `5` is out of bounds for length `2`
 list index `9` is out of bounds for length `2`

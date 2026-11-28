@@ -112,7 +112,33 @@ def mixed(batch: list[str]) -> int64:
             total += 1
     return total
 
+def blank(text: str) -> bool:
+    return text.trim() == ""
+
+def tag_name(raw: str) -> str:
+    return raw.trim_start().to_lower()
+
+def padded(seed: int64) -> int64:
+    line = f"  {seed} "
+    return to_int(line.trim_end())
+
+def late(text: str) -> int64:
+    trimmed = text.trim()
+    if trimmed == "":
+        return 0
+    return trimmed.len()
+
+def regrown(seed: int64) -> str:
+    mut line = f" {seed} "
+    line = line.trim()
+    return line
+
 def main():
+    print(blank(" "))
+    print(tag_name(" A"))
+    print(padded(1))
+    print(late(" a "))
+    print(regrown(2))
     print(twice(["1 2"], ["3,4"]))
     print(twice_counted(["1 2"], ["3,4"]))
     print(mixed(["1 retry 2"]))
@@ -253,10 +279,36 @@ fn a_list_read_any_other_way_is_made() {
         "walked",  // A position from the end depends on the length.
         "from_end",
         // The separator is not a literal.
-        "by_text", // The list leaves the function.
+        "by_text",  // The list leaves the function.
         "returned", // Nothing reads a part.
         "unread",
     ] {
         assert_eq!(parts(name), Vec::new(), "`{name}`");
     }
+}
+
+#[test]
+fn a_trim_read_and_released_in_its_block_reads_the_text() {
+    for (name, kind, released) in [
+        ("blank", 0, false),
+        ("tag_name", 1, false),
+        ("padded", 2, true),
+    ] {
+        let found = parts(name);
+        let [part] = found.as_slice() else {
+            panic!("expected one trim in `{name}`, found {found:?}");
+        };
+        assert_eq!(part.trim, Some(kind), "`{name}`");
+        assert!(part.lists.is_empty() && part.list_releases.is_empty());
+        let [read] = part.loans.as_slice() else {
+            panic!("expected one read in `{name}`, found {:?}", part.loans);
+        };
+        assert!(read.copied);
+        assert_eq!((read.begin, read.end), (part.split, part.window_end));
+        // A local that is trimmed is released once its text is read.
+        assert_eq!(part.receiver_release.is_some(), released, "`{name}`");
+    }
+    // A trimmed text read in another block, or kept, is made.
+    assert_eq!(parts("late"), Vec::new());
+    assert_eq!(parts("regrown"), Vec::new());
 }

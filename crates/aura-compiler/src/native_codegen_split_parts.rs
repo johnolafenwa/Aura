@@ -62,6 +62,9 @@ pub(super) struct SplitPart {
     /// The `str` that is split.
     pub(super) receiver: String,
     pub(super) separator: String,
+    /// For a trim (see [`split_parts`]): which ends lose their whitespace,
+    /// as `aura_direct_str_trim_view` counts them.
+    pub(super) trim: Option<i64>,
     pub(super) loans: Vec<PartLoan>,
     /// The position of the release of the receiver inside the window.
     pub(super) receiver_release: Option<usize>,
@@ -185,6 +188,11 @@ fn reads_part(instruction: &Instruction, loan: &str) -> bool {
 /// release, and no closure or task captures the receiver. A named local
 /// that several splits fill, as the `fields` of two loops is, is never
 /// made only when none of them makes it.
+///
+/// A trim of such a receiver whose text is read and released that way, in
+/// the block of the trim, is here too, with no list and with the local the
+/// trim assigns as its one read: the text without its whitespace is a part
+/// of the text.
 pub(super) fn split_parts(function: &MirFunction) -> Vec<SplitPart> {
     let text = Type::named("str");
     let texts = Type::Named("list".to_string(), vec![text.clone()]);
@@ -249,6 +257,40 @@ pub(super) fn split_parts(function: &MirFunction) -> Vec<SplitPart> {
             _ => None,
         }
     };
+    // Where the read of a `str` into the local or loan `loan`, begun at
+    // `at` of a block, ends: once, in that block, by the loan's end or the
+    // release of the local, with only instructions that read the `str`
+    // naming it until then.
+    let read_end = |loan: &str, block_index: usize, at: usize, copied: bool| {
+        if loan.contains('.') || !local_is(loan, &text) {
+            return None;
+        }
+        let block = &function.blocks[block_index];
+        let mut end = None;
+        for &(use_block, use_at) in uses_of(loan) {
+            if use_block != block_index || use_at < at {
+                return None;
+            }
+            if use_at == at {
+                continue;
+            }
+            match block.instructions.get(use_at) {
+                Some(Instruction::EndLoan { loan: ended })
+                    if ended == loan && end.is_none() && !copied =>
+                {
+                    end = Some(use_at);
+                }
+                Some(Instruction::Release { place })
+                    if place == loan && end.is_none() && copied =>
+                {
+                    end = Some(use_at);
+                }
+                Some(reader) if end.is_none() && reads_part(reader, loan) => {}
+                _ => return None,
+            }
+        }
+        end
+    };
     // The read of one element of `list` that the instruction at `at` of a
     // block begins, when it is one.
     let read_of = |list: &str, block_index: usize, at: usize| -> Option<PartLoan> {
@@ -300,41 +342,12 @@ pub(super) fn split_parts(function: &MirFunction) -> Vec<SplitPart> {
             _ => return None,
         };
         let index = i64::try_from(index).ok().filter(|index| *index >= 0)?;
-        if loan.contains('.') || !local_is(loan, &text) {
-            return None;
-        }
-        // The read ends once, in this block, and until then only
-        // instructions that read its `str` name it.
-        let block = &function.blocks[block_index];
-        let mut end = None;
-        for &(use_block, use_at) in uses_of(loan) {
-            if use_block != block_index || use_at < at {
-                return None;
-            }
-            if use_at == at {
-                continue;
-            }
-            match block.instructions.get(use_at) {
-                Some(Instruction::EndLoan { loan: ended })
-                    if ended == loan && end.is_none() && !copied =>
-                {
-                    end = Some(use_at);
-                }
-                Some(Instruction::Release { place })
-                    if place == loan && end.is_none() && copied =>
-                {
-                    end = Some(use_at);
-                }
-                Some(reader) if end.is_none() && reads_part(reader, loan) => {}
-                _ => return None,
-            }
-        }
         Some(PartLoan {
             loan: loan.clone(),
             index,
             span,
             begin: at,
-            end: end?,
+            end: read_end(loan, block_index, at, copied)?,
             copied,
         })
     };
@@ -349,7 +362,7 @@ pub(super) fn split_parts(function: &MirFunction) -> Vec<SplitPart> {
                     Rvalue::Call {
                         callee:
                             CallTarget::Runtime {
-                                op: RuntimeOp::Str(StrOp::Split),
+                                op: RuntimeOp::Str(op),
                                 receiver: Some(Operand::Place(receiver)),
                                 ..
                             },
@@ -360,19 +373,64 @@ pub(super) fn split_parts(function: &MirFunction) -> Vec<SplitPart> {
             else {
                 continue;
             };
-            let [MirArg {
-                value: Operand::String(separator),
-                ..
-            }] = args.as_slice()
-            else {
-                continue;
-            };
             let receiver_is_str = local_is(receiver, &text)
                 || function.params.iter().any(|param| {
                     param.name == *receiver
                         && param.ty == text
                         && param.passing == MirReceiverKind::Borrow
                 });
+            let trim = match op {
+                StrOp::Trim => Some(0),
+                StrOp::TrimStart => Some(1),
+                StrOp::TrimEnd => Some(2),
+                _ => None,
+            };
+            if let (Some(trim), true) = (trim, args.is_empty()) {
+                // The text without its whitespace is a part of the text:
+                // the local the trim assigns is read as one.
+                let read = read_end(target, block_index, split, true).filter(|_| {
+                    !receiver.contains('.')
+                        && receiver != target
+                        && receiver_is_str
+                        && !captured.contains(receiver.as_str())
+                });
+                if let Some(end) = read {
+                    found.push((
+                        block_index,
+                        SplitPart {
+                            block: block.label.clone(),
+                            split,
+                            lists: Vec::new(),
+                            alias: None,
+                            receiver: receiver.clone(),
+                            separator: String::new(),
+                            trim: Some(trim),
+                            loans: vec![PartLoan {
+                                loan: target.clone(),
+                                index: 0,
+                                span: Span { line: 0, column: 0 },
+                                begin: split,
+                                end,
+                                copied: true,
+                            }],
+                            receiver_release: None,
+                            window_end: end,
+                            list_releases: Vec::new(),
+                        },
+                    ));
+                }
+                continue;
+            }
+            let (
+                StrOp::Split,
+                [MirArg {
+                    value: Operand::String(separator),
+                    ..
+                }],
+            ) = (op, args.as_slice())
+            else {
+                continue;
+            };
             // The temporary is assigned here and nowhere else.
             let assigned_once = uses_of(target).iter().all(|&(use_block, use_at)| {
                 (use_block, use_at) == (block_index, split)
@@ -415,6 +473,7 @@ pub(super) fn split_parts(function: &MirFunction) -> Vec<SplitPart> {
                     alias: alias.map(|(index, _)| index),
                     receiver: receiver.clone(),
                     separator: separator.clone(),
+                    trim: None,
                     loans: Vec::new(),
                     receiver_release: None,
                     window_end: split,
@@ -500,6 +559,8 @@ pub(super) fn split_parts(function: &MirFunction) -> Vec<SplitPart> {
         }
         if !whole {
             made.extend(part.lists.iter().cloned());
+            // A trim fills no list: it alone makes its text.
+            part.loans.clear();
         }
     }
     // A split that makes one of its lists makes them all, and so does
@@ -516,7 +577,9 @@ pub(super) fn split_parts(function: &MirFunction) -> Vec<SplitPart> {
         }
         made.extend(spread);
     }
-    found.retain(|(_, part)| !part.lists.iter().any(|list| made.contains(list)));
+    found.retain(|(_, part)| {
+        !part.loans.is_empty() && !part.lists.iter().any(|list| made.contains(list))
+    });
     for (_, part) in &mut found {
         for list in &part.lists {
             for &(use_block, use_at) in uses_of(list) {
@@ -540,6 +603,12 @@ pub(super) enum Step {
         receiver: String,
         ptr: Var,
         len: Var,
+    },
+    /// A trim: find the text without its whitespace in the receiver.
+    Trim {
+        receiver: String,
+        local: String,
+        kind: i64,
     },
     /// The move of the list, a release of it, or the receiver's release
     /// inside the window: nothing.
@@ -678,14 +747,16 @@ impl FunctionCompiler<'_> {
             };
             let (ptr, len) = (declare(self), declare(self));
             let at = |index: usize| (part.block.clone(), index);
-            self.split_part_steps.insert(
-                at(part.split),
-                Step::Split {
-                    receiver: part.receiver.clone(),
-                    ptr,
-                    len,
-                },
-            );
+            if part.trim.is_none() {
+                self.split_part_steps.insert(
+                    at(part.split),
+                    Step::Split {
+                        receiver: part.receiver.clone(),
+                        ptr,
+                        len,
+                    },
+                );
+            }
             for index in part.alias.into_iter().chain(part.receiver_release) {
                 self.split_part_steps.insert(at(index), Step::Nothing);
             }
@@ -693,9 +764,13 @@ impl FunctionCompiler<'_> {
                 self.split_part_steps.insert(release.clone(), Step::Nothing);
             }
             for loan in &part.loans {
-                self.split_part_steps.insert(
-                    at(loan.begin),
-                    Step::Begin {
+                let begin = match part.trim {
+                    Some(kind) => Step::Trim {
+                        receiver: part.receiver.clone(),
+                        local: loan.loan.clone(),
+                        kind,
+                    },
+                    None => Step::Begin {
                         loan: loan.loan.clone(),
                         separator: part.separator.clone(),
                         index: loan.index,
@@ -703,7 +778,8 @@ impl FunctionCompiler<'_> {
                         ptr,
                         len,
                     },
-                );
+                };
+                self.split_part_steps.insert(at(loan.begin), begin);
                 let release = part
                     .receiver_release
                     .filter(|_| loan.end == part.window_end)
@@ -718,6 +794,7 @@ impl FunctionCompiler<'_> {
                 // An element read into a local may already be an element
                 // slot of the list that is not made; it reads the text now.
                 self.str_element_lists.remove(&loan.loan);
+                self.split_part_locals.insert(loan.loan.clone());
                 let slot = str_slots::StrSlot::local(declare(self), declare(self));
                 self.str_slots.insert(loan.loan.clone(), slot);
             }
@@ -733,16 +810,29 @@ impl FunctionCompiler<'_> {
         label: &str,
         index: usize,
     ) -> std::result::Result<(), String> {
+        let at = (label.to_string(), index);
         if self.split_part_steps.is_empty()
-            || !self
-                .split_part_steps
-                .contains_key(&(label.to_string(), index))
+            || !self.split_part_steps.contains_key(&at)
+            || self.split_part_done.contains(&at)
         {
             return Ok(());
         }
         Err(format!(
             "direct backend skipped a read of a split part in `{label}`"
         ))
+    }
+
+    /// The bytes of the receiver of a split or a trim: the words this body
+    /// holds it as, or those of its box.
+    fn split_receiver_words(&mut self, receiver: &str) -> std::result::Result<(Val, Val), String> {
+        let operand = Operand::Place(receiver.to_string());
+        match self.str_slot_words(&operand) {
+            Some(words) => Ok(words),
+            None => {
+                let held = self.load_place(receiver)?.values[0];
+                Ok(self.str_box_words(held))
+            }
+        }
     }
 
     /// Compiles the instruction at `index` of the block `label` when it is
@@ -762,19 +852,32 @@ impl FunctionCompiler<'_> {
         else {
             return Ok(false);
         };
+        self.split_part_done.insert((label.to_string(), index));
         match step {
             Step::Nothing => {}
             Step::Split { receiver, ptr, len } => {
-                let operand = Operand::Place(receiver.clone());
-                let words = match self.str_slot_words(&operand) {
-                    Some(words) => words,
-                    None => {
-                        let held = self.load_place(&receiver)?.values[0];
-                        self.str_box_words(held)
-                    }
-                };
+                let words = self.split_receiver_words(&receiver)?;
                 self.builder.def_var(ptr, words.0);
                 self.builder.def_var(len, words.1);
+            }
+            Step::Trim {
+                receiver,
+                local,
+                kind,
+            } => {
+                let (text, text_len) = self.split_receiver_words(&receiver)?;
+                let kind = self.builder.iconst(types::I64, kind);
+                let out = self.builder.create_sized_stack_slot(8, 3);
+                let out = self.builder.stack_addr(types::I64, out, 0);
+                let part = self
+                    .builder
+                    .call(
+                        self.runtime[RuntimeFn::StrTrimView],
+                        &[text, text_len, kind, out],
+                    )
+                    .results[0];
+                let part_len = self.builder.load(types::I64, MemFlags::trusted(), out, 0);
+                self.define_str_slot(&local, part, part_len)?;
             }
             Step::Begin {
                 loan,

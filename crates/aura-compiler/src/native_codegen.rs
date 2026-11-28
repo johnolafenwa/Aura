@@ -3439,6 +3439,8 @@ impl<'a> NativeCodegen<'a> {
             element_lend_temps,
             native_loans: HashMap::new(),
             split_part_steps: HashMap::new(),
+            split_part_done: HashSet::new(),
+            split_part_locals: HashSet::new(),
             push_entry_loans: element_loans::push_entry_loans(function),
             fused_entry_probes,
             pending_try_read: None,
@@ -5206,6 +5208,10 @@ struct FunctionCompiler<'a> {
     /// What to do at each instruction, by block and position, of a split
     /// whose parts are read where the text keeps them (see `split_parts`).
     split_part_steps: HashMap<(String, usize), split_parts::Step>,
+    /// The steps of `split_part_steps` compiled so far.
+    split_part_done: HashSet<(String, usize)>,
+    /// The locals and loans that hold a part as words.
+    split_part_locals: HashSet<String>,
     /// The entry loans that only append scalars to their entry's list (see
     /// `element_loans::push_entry_loans`).
     push_entry_loans: HashSet<String>,
@@ -6562,6 +6568,10 @@ impl<'a> FunctionCompiler<'a> {
         );
         self.shaped_boxes.clear();
         self.fresh_str_copies.clear();
+        // A fused run of instructions compiles the ones it covers here.
+        if self.compile_split_part_step(block_label, instruction_index)? {
+            return Ok(());
+        }
         // Clear the cached backing when its owning local is initialized or dropped.
         if let Instruction::Assign { target: place, .. } | Instruction::Release { place } =
             instruction
@@ -11761,6 +11771,7 @@ impl<'a> FunctionCompiler<'a> {
     /// it.
     fn owns_str_temporary(&self, root: &str) -> bool {
         self.tracked_roots.contains(root)
+            && !self.split_part_locals.contains(root)
             && !self.loan_locals.contains(root)
             && !self.lent_places.contains(root)
             && !self.lent_elements.contains_key(root)
