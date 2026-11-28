@@ -430,6 +430,21 @@ fn scalar_lists_reversed_and_extended_in_their_room_free_every_box() {
     assert_frees_everything("leak-reverse-extend", source, expected, 0);
 }
 
+/// Loops that walk a text with no list hold the text until they are
+/// left: by their end, a `break`, a `return`, and the recovered traps in
+/// a walk of a parameter, of a local released late, and of a field the
+/// loop holds. The native run frees every box.
+#[test]
+fn loops_that_walk_a_text_free_every_box() {
+    let source = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/loops_over_parts_walk_the_text.au"
+    );
+    let expected = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/loops_over_parts_walk_the_text.stdout"
+    );
+    assert_frees_everything("leak-split-loops", source, expected, 0);
+}
+
 /// An overflow in a function that reads an element a list keeps in place
 /// where it lies, called by a loop and by a key sort, names both frames
 /// and frees every box.

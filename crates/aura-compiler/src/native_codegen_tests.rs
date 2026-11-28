@@ -2095,13 +2095,16 @@ fn a_split_read_at_known_positions_finds_its_parts_in_the_text() {
     }
     assert!(calls("aura_fn_late", "aura_direct_string_trim"));
     assert!(!calls("aura_fn_late", "aura_direct_str_trim_view"));
-    // The loops of `main` read parts, and its split into lines is walked.
+    // The loops of `main` read parts, and its split into lines is walked
+    // in the text, with no list.
     assert!(calls("aura_fn_main", "aura_direct_string_split_part_words"));
-    assert!(calls("aura_fn_main", "aura_direct_string_split_literal"));
-    assert!(!calls(
-        "aura_fn_main",
-        "aura_direct_string_split_literal_words"
-    ));
+    assert!(calls("aura_fn_main", "aura_direct_str_parts_next_view"));
+    for list in [
+        "aura_direct_string_split_literal",
+        "aura_direct_string_split_literal_words",
+    ] {
+        assert!(!calls("aura_fn_main", list), "main calls {list}");
+    }
     // A list read in another block, asked for its length, walked, or whose
     // text changes before the read is made.
     for name in [

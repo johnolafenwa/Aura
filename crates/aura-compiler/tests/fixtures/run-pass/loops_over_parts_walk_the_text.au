@@ -1,0 +1,173 @@
+# A loop over the parts of a split, the lines, or the words of a text,
+# whose list nothing else reads, makes no list in native code: it counts
+# the parts and then finds each one in the text as it comes to it. The
+# text may be a parameter, a local, a part of another walk, or a field,
+# and it stays alive until the loop is left, by its end, a `break`, a
+# `return`, or a trap. A loop that changes what it walks, or reads its
+# list any other way, makes the list as before.
+import control
+
+
+class Page:
+    title: str
+    body: str
+
+
+def to_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return -1
+
+
+def count_lines(text: str) -> int64:
+    mut total = 0
+    for line in text.split("\n"):
+        if line == "":
+            continue
+        fields = line.split(" ")
+        total += fields[1].byte_len()
+    return total
+
+
+def words_of(text: str) -> list[str]:
+    mut out: list[str] = []
+    for word in text.split_whitespace():
+        out.append(word.to_upper())
+    return out
+
+
+def nested(text: str) -> int64:
+    mut n = 0
+    for line in text.lines():
+        for token in line.split_whitespace():
+            n += token.byte_len() * 10 + 1
+    return n
+
+
+def owned(seed: int64) -> str:
+    text = f"p{seed},q,,r{seed * 2},"
+    mut out = ""
+    for part in text.split(","):
+        out += f"[{part}]"
+    return out
+
+
+def wide(text: str) -> str:
+    mut out = ""
+    for part in text.split("--"):
+        out += f"<{part}>"
+    return out
+
+
+def first_long(text: str) -> str:
+    for word in text.split_whitespace():
+        if word.len() > 3:
+            return word.clone()
+    return "none"
+
+
+def until_stop(text: str) -> int64:
+    mut seen = 0
+    for line in text.lines():
+        if line == "stop":
+            break
+        seen += 1
+    return seen
+
+
+def of_page(page: Page) -> int64:
+    mut total = 0
+    for word in page.body.split_whitespace():
+        total += word.len()
+    for part in page.title.split(" "):
+        total += part.len() * 100
+    return total
+
+
+def pages(all: list[Page]) -> int64:
+    mut total = 0
+    for page in all:
+        for word in page.body.split(" "):
+            total += to_int(word)
+    return total
+
+
+def changed() -> str:
+    mut text = "a b c"
+    mut out = ""
+    for word in text.split(" "):
+        text = text + word
+        out += word
+    return f"{out} {text}"
+
+
+def renamed(body: str) -> str:
+    mut held = Page(title="r", body=body.clone())
+    mut out = ""
+    for word in held.body.split(" "):
+        held.body = f"{word}!"
+        out += word
+    return f"{out} {held.body}"
+
+
+def kept(text: str) -> str:
+    parts = text.split(" ")
+    mut out = ""
+    for word in parts:
+        out += word
+    return f"{out} {parts}"
+
+
+def sums(text: str) -> int64:
+    mut total = 0
+    for word in text.split(","):
+        total += [10, 20, 30][to_int(word)]
+    return total
+
+
+def sums_task():
+    print(sums("0,2,1,7,0"))
+
+
+def fresh_sums_task():
+    text = f"{1},{2},{9}"
+    mut total = 0
+    for word in text.split(","):
+        total += [10, 20, 30][to_int(word)]
+    print(total)
+
+
+def page_sums_task():
+    page = Page(title=f"t{1}", body=f"{0} {2} {5}")
+    mut total = 0
+    for word in page.body.split_whitespace():
+        total += [10, 20, 30][to_int(word)]
+    print(total)
+
+
+def main() -> int32:
+    print(count_lines("a bb\n\nccc dddd\nx y"))
+    print(words_of("  hello  big world "))
+    print(words_of(""))
+    print(nested("one two\r\nthree\n\nfour five six\n"))
+    print(f"{owned(3)} {owned(-4)}")
+    print(wide("a--b----c--"))
+    print(wide(""))
+    print(wide("žluť--kůň"))
+    print(f"{first_long("a bb cccc dd")} {first_long("a bb")}")
+    print(f"{until_stop("x\ny\nstop\nz")} {until_stop("")} {until_stop("x\r\n")}")
+    page = Page(title="The Title", body=" some body\twords ")
+    print(of_page(page))
+    print(pages([Page(title="a", body="1 2 3"), Page(title="b", body="40 x")]))
+    print(changed())
+    print(renamed("x y z"))
+    print(kept("k1 k2"))
+    for task in [sums_task, fresh_sums_task, page_sums_task]:
+        match control.recover(task):
+            case Err(trap):
+                print(trap.message)
+            case _:
+                print("expected failure")
+    return 0

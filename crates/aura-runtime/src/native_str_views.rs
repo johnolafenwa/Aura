@@ -305,6 +305,146 @@ pub unsafe extern "C-unwind" fn aura_direct_str_lines_next_view(
     }
 }
 
+/// A walk over the parts `text.split(separator)` gives.
+pub const STR_PARTS_SPLIT: i64 = 0;
+/// A walk over the lines `text.lines()` gives.
+pub const STR_PARTS_LINES: i64 = 1;
+/// A walk over the words `text.split_whitespace()` gives.
+pub const STR_PARTS_WHITESPACE: i64 = 2;
+
+/// The part of `text` a walk of `kind` gives at the place `start`, with
+/// the place of the part after it, or `None` after the last part. A walk
+/// starts at zero. The parts are, in order, the elements of the list the
+/// `str` method of that kind makes.
+#[inline]
+fn next_part<'a>(
+    text: &'a str,
+    separator: &str,
+    kind: i64,
+    start: usize,
+) -> Option<(&'a str, usize)> {
+    let bytes = text.as_bytes();
+    // A part of a split or of the lines ends where a separator or a line
+    // ending starts or the text ends, and starts where one ends or the
+    // text starts, so it is whole scalars.
+    let part = |from: usize, to: usize| {
+        // SAFETY: the bounds are scalar boundaries of `text`, as above.
+        unsafe { std::str::from_utf8_unchecked(&bytes[from..to]) }
+    };
+    match kind {
+        STR_PARTS_SPLIT => {
+            let rest = bytes.get(start..)?;
+            let found = match separator.as_bytes() {
+                [] => return None,
+                [byte] => memchr::memchr(*byte, rest),
+                separator => memchr::memmem::find(rest, separator),
+            };
+            Some(match found {
+                Some(offset) => (
+                    part(start, start + offset),
+                    start + offset + separator.len(),
+                ),
+                None => (part(start, bytes.len()), STR_VIEW_ITERATION_DONE),
+            })
+        }
+        STR_PARTS_LINES => {
+            let rest = bytes.get(start..).filter(|rest| !rest.is_empty())?;
+            Some(match memchr::memchr(b'\n', rest) {
+                // A carriage return belongs to the line ending only
+                // before a line feed.
+                Some(offset) if offset > 0 && rest[offset - 1] == b'\r' => {
+                    (part(start, start + offset - 1), start + offset + 1)
+                }
+                Some(offset) => (part(start, start + offset), start + offset + 1),
+                None => (part(start, bytes.len()), STR_VIEW_ITERATION_DONE),
+            })
+        }
+        _ => {
+            // The place is the end of the part before, a scalar boundary.
+            let part = text.get(start..)?.split_whitespace().next()?;
+            let offset = part.as_ptr() as usize - text.as_ptr() as usize;
+            Some((part, offset + part.len()))
+        }
+    }
+}
+
+/// How many parts a walk of `kind` over `text` gives: the length of the
+/// list `text.split(separator)`, `text.lines()`, or
+/// `text.split_whitespace()` makes, for [`STR_PARTS_SPLIT`],
+/// [`STR_PARTS_LINES`], and [`STR_PARTS_WHITESPACE`]. Only a split reads
+/// the separator, which is not empty.
+///
+/// # Safety
+///
+/// Each address and length name live UTF-8 bytes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_str_parts_count_view(
+    text: *const u8,
+    text_len: usize,
+    separator: *const u8,
+    separator_len: usize,
+    kind: i64,
+) -> i64 {
+    // SAFETY: the caller's contract.
+    let (text, separator) = unsafe { (view(text, text_len), view(separator, separator_len)) };
+    // One byte to look for is counted without a stop at each part: a
+    // split gives one part more than it finds separators, and the lines
+    // are one more than the line feeds unless the text ends at one.
+    match (kind, separator.as_bytes()) {
+        (STR_PARTS_SPLIT, [byte]) => {
+            return memchr::memchr_iter(*byte, text.as_bytes()).count() as i64 + 1;
+        }
+        (STR_PARTS_LINES, _) => {
+            let ended = text.as_bytes().last().is_none_or(|last| *last == b'\n');
+            return memchr::memchr_iter(b'\n', text.as_bytes()).count() as i64 + i64::from(!ended);
+        }
+        _ => {}
+    }
+    let (mut count, mut place) = (0, 0);
+    while let Some((_, next)) = next_part(text, separator, kind, place) {
+        count += 1;
+        place = next;
+    }
+    count
+}
+
+/// The next part of a walk of `kind` over `text` (see
+/// [`aura_direct_str_parts_count_view`]): its address, with its length
+/// written to `len`. `cursor` holds the walk's place between calls. It
+/// starts at zero, and the call moves it on. After the last part the
+/// result is an empty text.
+///
+/// A loop over the parts makes no list and no value for a part.
+///
+/// # Safety
+///
+/// Each address and length name live UTF-8 bytes, the same on every call
+/// of one walk, and `cursor` and `len` address words the caller owns.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_str_parts_next_view(
+    text: *const u8,
+    text_len: usize,
+    separator: *const u8,
+    separator_len: usize,
+    kind: i64,
+    cursor: *mut usize,
+    len: *mut usize,
+) -> *const u8 {
+    // SAFETY: the caller's contract.
+    let (text, separator, start) = unsafe {
+        (
+            view(text, text_len),
+            view(separator, separator_len),
+            *cursor,
+        )
+    };
+    let (part, next) =
+        next_part(text, separator, kind, start).unwrap_or(("", STR_VIEW_ITERATION_DONE));
+    // SAFETY: the caller's contract.
+    unsafe { cursor.write(next) };
+    part_of(part, len)
+}
+
 /// A text being built in three words the caller owns: the address, the
 /// length and the capacity of its bytes. Three zero words are the empty
 /// buffer, which owns nothing. The caller ends every buffer exactly once,
@@ -472,6 +612,91 @@ mod tests {
                 return parts;
             }
             parts.push(text_of(part, len).to_string());
+        }
+    }
+
+    fn parts_all(text: &str, separator: &str, kind: i64) -> Vec<String> {
+        let count = unsafe {
+            aura_direct_str_parts_count_view(
+                text.as_ptr(),
+                text.len(),
+                separator.as_ptr(),
+                separator.len(),
+                kind,
+            )
+        };
+        let (mut cursor, mut len) = (0usize, 0usize);
+        let mut next = || {
+            let part = unsafe {
+                aura_direct_str_parts_next_view(
+                    text.as_ptr(),
+                    text.len(),
+                    separator.as_ptr(),
+                    separator.len(),
+                    kind,
+                    &mut cursor,
+                    &mut len,
+                )
+            };
+            text_of(part, len).to_string()
+        };
+        let parts = (0..count).map(|_| next()).collect::<Vec<_>>();
+        // A walk past its last part gives empty texts.
+        assert_eq!(next(), "");
+        assert_eq!(next(), "");
+        parts
+    }
+
+    #[test]
+    fn a_counted_walk_gives_the_parts_the_list_would_hold() {
+        let texts = [
+            "",
+            "a",
+            "a,b",
+            ",a,,b,",
+            ",",
+            "one two  three\tfour\n",
+            "  lead and trail  ",
+            " \u{2003}wide\u{a0}spaces\u{3000}here ",
+            "line\nline two\r\nthree\n\nfive\r",
+            "\n",
+            "\r\n",
+            "\n\nx",
+            "žluťoučký kůň\núpěl",
+            "a--b----c--",
+        ];
+        for text in texts {
+            for separator in [",", " ", "\n", "--", "ů", "line"] {
+                assert_eq!(
+                    parts_all(text, separator, STR_PARTS_SPLIT),
+                    text.split(separator).collect::<Vec<_>>(),
+                    "{text:?} split by {separator:?}"
+                );
+            }
+            let list = |value: crate::runtime_value::Value| match value {
+                crate::runtime_value::Value::Vec(vector) => vector
+                    .elements
+                    .iter()
+                    .map(|element| match element.as_ref() {
+                        crate::runtime_value::Value::String(part) => part.as_str().to_string(),
+                        other => panic!("expected a str, found {other:?}"),
+                    })
+                    .collect::<Vec<_>>(),
+                other => panic!("expected a list, found {other:?}"),
+            };
+            assert_eq!(
+                parts_all(text, "", STR_PARTS_LINES),
+                list(crate::text_methods::lines(text)),
+                "{text:?} lines"
+            );
+            assert_eq!(
+                parts_all(text, "", STR_PARTS_WHITESPACE),
+                list(crate::text_methods::split_whitespace(text)),
+                "{text:?} words"
+            );
+            // A split by an empty separator is never compiled this way,
+            // and gives no parts.
+            assert!(parts_all(text, "", STR_PARTS_SPLIT).is_empty());
         }
     }
 

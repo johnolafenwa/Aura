@@ -74,13 +74,13 @@ pub(super) struct SplitPart {
     pub(super) list_releases: Vec<(String, usize)>,
 }
 
-fn root(place: &str) -> &str {
+pub(super) fn root(place: &str) -> &str {
     place.split('.').next().unwrap_or(place)
 }
 
 /// Every place `instruction` names: the places it mentions, the target of
 /// an assignment, and the loan a loan instruction makes.
-fn named_places(instruction: &Instruction) -> Vec<&str> {
+pub(super) fn named_places(instruction: &Instruction) -> Vec<&str> {
     let mut places = Vec::new();
     instruction_place_mentions(instruction, &mut places);
     match instruction {
@@ -121,7 +121,7 @@ fn stays_in_window(instruction: &Instruction) -> bool {
 /// call that takes it as an argument or a receiver, a comparison, or an
 /// f-string. Each reads the words, or a box made from them that the loan's
 /// end releases.
-fn reads_part(instruction: &Instruction, loan: &str) -> bool {
+pub(super) fn reads_part(instruction: &Instruction, loan: &str) -> bool {
     let Instruction::Assign { target, value } = instruction else {
         return false;
     };
@@ -628,6 +628,32 @@ pub(super) enum Step {
         loan: String,
         release: Option<(String, usize)>,
     },
+    /// The split of a loop that walks the text (see `split_loops`): keep
+    /// the words of the receiver and start the walk.
+    LoopSplit {
+        receiver: String,
+        list: String,
+        walk: super::split_loops::Walk,
+        /// Where the loop holds its own reference to a receiver that is
+        /// a part of a local.
+        kept: Option<Var>,
+    },
+    /// The length read of such a loop: count the parts.
+    LoopLen {
+        target: String,
+        walk: super::split_loops::Walk,
+    },
+    /// The element read of such a loop: find the next part.
+    LoopFetch {
+        element: String,
+        walk: super::split_loops::Walk,
+    },
+    /// A release of the list of such a loop: release the receiver, when
+    /// its release was put off, or the reference the loop held to it.
+    LoopRelease {
+        receiver: Option<String>,
+        kept: Option<Var>,
+    },
 }
 
 impl FunctionCompiler<'_> {
@@ -673,31 +699,7 @@ impl FunctionCompiler<'_> {
             // A local an element read of the list assigns may be an element
             // slot of the list; it reads the text instead.
             let claimed = |name: &str| {
-                (self.str_slots.contains_key(name)
-                    && !self
-                        .str_element_lists
-                        .get(name)
-                        .is_some_and(|list| part.lists.contains(list)))
-                    || self.block_loans.contains_key(name)
-                    || self.fused_entry_copies.contains_key(name)
-                    || self.fused_entry_slots.contains_key(name)
-                    || self.lent_entry_copies.contains(name)
-                    || self.shadow_read_targets.contains(name)
-                    || self.node_read_loans.contains(name)
-                    || self.node_read_targets.contains(name)
-                    || self.push_entry_loans.contains(name)
-                    || self.called_loan_reads.values().any(|loan| loan == name)
-                    || self.element_calls.contains_key(name)
-                    || self.record_lends.contains_key(name)
-                    || self.lent_elements.contains_key(name)
-                    || self.lent_places.contains(name)
-                    || self.str_literal_lists.contains(name)
-                    || self.key_loops.contains_key(name)
-                    || self.entry_loops.contains_key(name)
-                    || self.result_slots.contains_key(name)
-                    || self.lookup_slots.contains(name)
-                    || self.json_views.contains(name)
-                    || self.view_selector_vars.contains_key(name)
+                self.claims_split_local(name, &part.lists)
                     || self
                         .list_snapshots
                         .iter()
@@ -801,6 +803,38 @@ impl FunctionCompiler<'_> {
         }
     }
 
+    /// Whether another way of compiling the function claims the local
+    /// `name`, so a split that does not make its list must leave it
+    /// alone. An element slot of one of `lists`, the lists of that split,
+    /// is no claim: it reads the text instead.
+    pub(super) fn claims_split_local(&self, name: &str, lists: &[String]) -> bool {
+        (self.str_slots.contains_key(name)
+            && !self
+                .str_element_lists
+                .get(name)
+                .is_some_and(|list| lists.contains(list)))
+            || self.block_loans.contains_key(name)
+            || self.fused_entry_copies.contains_key(name)
+            || self.fused_entry_slots.contains_key(name)
+            || self.lent_entry_copies.contains(name)
+            || self.shadow_read_targets.contains(name)
+            || self.node_read_loans.contains(name)
+            || self.node_read_targets.contains(name)
+            || self.push_entry_loans.contains(name)
+            || self.called_loan_reads.values().any(|loan| loan == name)
+            || self.element_calls.contains_key(name)
+            || self.record_lends.contains_key(name)
+            || self.lent_elements.contains_key(name)
+            || self.lent_places.contains(name)
+            || self.str_literal_lists.contains(name)
+            || self.key_loops.contains_key(name)
+            || self.entry_loops.contains_key(name)
+            || self.result_slots.contains_key(name)
+            || self.lookup_slots.contains(name)
+            || self.json_views.contains(name)
+            || self.view_selector_vars.contains_key(name)
+    }
+
     /// Refuses to leave out the instruction at `index` of the block `label`
     /// when it is a step of a split whose list is never made: a fused run
     /// of instructions that starts before it does not know the list is
@@ -824,7 +858,10 @@ impl FunctionCompiler<'_> {
 
     /// The bytes of the receiver of a split or a trim: the words this body
     /// holds it as, or those of its box.
-    fn split_receiver_words(&mut self, receiver: &str) -> std::result::Result<(Val, Val), String> {
+    pub(super) fn split_receiver_words(
+        &mut self,
+        receiver: &str,
+    ) -> std::result::Result<(Val, Val), String> {
         let operand = Operand::Place(receiver.to_string());
         match self.str_slot_words(&operand) {
             Some(words) => Ok(words),
@@ -922,6 +959,28 @@ impl FunctionCompiler<'_> {
                     let compiled = self.compile_instruction(label, at, &release);
                     self.split_part_steps
                         .insert((label.to_string(), at), Step::Nothing);
+                    compiled?;
+                }
+            }
+            Step::LoopSplit {
+                receiver,
+                list,
+                walk,
+                kept,
+            } => self.compile_loop_split(&receiver, &list, &walk, kept)?,
+            Step::LoopLen { target, walk } => self.compile_loop_len(&target, &walk)?,
+            Step::LoopFetch { element, walk } => self.compile_loop_fetch(&element, &walk)?,
+            Step::LoopRelease { receiver, kept } => {
+                if let Some(kept) = kept {
+                    self.release_loop_receiver(kept);
+                }
+                if let Some(receiver) = receiver {
+                    // The release is compiled here as the one put off.
+                    let at = (label.to_string(), index);
+                    let step = self.split_part_steps.remove(&at);
+                    let release = Instruction::Release { place: receiver };
+                    let compiled = self.compile_instruction(label, index, &release);
+                    self.split_part_steps.extend(step.map(|step| (at, step)));
                     compiled?;
                 }
             }
