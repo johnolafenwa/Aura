@@ -1,0 +1,64 @@
+# An entry loan under a key of a copy class, which a local holds as its
+# fields, finds the entry by every field of the key.
+
+copy class Point:
+    x: int64
+    y: int64
+
+
+enum Mark:
+    At(point: Point, weight: int64)
+    Off
+
+
+def paint(points: list[Point], grid: mut dict[Point, int64]):
+    for point in points:
+        match mut grid.lookup(point):
+            case Lookup.Found(cell):
+                cell = cell + 1
+            case Lookup.Missing:
+                grid[point] = 1
+
+
+def bump(point: Point, grid: mut dict[Point, int64]):
+    grid[point] += 5
+
+
+def weigh(marks: list[Mark], grid: mut dict[Point, int64]):
+    for mark in marks:
+        match mark:
+            case Mark.At(point, weight):
+                match mut grid.lookup(point):
+                    case Lookup.Found(cell):
+                        cell = cell + weight
+                    case Lookup.Missing:
+                        grid[point] = weight
+            case _:
+                pass
+
+
+def read(point: Point, grid: dict[Point, int64]) -> int64:
+    match grid.lookup(point):
+        case Lookup.Found(cell):
+            return cell
+        case Lookup.Missing:
+            return -1
+
+
+def main():
+    mut grid: dict[Point, int64] = {}
+    paint([Point(x=1, y=2), Point(x=1, y=2), Point(x=1, y=3)], grid)
+    print(grid[Point(x=1, y=2)])
+    bump(Point(x=1, y=2), grid)
+    print(grid[Point(x=1, y=2)])
+    mut marks = [
+        Mark.At(point=Point(x=1, y=3), weight=30),
+        Mark.Off,
+        Mark.At(point=Point(x=4, y=0), weight=4),
+    ]
+    weigh(marks, grid)
+    marks.clear()
+    print(
+        f"{read(Point(x=1, y=3), grid)} {read(Point(x=4, y=0), grid)} {read(Point(x=4, y=1), grid)}"
+    )
+    print(len(grid))

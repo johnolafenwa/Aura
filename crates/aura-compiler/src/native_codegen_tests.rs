@@ -20165,3 +20165,27 @@ fn an_entry_loan_reads_a_payload_key_where_its_variant_holds_it() {
         );
     }
 }
+
+#[test]
+fn an_entry_loan_boxes_a_key_of_several_words_once() {
+    let source = include_str!("../tests/fixtures/run-pass/copy_class_keys_select_entry_loans.au");
+    let mir = lower_source_to_mir(source).expect("copy class keys lower");
+    emit_host_object(&mir).expect("copy class keys compile directly");
+    let object = emit_unoptimized_object(&mir).expect("copy class keys emit");
+    // The key's fields are boxed for the loan, which releases the box when
+    // it ends.
+    for name in [
+        "aura_fn_paint",
+        "aura_fn_bump",
+        "aura_fn_weigh",
+        "aura_fn_read",
+    ] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.ends_with("aura_owned_release")),
+            "{name}: {symbols:?}"
+        );
+    }
+}

@@ -13984,6 +13984,15 @@ impl<'a> FunctionCompiler<'a> {
             None => self.load_operand_for_target(selector, &selector_ty)?,
         };
         let selected = self.coerce_value(loaded, &selector_ty)?;
+        // A key held as several words, such as an instance of a copy
+        // class, is boxed once for the loan, whose walks read the box.
+        let (selected, selector_ty) = if selected.values.len() > 1 {
+            let boxed = self.ensure_opaque(selected)?;
+            let boxed_ty = boxed.ty.clone();
+            (boxed, boxed_ty)
+        } else {
+            (selected, selector_ty)
+        };
         // An explicit module keeps a selector's place until the loan ends,
         // so a key read from its place is lent to the loan. A key the load
         // made, such as a string literal's box, is the loan's own until it
