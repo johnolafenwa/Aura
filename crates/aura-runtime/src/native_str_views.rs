@@ -429,7 +429,8 @@ pub unsafe extern "C-unwind" fn aura_direct_str_parts_count_view(
 /// [`aura_direct_str_parts_count_view`]): its address, with its length
 /// written to `len`. `cursor` holds the walk's place between calls. It
 /// starts at zero, and the call moves it on. After the last part the
-/// result is an empty text.
+/// result is no address, with a length of zero: a part, even an empty
+/// one, lies in the text and has one.
 ///
 /// A loop over the parts makes no list and no value for a part.
 ///
@@ -455,8 +456,14 @@ pub unsafe extern "C-unwind" fn aura_direct_str_parts_next_view(
             *cursor,
         )
     };
-    let (part, next) =
-        next_part(text, separator, kind, start).unwrap_or(("", STR_VIEW_ITERATION_DONE));
+    let Some((part, next)) = next_part(text, separator, kind, start) else {
+        // SAFETY: the caller's contract.
+        unsafe {
+            cursor.write(STR_VIEW_ITERATION_DONE);
+            len.write(0);
+        }
+        return std::ptr::null();
+    };
     // SAFETY: the caller's contract.
     unsafe { cursor.write(next) };
     part_of(part, len)
@@ -655,12 +662,16 @@ mod tests {
                     &mut len,
                 )
             };
-            text_of(part, len).to_string()
+            (!part.is_null()).then(|| text_of(part, len).to_string())
         };
-        let parts = (0..count).map(|_| next()).collect::<Vec<_>>();
-        // A walk past its last part gives empty texts.
-        assert_eq!(next(), "");
-        assert_eq!(next(), "");
+        // Every part has an address, an empty one too.
+        let parts = (0..count)
+            .map(|_| next().expect("a part for each one counted"))
+            .collect::<Vec<_>>();
+        // A walk past its last part gives no address, however often.
+        assert_eq!(next(), None);
+        assert_eq!(next(), None);
+        assert_eq!((cursor, len), (STR_VIEW_ITERATION_DONE, 0));
         parts
     }
 
