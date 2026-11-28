@@ -6470,8 +6470,18 @@ impl<'a> FunctionCompiler<'a> {
                 skipped = release - 1 + usize::from(taken);
                 continue;
             }
-            self.str_append_root =
-                str_append_root(&block.instructions[instruction_index..]).map(str::to_string);
+            self.str_append_root = str_append_root(&block.instructions[instruction_index..])
+                .or_else(|| {
+                    rendered_str_root(&block.instructions[instruction_index..])
+                        // A root held as words has no box to build in.
+                        .filter(|root| {
+                            !self.str_slots.contains_key(*root)
+                                && !self.deferred_str_copies.contains_key(*root)
+                                && !self.spliced_formats.contains_key(*root)
+                                && !self.deferred_reads.contains(*root)
+                        })
+                })
+                .map(str::to_string);
             let compiled = self.compile_instruction(&block.label, instruction_index, instruction);
             self.str_append_root = None;
             compiled?;
@@ -24691,6 +24701,30 @@ fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
         && !root.contains('.')
         && !rest.into_iter().any(reads_root))
     .then_some(root.as_str())
+}
+
+/// The root `x` of `instructions` that start `t = f"{x}..."; Release(x)`,
+/// the form an f-string takes that renders a `str` it reads for the last
+/// time, when no later part reads `x`: the string may be built in `x`'s
+/// box, as [`str_append_root`] builds `x += ...`. A `{x}` inside a longer
+/// f-string is first rendered alone this way, which then copies nothing.
+fn rendered_str_root(instructions: &[Instruction]) -> Option<&str> {
+    let [Instruction::Assign {
+        target,
+        value: Rvalue::FormatString { parts },
+    }, Instruction::Release { place: released }, ..] = instructions
+    else {
+        return None;
+    };
+    let [MirFormatPart::Value(Operand::Place(first)), rest @ ..] = parts.as_slice() else {
+        return None;
+    };
+    let reads_root = |part: &MirFormatPart| {
+        matches!(part.operand(), Some(Operand::Place(place) | Operand::MovePlace(place))
+            if place.split('.').next() == Some(first.as_str()))
+    };
+    (first == released && first != target && !first.contains('.') && !rest.iter().any(reads_root))
+        .then_some(first.as_str())
 }
 
 /// The temporary `%t` of `instructions` that start `x = %t.replace("a",

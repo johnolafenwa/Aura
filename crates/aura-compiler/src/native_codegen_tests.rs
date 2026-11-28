@@ -20189,3 +20189,24 @@ fn an_entry_loan_boxes_a_key_of_several_words_once() {
         );
     }
 }
+
+#[test]
+fn an_fstring_builds_in_the_box_of_a_str_it_reads_last() {
+    let source = include_str!("../tests/fixtures/run-pass/fstring_builds_in_a_last_read_str.au");
+    let mir = lower_source_to_mir(source).expect("the f-strings lower");
+    emit_host_object(&mir).expect("the f-strings compile directly");
+    let object = emit_unoptimized_object(&mir).expect("the f-strings emit");
+    // `{word}` is rendered alone first, and released right after: the
+    // rendering takes `word`'s box, and so does an f-string that starts
+    // with the rendered text.
+    for name in ["aura_fn_decorate", "aura_fn_long_tail", "aura_fn_literal"] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.ends_with("aura_direct_format_append_begin")
+                    || symbol.ends_with("aura_direct_format_append_str")),
+            "{name}: {symbols:?}"
+        );
+    }
+}
