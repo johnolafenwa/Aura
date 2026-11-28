@@ -34339,3 +34339,228 @@ fn a_boundary_leaves_with_one_word_for_its_count_and_a_generator_exit() {
     // SAFETY: nothing uses the stack afterwards.
     unsafe { super::DirectFrameStack::free(stack) };
 }
+
+#[test]
+fn a_scalar_list_with_room_is_reversed_where_its_view_shows_it() {
+    use super::DirectScalarKind;
+    let made = |element: &str, room: usize| {
+        let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+        let name = super::canonical_runtime_type_name(&Type::Named(
+            "list".to_string(),
+            vec![Type::named(element)],
+        ));
+        super::aura_direct_vec_empty_tagged_with_room(&cell, name.as_ptr(), name.len(), room)
+    };
+    let read = |list: *mut OpaqueValue| {
+        (0..super::aura_direct_vec_len(list))
+            .map(|index| expect_int(super::aura_direct_vec_index(list, index, 1, 1)))
+            .collect::<Vec<_>>()
+    };
+    // Each width of scalar, with an even and an odd count.
+    for (element, kind) in [
+        ("uint8", DirectScalarKind::Uint8),
+        ("int8", DirectScalarKind::Int8),
+        ("int16", DirectScalarKind::Int16),
+        ("uint16", DirectScalarKind::Uint16),
+        ("int32", DirectScalarKind::Int32),
+        ("uint32", DirectScalarKind::Uint32),
+        ("uint64", DirectScalarKind::Uint64),
+    ] {
+        for count in [0, 1, 4, 5] {
+            let list = made(element, 8);
+            for bits in 0..count {
+                super::aura_direct_vec_push_scalar(list, bits + 1, kind as i64);
+            }
+            // The write left room, so the reverse runs in the view and
+            // leaves the room there.
+            assert_ne!(list_view_capacity(list), 0, "{element}");
+            assert_eq!(super::aura_direct_vec_reverse_in_place(list), 1);
+            assert_ne!(list_view_capacity(list), 0, "{element}");
+            assert_eq!(
+                read(list),
+                (1..=count).rev().map(i128::from).collect::<Vec<_>>(),
+                "{element}"
+            );
+            unsafe { release_value(list) };
+        }
+    }
+    // Elements generated code appended in place are in the view too.
+    let list = made("int64", 4);
+    for bits in [3, 5, 8] {
+        assert!(append_like_generated_code(
+            list,
+            bits,
+            super::DirectListAccess::Int64
+        ));
+    }
+    assert_eq!(super::aura_direct_vec_reverse_in_place(list), 1);
+    assert_eq!(list_ints(list), [8, 5, 3]);
+    // The read took the room back: the reverse goes through the value.
+    assert_eq!(list_view_capacity(list), 0);
+    assert_eq!(super::aura_direct_vec_reverse_in_place(list), 1);
+    assert_eq!(list_ints(list), [3, 5, 8]);
+    // A list whose storage a copy shares has no room either.
+    let copy = super::aura_direct_clone_value(list);
+    assert_eq!(super::aura_direct_vec_reverse_in_place(list), 1);
+    assert_eq!(list_ints(list), [8, 5, 3]);
+    assert_eq!(list_ints(copy), [3, 5, 8]);
+    // A list of floats and one of bools.
+    let floats = made("float64", 2);
+    for value in [1.5f64, 2.5] {
+        super::aura_direct_vec_push_scalar(
+            floats,
+            value.to_bits() as i64,
+            DirectScalarKind::Float64 as i64,
+        );
+    }
+    assert_eq!(super::aura_direct_vec_reverse_in_place(floats), 1);
+    assert_eq!(
+        expect_float(super::aura_direct_vec_index(floats, 0, 1, 1)),
+        2.5
+    );
+    let flags = made("bool", 2);
+    for bits in [1, 0, 0] {
+        super::aura_direct_vec_push_scalar(flags, bits, DirectScalarKind::Bool as i64);
+    }
+    assert_eq!(super::aura_direct_vec_reverse_in_place(flags), 1);
+    assert!(expect_bool_boxed(super::aura_direct_vec_index(
+        flags, 2, 1, 1
+    )));
+    // A list of boxes with room is reversed through the value, and a
+    // shared list under its lock.
+    let names = made("str", 2);
+    super::aura_direct_vec_push_in_place(names, string_value("a"));
+    super::aura_direct_vec_push_in_place(names, string_value("b"));
+    assert_eq!(super::aura_direct_vec_reverse_in_place(names), 1);
+    assert_eq!(
+        expect_string(super::aura_direct_vec_index(names, 0, 1, 1)),
+        "b"
+    );
+    let shared = made("int64", 2);
+    for bits in [1, 2] {
+        super::aura_direct_vec_push_scalar(shared, bits, DirectScalarKind::Int64 as i64);
+    }
+    unsafe { super::share_direct_value(shared) };
+    assert_eq!(super::aura_direct_vec_reverse_in_place(shared), 1);
+    assert_eq!(list_ints(shared), [2, 1]);
+    for value in [list, copy, floats, flags, names, shared] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn a_scalar_list_with_room_is_extended_where_its_view_shows_it() {
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let ints = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+            let name = super::canonical_runtime_type_name(&Type::Named(
+                "list".to_string(),
+                vec![Type::named("int64")],
+            ));
+            let empty = || super::aura_direct_vec_empty_tagged(&ints, name.as_ptr(), name.len());
+            let roomy = |room| {
+                super::aura_direct_vec_empty_tagged_with_room(
+                    &ints,
+                    name.as_ptr(),
+                    name.len(),
+                    room,
+                )
+            };
+            let entries =
+                || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
+            let int64 = super::DirectScalarKind::Int64 as i64;
+            let push = |list, bits| super::aura_direct_vec_push_scalar(list, bits, int64);
+            let appended = |list, bits| {
+                assert!(append_like_generated_code(
+                    list,
+                    bits,
+                    super::DirectListAccess::Int64
+                ))
+            };
+
+            // The elements go in place while `out` has room for them, the
+            // ones generated code appended to either list included, and
+            // `entry` becomes the spare.
+            let out = roomy(8);
+            appended(out, 1);
+            let entry = roomy(4);
+            appended(entry, 2);
+            appended(entry, 3);
+            let room = list_view_capacity(out);
+            assert!(unsafe { super::extend_scalars_in_view(out, entry) });
+            assert_eq!(list_view_len(out), 3);
+            assert_eq!(list_view_len(entry), 2);
+            unsafe { super::retire_extend_source(entry) };
+            assert_eq!(list_view_capacity(out), room);
+            assert_eq!(entries(), [(out as usize, 1)]);
+            let reused = empty();
+            assert_eq!(reused, entry);
+            assert_eq!(super::aura_direct_vec_len(reused), 0);
+
+            // An empty `entry` adds nothing and is retired the same way.
+            appended(out, 4);
+            assert_eq!(super::aura_direct_vec_extend_in_place(out, reused), 1);
+            assert_eq!(list_ints(out), [1, 2, 3, 4]);
+
+            // The read took the room back, so the next extend goes through
+            // the value, and the write gives the room back.
+            assert_eq!(list_view_capacity(out), 0);
+            let entry = empty();
+            push(entry, 5);
+            assert!(!unsafe { super::extend_scalars_in_view(out, entry) });
+            assert_eq!(super::aura_direct_vec_extend_in_place(out, entry), 1);
+            assert_ne!(list_view_capacity(out), 0);
+
+            // More elements than there is room for grow the storage.
+            let entry = empty();
+            let room = list_view_capacity(out) as i64;
+            for bits in 0..=room {
+                push(entry, bits);
+            }
+            assert!(!unsafe { super::extend_scalars_in_view(out, entry) });
+            assert_eq!(super::aura_direct_vec_extend_in_place(out, entry), 1);
+            assert_eq!(super::aura_direct_vec_len(out), 6 + room);
+            unsafe { super::aura_direct_release_value(out) };
+
+            // A list of another kind of scalar, a list with another
+            // reference, the list itself, and no list are left alone.
+            let out = roomy(8);
+            appended(out, 1);
+            let floats = super::aura_direct_vec_empty();
+            super::aura_direct_vec_push_scalar(
+                floats,
+                1.5f64.to_bits() as i64,
+                super::DirectScalarKind::Float64 as i64,
+            );
+            assert!(!unsafe { super::extend_scalars_in_view(out, floats) });
+            let entry = roomy(2);
+            appended(entry, 9);
+            let second = unsafe { super::aura_direct_retain_value(entry) };
+            assert!(!unsafe { super::extend_scalars_in_view(out, entry) });
+            unsafe { super::aura_direct_release_value(second) };
+            assert!(!unsafe { super::extend_scalars_in_view(out, out) });
+            assert!(!unsafe { super::extend_scalars_in_view(out, std::ptr::null_mut()) });
+            assert!(!unsafe { super::extend_scalars_in_view(std::ptr::null_mut(), entry) });
+            // Neither is a list of boxes, whatever room it has.
+            assert_eq!(
+                super::scalar_view_stride(super::DirectListAccess::Boxes as u32),
+                None
+            );
+            for (access, stride) in [
+                (super::DirectListAccess::Bool, 1),
+                (super::DirectListAccess::Uint16, 2),
+                (super::DirectListAccess::Float32, 4),
+                (super::DirectListAccess::Float64, 8),
+            ] {
+                assert_eq!(super::scalar_view_stride(access as u32), Some(stride));
+            }
+            assert_eq!(super::aura_direct_vec_extend_in_place(out, entry), 1);
+            assert_eq!(list_ints(out), [1, 9]);
+            for value in [out, floats] {
+                unsafe { super::aura_direct_release_value(value) };
+            }
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+}

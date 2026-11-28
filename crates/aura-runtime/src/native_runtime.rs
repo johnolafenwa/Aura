@@ -11342,9 +11342,75 @@ pub extern "C-unwind" fn aura_direct_vec_clear_in_place(vec: *mut OpaqueValue) -
     })
 }
 
+/// Reverses the elements of `vec` where its view shows them, when it is a
+/// list of unboxed scalars with room. `false`, with nothing changed, for
+/// any other value.
+///
+/// Room is what lets generated code store and swap elements in place: the
+/// list is confined to its thread, its storage is unshared, and the view's
+/// address and length name every element, the ones generated code
+/// appended in place included. Reversing them is a run of such swaps, and
+/// leaves the address, the length, and the room as they are, so nothing
+/// here reads the value behind the view, calls out, or can fail.
+///
+/// # Safety
+///
+/// `vec` is null or a live box of the running thread.
+#[inline]
+unsafe fn reverse_scalars_in_view(vec: *mut OpaqueValue) -> bool {
+    use crate::list_elements::ListForm;
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return false;
+    };
+    if header.list_capacity.load(Ordering::Relaxed) == 0
+        || !header.shared_lock.load(Ordering::Acquire).is_null()
+    {
+        return false;
+    }
+    let access = header.list_access.load(Ordering::Relaxed);
+    let (at, len) = (header.list_elements.get(), header.list_len.get());
+    let wide = |form: ListForm| form.access() == access;
+    // SAFETY: the view of a list of scalars with room names `len`
+    // initialized elements of the form's width, which nothing else reads
+    // or writes meanwhile.
+    unsafe {
+        if wide(ListForm::Uint8) || wide(ListForm::Int8) || wide(ListForm::Bool) {
+            reverse_view::<u8>(at, len)
+        } else if wide(ListForm::Int64) || wide(ListForm::Uint64) || wide(ListForm::Float64) {
+            reverse_view::<u64>(at, len)
+        } else if wide(ListForm::Int32) || wide(ListForm::Uint32) || wide(ListForm::Float32) {
+            reverse_view::<u32>(at, len)
+        } else if wide(ListForm::Int16) || wide(ListForm::Uint16) {
+            reverse_view::<u16>(at, len)
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// Reverses the `len` elements of type `T` at address `at`.
+///
+/// # Safety
+///
+/// When `len` is at least 2, `at` is the address of `len` initialized
+/// elements of type `T` that nothing else reads or writes meanwhile.
+#[inline(always)]
+unsafe fn reverse_view<T>(at: usize, len: usize) {
+    if len >= 2 {
+        // SAFETY: the caller's contract.
+        unsafe { slice::from_raw_parts_mut(at as *mut T, len) }.reverse();
+    }
+}
+
 /// `list.reverse()`, which returns 1 as `clear` does.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_reverse_in_place(vec: *mut OpaqueValue) -> i64 {
+    // SAFETY: generated code passes a live box of its thread.
+    if unsafe { reverse_scalars_in_view(vec) } {
+        return 1;
+    }
     task_runtime_boundary(|| {
         with_vector_mut(vec, |vector| vector.elements.reverse());
         1
@@ -11570,7 +11636,15 @@ pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
     vec: *mut OpaqueValue,
     other: *mut OpaqueValue,
 ) -> i64 {
+    // SAFETY: the caller owns its reference to each.
+    let copied = unsafe { extend_scalars_in_view(vec, other) };
     task_runtime_boundary(|| {
+        if copied {
+            // SAFETY: the copy found `other` confined, with the caller's
+            // reference its only one.
+            unsafe { retire_extend_source(other) };
+            return 1;
+        }
         // SAFETY: the caller owns its reference to `other`.
         if unsafe { extend_keeping_spare(vec, other) } {
             return 1;
@@ -11641,16 +11715,107 @@ unsafe fn extend_keeping_spare(vec: *mut OpaqueValue, other: *mut OpaqueValue) -
         Ok(false) => return false,
         Err(_) => list_allocation_failed(),
     }
+    // SAFETY: checked above.
+    unsafe { retire_extend_source(other) };
+    true
+}
+
+/// Drops the caller's reference to `other`, the list an `extend` copied
+/// its elements out of, and keeps its emptied box as the thread's spare
+/// list when it can be one.
+///
+/// # Safety
+///
+/// `other` is a live list confined to this thread, and the caller holds
+/// the only reference to it.
+unsafe fn retire_extend_source(other: *mut OpaqueValue) {
     crate::runtime_value::representation_stats::note_release();
     let owned = unregister_direct_owned_value(other);
     check_released_value_is_owned(other, owned);
-    header.ref_count.store(0, Ordering::Relaxed);
+    // SAFETY: the caller's contract.
+    unsafe { &*other }.ref_count.store(0, Ordering::Relaxed);
     // SAFETY: the count reached zero, the value is confined, and the
     // ledger no longer links it.
     unsafe {
         if !keep_spare_list(other) {
             free_direct_value(other);
         }
+    }
+}
+
+/// The bytes one element takes in the storage of a list whose view has
+/// access code `access`, when that is a form of unboxed scalars.
+#[inline(always)]
+fn scalar_view_stride(access: u32) -> Option<usize> {
+    use crate::list_elements::ListForm;
+    let is = |form: ListForm| form.access() == access;
+    if is(ListForm::Uint8) || is(ListForm::Int8) || is(ListForm::Bool) {
+        Some(1)
+    } else if is(ListForm::Int64) || is(ListForm::Uint64) || is(ListForm::Float64) {
+        Some(8)
+    } else if is(ListForm::Int32) || is(ListForm::Uint32) || is(ListForm::Float32) {
+        Some(4)
+    } else if is(ListForm::Int16) || is(ListForm::Uint16) {
+        Some(2)
+    } else {
+        None
+    }
+}
+
+/// Copies the elements of `other` to the end of `vec` where their views
+/// show them, when both are confined lists of the same kind of unboxed
+/// scalar, `vec` has room for the elements, and the caller's reference to
+/// `other` is its only one. `false`, with nothing changed, for any other
+/// pair. `other` keeps its elements; the caller retires it (see
+/// [`retire_extend_source`]).
+///
+/// Room is what lets generated code append to `vec` in place: its storage
+/// is unshared and holds that many elements, and the view's length counts
+/// the ones written. The copy is a run of such appends, read from the
+/// elements the view of `other` names, so nothing here reads either value
+/// behind its view, calls out, or can fail.
+///
+/// # Safety
+///
+/// Each of `vec` and `other` is null or a live box of the running thread.
+#[inline]
+unsafe fn extend_scalars_in_view(vec: *mut OpaqueValue, other: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller's contract.
+    let (Some(target), Some(source)) = (unsafe { vec.as_ref() }, unsafe { other.as_ref() }) else {
+        return false;
+    };
+    let room = target.list_capacity.load(Ordering::Relaxed) as usize;
+    let access = target.list_access.load(Ordering::Relaxed);
+    if std::ptr::eq(vec, other)
+        || room == 0
+        || source.list_access.load(Ordering::Relaxed) != access
+        || source.ref_count.load(Ordering::Acquire) != 1
+        || !source.shared_lock.load(Ordering::Acquire).is_null()
+        || !target.shared_lock.load(Ordering::Acquire).is_null()
+    {
+        return false;
+    }
+    let Some(stride) = scalar_view_stride(access) else {
+        return false;
+    };
+    let (len, more) = (target.list_len.get(), source.list_len.get());
+    // A list whose room counts every element its storage holds has room
+    // for `more` when the sum stays within it.
+    if room == u32::MAX as usize || more > room.saturating_sub(len) {
+        return false;
+    }
+    if more != 0 {
+        // SAFETY: the view of `other` names `more` initialized elements
+        // of `stride` bytes, and the storage of `vec`, a different list's,
+        // holds `room` of them, of which the first `len` are written.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                source.list_elements.get() as *const u8,
+                (target.list_elements.get() as *mut u8).add(len * stride),
+                more * stride,
+            );
+        }
+        target.list_len.set(len + more);
     }
     true
 }

@@ -416,6 +416,20 @@ fn parts_read_in_the_text_free_every_box() {
     assert_frees_everything("leak-split-parts", source, expected, 0);
 }
 
+/// Lists of scalars reversed and extended where their elements lie, the
+/// lists that go the long way, and a recovered trap after both: the
+/// native run frees every box, the lists that were appended among them.
+#[test]
+fn scalar_lists_reversed_and_extended_in_their_room_free_every_box() {
+    let source = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/scalar_lists_reverse_and_extend_in_their_room.au"
+    );
+    let expected = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/scalar_lists_reverse_and_extend_in_their_room.stdout"
+    );
+    assert_frees_everything("leak-reverse-extend", source, expected, 0);
+}
+
 /// An overflow in a function that reads an element a list keeps in place
 /// where it lies, called by a loop and by a key sort, names both frames
 /// and frees every box.
