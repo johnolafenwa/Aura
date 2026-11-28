@@ -3438,6 +3438,9 @@ impl<'a> NativeCodegen<'a> {
             stand_in_slots: HashMap::new(),
             element_lend_temps,
             native_loans: HashMap::new(),
+            split_part_steps: HashMap::new(),
+            split_part_done: HashSet::new(),
+            split_part_locals: HashSet::new(),
             push_entry_loans: element_loans::push_entry_loans(function),
             fused_entry_probes,
             pending_try_read: None,
@@ -3539,6 +3542,11 @@ impl<'a> NativeCodegen<'a> {
                 // list holds it and never assigns the slot's words.
                 || compiler.str_key_tests.contains_key(local)
         });
+        if self.freestanding.is_none()
+            && self.module.ownership == crate::mir::MirOwnership::Explicit
+        {
+            compiler.plan_split_parts(function);
+        }
         let return_ty = ensure_direct_type(
             &function.return_type,
             &self.classes,
@@ -5197,6 +5205,13 @@ struct FunctionCompiler<'a> {
     element_lend_temps: HashSet<String>,
     /// The element loans generated code followed when they began.
     native_loans: HashMap<String, element_loans::NativeLoan>,
+    /// What to do at each instruction, by block and position, of a split
+    /// whose parts are read where the text keeps them (see `split_parts`).
+    split_part_steps: HashMap<(String, usize), split_parts::Step>,
+    /// The steps of `split_part_steps` compiled so far.
+    split_part_done: HashSet<(String, usize)>,
+    /// The locals and loans that hold a part as words.
+    split_part_locals: HashSet<String>,
     /// The entry loans that only append scalars to their entry's list (see
     /// `element_loans::push_entry_loans`).
     push_entry_loans: HashSet<String>,
@@ -6304,6 +6319,7 @@ impl<'a> FunctionCompiler<'a> {
         let mut skipped = 0;
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
             if skipped > 0 {
+                self.refuse_skipped_split_part_step(&block.label, instruction_index)?;
                 skipped -= 1;
                 continue;
             }
@@ -6325,6 +6341,9 @@ impl<'a> FunctionCompiler<'a> {
                 self.checked_variant = None;
             }
             self.current_snapshot_instruction = instruction_index;
+            if self.compile_split_part_step(&block.label, instruction_index)? {
+                continue;
+            }
             if self.freestanding.is_some() && self.compile_scale_offset(block, instruction_index)? {
                 skipped = 3;
                 continue;
@@ -6549,6 +6568,10 @@ impl<'a> FunctionCompiler<'a> {
         );
         self.shaped_boxes.clear();
         self.fresh_str_copies.clear();
+        // A fused run of instructions compiles the ones it covers here.
+        if self.compile_split_part_step(block_label, instruction_index)? {
+            return Ok(());
+        }
         // Clear the cached backing when its owning local is initialized or dropped.
         if let Instruction::Assign { target: place, .. } | Instruction::Release { place } =
             instruction
@@ -11748,6 +11771,7 @@ impl<'a> FunctionCompiler<'a> {
     /// it.
     fn owns_str_temporary(&self, root: &str) -> bool {
         self.tracked_roots.contains(root)
+            && !self.split_part_locals.contains(root)
             && !self.loan_locals.contains(root)
             && !self.lent_places.contains(root)
             && !self.lent_elements.contains_key(root)
@@ -26236,6 +26260,8 @@ fn collect_task_start_targets(
 mod reachability;
 #[path = "native_codegen_result_slots.rs"]
 mod result_slots;
+#[path = "native_codegen_split_parts.rs"]
+mod split_parts;
 #[path = "native_codegen_str_slots.rs"]
 mod str_slots;
 

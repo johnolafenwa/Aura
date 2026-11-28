@@ -14196,6 +14196,54 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "vec-check-index-oob" => {
                 super::aura_direct_vec_check_index(int_vec(&[1]), -2, 3, 9);
             }
+            "split-part-oob-byte" => {
+                let mut len = 0_i64;
+                let (text, separator) = ("a b", " ");
+                unsafe {
+                    super::aura_direct_string_split_part_words(
+                        text.as_ptr(),
+                        text.len(),
+                        separator.as_ptr(),
+                        separator.len(),
+                        2,
+                        3,
+                        9,
+                        &mut len,
+                    );
+                }
+            }
+            "split-part-oob-text" => {
+                let mut len = 0_i64;
+                let (text, separator) = ("a--b--c", "--");
+                unsafe {
+                    super::aura_direct_string_split_part_words(
+                        text.as_ptr(),
+                        text.len(),
+                        separator.as_ptr(),
+                        separator.len(),
+                        7,
+                        3,
+                        9,
+                        &mut len,
+                    );
+                }
+            }
+            "split-part-negative" => {
+                let mut len = 0_i64;
+                let (text, separator) = ("a b", " ");
+                unsafe {
+                    super::aura_direct_string_split_part_words(
+                        text.as_ptr(),
+                        text.len(),
+                        separator.as_ptr(),
+                        separator.len(),
+                        -1,
+                        3,
+                        9,
+                        &mut len,
+                    );
+                }
+            }
             "vec-push-scalar-kind" => {
                 super::aura_direct_vec_push_scalar(super::aura_direct_vec_empty(), 1, 99);
             }
@@ -15304,6 +15352,18 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "vec-check-index-oob",
             "list index `-2` is out of bounds for length `1`",
+        ),
+        (
+            "split-part-oob-byte",
+            "list index `2` is out of bounds for length `2`",
+        ),
+        (
+            "split-part-oob-text",
+            "list index `7` is out of bounds for length `3`",
+        ),
+        (
+            "split-part-negative",
+            "list index `-1` is out of bounds for length `2`",
         ),
         ("vec-push-scalar-kind", "unknown direct scalar kind `99`"),
         (
@@ -30845,6 +30905,43 @@ fn a_split_of_words_gives_the_parts_a_split_of_the_box_gives() {
     assert_eq!(split("a, b,, c", ", "), strings(&["a", "b,", "c"]));
     assert_eq!(split("", " "), strings(&[""]));
     assert_eq!(split("é é", " "), strings(&["é", "é"]));
+}
+
+#[test]
+fn a_part_of_a_split_is_read_where_the_text_keeps_it() {
+    let part = |text: &str, separator: &str, index: i64| {
+        let mut len = -1_i64;
+        let ptr = unsafe {
+            super::aura_direct_string_split_part_words(
+                text.as_ptr(),
+                text.len(),
+                separator.as_ptr(),
+                separator.len(),
+                index,
+                3,
+                5,
+                &mut len,
+            )
+        };
+        // The part lies inside the text it was split from.
+        let offset = ptr as usize - text.as_ptr() as usize;
+        text[offset..offset + len as usize].to_string()
+    };
+    // Every part is the element the list `split` makes holds.
+    for (text, separator) in [
+        ("event 7 value 4321", " "),
+        ("a, b,, c", ", "),
+        ("", " "),
+        (" lead and trail ", " "),
+        ("é é ü", " "),
+        ("abc", ""),
+        ("no separator", "|"),
+    ] {
+        let parts = text.split(separator).collect::<Vec<_>>();
+        for (index, expected) in parts.iter().enumerate() {
+            assert_eq!(part(text, separator, index as i64), *expected);
+        }
+    }
 }
 
 #[test]

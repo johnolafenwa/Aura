@@ -1,0 +1,27 @@
+3 66
+2 299
+17 [1 2, 3 4, 0 5, 1 6]
+/index
+ok
+42 0
+right/left
+ü/é
+7
+10 -4
+a3+a3 b3
+two|one two three
+7
+6
+1 11
+list index `3` is out of bounds for length `3`
+2 true false
+div
+41 -7
+[both  |  both]
+bbnbnb
+kept
+4 0 2
+1107
+list index `5` is out of bounds for length `2`
+list index `9` is out of bounds for length `2`
+list index `1` is out of bounds for length `1`

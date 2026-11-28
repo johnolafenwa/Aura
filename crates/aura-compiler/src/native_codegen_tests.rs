@@ -2049,6 +2049,76 @@ fn nested_field_list_reads_follow_the_field_s_boxes() {
 }
 
 #[test]
+fn a_split_read_at_known_positions_finds_its_parts_in_the_text() {
+    let source = include_str!("../tests/fixtures/run-pass/split_parts_read_in_the_text.au");
+    let mir = lower_source_to_mir(source).expect("split part reads lower");
+    let object = emit_unoptimized_object(&mir).expect("split part reads emit");
+    // Mach-O symbol names carry a leading underscore.
+    let calls = |name: &str, callee: &str| {
+        object_function_referenced_symbols(&object, name)
+            .iter()
+            .any(|symbol| symbol.ends_with(callee))
+    };
+    // A list read only at known positions in its block is never made: its
+    // reads find their parts in the text.
+    for name in [
+        "aura_fn_second",
+        "aura_view_aura_fn_second",
+        "aura_fn_both",
+        "aura_view_aura_fn_both",
+        "aura_fn_lengths",
+        "aura_view_aura_fn_lengths",
+        "aura_fn_fresh",
+        "aura_fn_kept",
+        "aura_fn_short",
+        "aura_view_aura_fn_short",
+    ] {
+        assert!(calls(name, "aura_direct_string_split_part_words"), "{name}");
+        for list in [
+            "aura_direct_string_split_literal",
+            "aura_direct_string_split_literal_words",
+        ] {
+            assert!(!calls(name, list), "{name} calls {list}");
+        }
+    }
+    // A trim whose text is read and released in its block makes no text.
+    for name in [
+        "aura_fn_blank",
+        "aura_fn_tag_name",
+        "aura_fn_padded",
+        "aura_fn_ends",
+        "aura_fn_swapped",
+        "aura_fn_copied",
+    ] {
+        assert!(calls(name, "aura_direct_str_trim_view"), "{name}");
+        assert!(!calls(name, "aura_direct_string_trim"), "{name}");
+    }
+    assert!(calls("aura_fn_late", "aura_direct_string_trim"));
+    assert!(!calls("aura_fn_late", "aura_direct_str_trim_view"));
+    // The loops of `main` read parts, and its split into lines is walked.
+    assert!(calls("aura_fn_main", "aura_direct_string_split_part_words"));
+    assert!(calls("aura_fn_main", "aura_direct_string_split_literal"));
+    assert!(!calls(
+        "aura_fn_main",
+        "aura_direct_string_split_literal_words"
+    ));
+    // A list read in another block, asked for its length, walked, or whose
+    // text changes before the read is made.
+    for name in [
+        "aura_fn_keyed",
+        "aura_fn_changed",
+        "aura_fn_counted",
+        "aura_fn_walked",
+        "aura_fn_branches",
+    ] {
+        assert!(
+            !calls(name, "aura_direct_string_split_part_words"),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn a_str_box_is_read_through_its_view_with_the_runtime_as_fallback() {
     let source = include_str!("../tests/fixtures/run-pass/str_box_words_follow_the_text.au");
     let mir = lower_source_to_mir(source).expect("str box reads lower");

@@ -9101,6 +9101,87 @@ pub extern "C-unwind" fn aura_direct_string_split_literal_words(
     })
 }
 
+/// The bytes of part `index` of the `len` UTF-8 bytes at `ptr` split by
+/// the literal `separator`, with their length at `out`: what element
+/// `index` of the list `split` makes would hold, read where the text keeps
+/// it, so that a split read only at known positions makes no list. An index
+/// the list would not have is reported as the read of that list reports it.
+///
+/// # Safety
+///
+/// `ptr` and `len` name the bytes of a `str` that stays as it is while the
+/// result is read, and `out` points to a writable word.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_string_split_part_words(
+    ptr: *const u8,
+    len: usize,
+    separator_ptr: *const u8,
+    separator_len: usize,
+    index: i64,
+    line: i64,
+    column: i64,
+    out: *mut i64,
+) -> *const u8 {
+    // A leaf while the part is there: the search calls nothing that can
+    // re-enter generated code or unwind, so it counts no boundary. Only
+    // the report of a missing part crosses one.
+    // SAFETY: generated code passes the bytes of a `str`.
+    let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+    // SAFETY: generated code passes the bytes of a literal of the program.
+    let separator = unsafe { slice::from_raw_parts(separator_ptr, separator_len) };
+    let part = usize::try_from(index)
+        .ok()
+        .and_then(|index| split_part(bytes, separator, index));
+    match part {
+        Some(part) => {
+            // SAFETY: the caller's contract.
+            unsafe { *out = part.len() as i64 };
+            part.as_ptr()
+        }
+        None => task_runtime_boundary(|| {
+            direct_vec_index_error(index, split_part_count(bytes, separator), line, column)
+        }),
+    }
+}
+
+/// Part `index` of the UTF-8 `bytes` split by the UTF-8 `separator`, as
+/// `str::split` gives the parts, or `None` when there are fewer.
+fn split_part<'a>(bytes: &'a [u8], separator: &[u8], index: usize) -> Option<&'a [u8]> {
+    let [byte] = separator else {
+        // SAFETY: both are the bytes of a `str`.
+        let (text, separator) = unsafe {
+            (
+                str::from_utf8_unchecked(bytes),
+                str::from_utf8_unchecked(separator),
+            )
+        };
+        return text.split(separator).nth(index).map(str::as_bytes);
+    };
+    let mut start = 0;
+    let mut left = index;
+    for position in memchr::memchr_iter(*byte, bytes) {
+        if left == 0 {
+            return Some(&bytes[start..position]);
+        }
+        left -= 1;
+        start = position + 1;
+    }
+    (left == 0).then(|| &bytes[start..])
+}
+
+/// How many parts [`split_part`] finds in `bytes`.
+fn split_part_count(bytes: &[u8], separator: &[u8]) -> usize {
+    // SAFETY: both are the bytes of a `str`.
+    let (text, separator) = unsafe {
+        (
+            str::from_utf8_unchecked(bytes),
+            str::from_utf8_unchecked(separator),
+        )
+    };
+    text.split(separator).count()
+}
+
 /// A new `list[str]` box of `parts`, every one a `str`. Its `Str` view is
 /// left for enough reads to pay for it: most split lists are read once or
 /// twice, and building the view costs two allocations and a pass.

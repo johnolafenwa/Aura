@@ -1335,6 +1335,15 @@ impl StrSlot {
     pub(super) fn is_param(&self) -> bool {
         self.made.is_some()
     }
+
+    /// The slot of a local, which releases any box it made itself.
+    pub(super) fn local(ptr: Var, len: Var) -> Self {
+        Self {
+            ptr,
+            len,
+            made: None,
+        }
+    }
 }
 
 /// Declares the `ptr` and `len` of each local `elements` holds as words.
@@ -2750,6 +2759,23 @@ impl FunctionCompiler<'_> {
         Ok(true)
     }
 
+    /// Gives the `str` local `name`, held as words, the bytes `ptr` and
+    /// `len` that something else keeps, and no box.
+    pub(super) fn define_str_slot(
+        &mut self,
+        name: &str,
+        ptr: Val,
+        len: Val,
+    ) -> std::result::Result<(), String> {
+        let slot = self.str_slots[name];
+        self.builder.def_var(slot.ptr, ptr);
+        self.builder.def_var(slot.len, len);
+        let variable = self.local_vars(name)?[0];
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.def_var(variable, zero);
+        Ok(())
+    }
+
     /// Compiles the copy `target` of a `str` local as a move of the local's
     /// reference, when the copy is the local's last read (see
     /// [`clone_moves`]) and the local owns a counted reference: its own,
@@ -2790,7 +2816,7 @@ impl FunctionCompiler<'_> {
     /// Whether the `str` local `name` holds a counted reference of its own
     /// that its release gives up, rather than words, a loan, a lent box, or
     /// a box a lookup or a list lends it.
-    fn owns_counted_str(&self, name: &str) -> bool {
+    pub(super) fn owns_counted_str(&self, name: &str) -> bool {
         self.tracked_roots.contains(name)
             && matches!(self.variable_types.get(name), Some(DirectType::Opaque(_)))
             && !self.loan_locals.contains(name)
