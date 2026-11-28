@@ -1,0 +1,76 @@
+# An f-string whose first part is a `str` read for the last time is built
+# in that text's own box. A text another place still holds keeps its value.
+
+
+class Label:
+    text: str
+
+
+def make(tag: int64) -> str:
+    return f"w{tag}".to_upper().to_lower()
+
+
+# `word` is read for the last time in each arm.
+def decorate(kind: int64, tag: int64) -> str:
+    word = make(tag)
+    if kind == 0:
+        return f"{word}"
+    if kind == 1:
+        return f"{word} &amp; co"
+    if kind == 2:
+        return f"<b>{word}</b>"
+    if kind == 3:
+        return f"{word}{word}"
+    return f"{word}-{kind}-{word.len()}"
+
+
+# The list and the field keep their own text, read through views, while
+# the f-string builds in the copy it reads last.
+def shared(tag: int64) -> str:
+    word = make(tag)
+    kept = [word.clone(), word.clone()]
+    label = Label(text=word.clone())
+    view first = kept[0]
+    view second = label.text
+    grown = f"{first}+{second}"
+    mine = f"{word}!"
+    return f"{grown}|{kept[0]}|{kept[1]}|{label.text}|{mine}"
+
+
+# A literal's text stays as the program holds it.
+def literal(rounds: int64) -> str:
+    mut out = ""
+    for round in range(rounds):
+        word = "lit"
+        out = f"{out}{word}{round};"
+        again = "lit"
+        tail = f"{again}!"
+        out = f"{out}{tail}"
+    return out
+
+
+def render(text: own str, times: int64) -> str:
+    mut parts: list[str] = []
+    for index in range(times):
+        copy = text.clone()
+        parts.append(f"{copy}#{index}")
+    last = f"{text}"
+    parts.append(last)
+    return ",".join(parts)
+
+
+def long_tail(tag: int64) -> str:
+    word = make(tag)
+    return f"{word} then a tail long enough that the text has to move to a larger buffer, é and ü included"
+
+
+def main():
+    for kind in range(5):
+        print(decorate(kind, kind + 10))
+    print(shared(7))
+    print(literal(2))
+    print(render(make(3), 2))
+    print(long_tail(9))
+    name = make(4)
+    pair = (f"{name}", 1)
+    print(pair)

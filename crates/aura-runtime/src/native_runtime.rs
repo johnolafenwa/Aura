@@ -16424,6 +16424,17 @@ fn map_value_slot(
 /// `slot` is a live slot of a loan that has not ended.
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aura_direct_value_slot_int64(slot: *const Value) -> i64 {
+    // A leaf: an `int64` the slot holds is read with no call, so nothing
+    // here can re-enter generated code or unwind, and the read counts no
+    // boundary. Any other slot takes the boundary, which reports it.
+    // SAFETY: the caller's contract.
+    if let Value::Int(integer) = unsafe { &*slot } {
+        if let IntegerRepresentation::Signed(wide) = integer.representation() {
+            if let Ok(word) = i64::try_from(wide) {
+                return word;
+            }
+        }
+    }
     // SAFETY: the caller's contract.
     task_runtime_boundary(|| unbox_int64_of(unsafe { &*slot }))
 }
@@ -16435,6 +16446,15 @@ pub unsafe extern "C-unwind" fn aura_direct_value_slot_int64(slot: *const Value)
 /// As for [`aura_direct_value_slot_int64`].
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aura_direct_value_slot_set_int64(slot: *mut Value, value: i64) {
+    // A leaf: an integer owns nothing, so writing over one drops nothing
+    // and calls nothing that can re-enter generated code or unwind, and
+    // the store counts no boundary. A slot that holds anything else takes
+    // the boundary, under which the old value is dropped.
+    // SAFETY: the caller's contract.
+    if let Value::Int(integer) = unsafe { &mut *slot } {
+        *integer = IntegerValue::from_i64(value);
+        return;
+    }
     // SAFETY: the caller's contract.
     task_runtime_boundary(|| unsafe { *slot = Value::Int(IntegerValue::from_i64(value)) })
 }

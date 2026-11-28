@@ -375,6 +375,34 @@ fn element_args_read_in_place_free_every_box() {
     assert_frees_everything("leak-element-args", source, expected, 0);
 }
 
+/// Payloads that entry loans read as their keys where the variant holds
+/// them, with the statements changed and cleared afterwards and a missing
+/// key that traps in a task: the native run frees every box.
+#[test]
+fn payload_keys_lent_to_entry_loans_free_every_box() {
+    let source = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/payload_keys_lent_to_entry_loans.au"
+    );
+    let expected = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/payload_keys_lent_to_entry_loans.stdout"
+    );
+    assert_frees_everything("leak-payload-keys", source, expected, 0);
+}
+
+/// F-strings built in the box of a text they read for the last time, with
+/// texts other places still hold and literals: the native run frees every
+/// box.
+#[test]
+fn fstrings_built_in_a_last_read_str_free_every_box() {
+    let source = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/fstring_builds_in_a_last_read_str.au"
+    );
+    let expected = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/fstring_builds_in_a_last_read_str.stdout"
+    );
+    assert_frees_everything("leak-fstring-last-read", source, expected, 0);
+}
+
 /// An overflow in a function that reads an element a list keeps in place
 /// where it lies, called by a loop and by a key sort, names both frames
 /// and frees every box.

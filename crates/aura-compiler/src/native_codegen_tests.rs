@@ -20145,3 +20145,68 @@ def main():
         "{referenced:?}"
     );
 }
+
+#[test]
+fn an_entry_loan_reads_a_payload_key_where_its_variant_holds_it() {
+    let source = include_str!("../tests/fixtures/run-pass/payload_keys_lent_to_entry_loans.au");
+    let mir = lower_source_to_mir(source).expect("payload keys lower");
+    emit_host_object(&mir).expect("payload keys compile directly");
+    let object = emit_unoptimized_object(&mir).expect("payload keys emit");
+    // The loans of `total` and `count` only read their keys, so no payload
+    // is copied out of its variant for them. `tally`, whose key is of a
+    // Copy type that the MIR never releases, copies it only to insert it.
+    for name in ["aura_fn_total", "aura_fn_count"] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        assert!(
+            !symbols
+                .iter()
+                .any(|symbol| symbol.ends_with("aura_direct_instance_copy_field")),
+            "{name}: {symbols:?}"
+        );
+    }
+}
+
+#[test]
+fn an_entry_loan_boxes_a_key_of_several_words_once() {
+    let source = include_str!("../tests/fixtures/run-pass/copy_class_keys_select_entry_loans.au");
+    let mir = lower_source_to_mir(source).expect("copy class keys lower");
+    emit_host_object(&mir).expect("copy class keys compile directly");
+    let object = emit_unoptimized_object(&mir).expect("copy class keys emit");
+    // The key's fields are boxed for the loan, which releases the box when
+    // it ends.
+    for name in [
+        "aura_fn_paint",
+        "aura_fn_bump",
+        "aura_fn_weigh",
+        "aura_fn_read",
+    ] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.ends_with("aura_owned_release")),
+            "{name}: {symbols:?}"
+        );
+    }
+}
+
+#[test]
+fn an_fstring_builds_in_the_box_of_a_str_it_reads_last() {
+    let source = include_str!("../tests/fixtures/run-pass/fstring_builds_in_a_last_read_str.au");
+    let mir = lower_source_to_mir(source).expect("the f-strings lower");
+    emit_host_object(&mir).expect("the f-strings compile directly");
+    let object = emit_unoptimized_object(&mir).expect("the f-strings emit");
+    // `{word}` is rendered alone first, and released right after: the
+    // rendering takes `word`'s box, and so does an f-string that starts
+    // with the rendered text.
+    for name in ["aura_fn_decorate", "aura_fn_long_tail", "aura_fn_literal"] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.ends_with("aura_direct_format_append_begin")
+                    || symbol.ends_with("aura_direct_format_append_str")),
+            "{name}: {symbols:?}"
+        );
+    }
+}
