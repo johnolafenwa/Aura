@@ -34061,3 +34061,172 @@ fn a_new_task_runtime_state_table_holds_no_task() {
     assert!(states.get_mut(7).is_none());
     assert!(states.cached.is_none());
 }
+
+/// The words generated code reads from a `str` box's view, after checking
+/// its access code, or `None` when the box has no text view.
+fn text_view_words(text: *mut OpaqueValue) -> Option<String> {
+    let layout = super::direct_list_layout();
+    if list_view_access(text) != super::TEXT_VIEW_ACCESS {
+        return None;
+    }
+    unsafe {
+        let base = text as *const u8;
+        let ptr = *(base.add(layout.elements_offset as usize) as *const usize) as *const u8;
+        let len = *(base.add(layout.len_offset as usize) as *const usize);
+        let bytes = std::slice::from_raw_parts(ptr, len);
+        Some(std::str::from_utf8(bytes).expect("UTF-8 words").to_owned())
+    }
+}
+
+#[test]
+fn a_str_box_keeps_its_words_in_its_view_through_writes_in_place() {
+    // A short text lies inside the box and a long one on the heap: both
+    // views point where the text lies once it is in its box.
+    let long = "a text too long to be kept inside its value";
+    for text in ["short", long, ""] {
+        let boxed = string_value(text);
+        assert_eq!(text_view_words(boxed).as_deref(), Some(text));
+        let mut len = 0_i64;
+        let ptr = super::aura_direct_string_words(boxed, &mut len);
+        let words = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+        assert_eq!(words, text.as_bytes());
+        unsafe { release_value(boxed) };
+    }
+
+    // An f-string builder: parts that fit in its room go in place, and one
+    // that makes it grow goes through an access. Both keep the view.
+    let builder = super::aura_direct_format_begin("ab".as_ptr(), 2);
+    assert_eq!(text_view_words(builder).as_deref(), Some("ab"));
+    super::aura_direct_format_push_str(builder, "c".as_ptr(), 1);
+    assert_eq!(text_view_words(builder).as_deref(), Some("abc"));
+    super::aura_direct_format_push_i64(builder, -42);
+    assert_eq!(text_view_words(builder).as_deref(), Some("abc-42"));
+    super::aura_direct_format_push_str(builder, long.as_ptr(), long.len());
+    let grown = format!("abc-42{long}");
+    assert_eq!(text_view_words(builder).as_deref(), Some(grown.as_str()));
+
+    // `x = x + y` on the only reference appends in place.
+    let appended = super::aura_direct_str_append_words(builder, "!".as_ptr(), 1, 1, 1);
+    let expected = format!("{grown}!");
+    assert_eq!(
+        text_view_words(appended).as_deref(),
+        Some(expected.as_str())
+    );
+    unsafe { release_value(appended) };
+
+    // An owned `replace` rewrites the only reference's text in place.
+    let text = string_value("a-b-c");
+    let replaced = unsafe {
+        super::aura_direct_string_replace_literal_owned(text, "-".as_ptr(), 1, "+".as_ptr(), 1)
+    };
+    assert_eq!(replaced, text, "the only reference is rewritten in place");
+    assert_eq!(text_view_words(replaced).as_deref(), Some("a+b+c"));
+    unsafe { release_value(replaced) };
+
+    // A write through an access refreshes the view on the way out.
+    let text = string_value("old");
+    unsafe {
+        super::value_mut(text, |value| {
+            *value = Value::string("a new and longer text value")
+        });
+    }
+    assert_eq!(
+        text_view_words(text).as_deref(),
+        Some("a new and longer text value")
+    );
+    unsafe { release_value(text) };
+
+    // A box another thread may reach drops the view, and its words come
+    // from the runtime under the lock.
+    let shared = string_value("shared");
+    unsafe { super::share_direct_value(shared) };
+    assert_eq!(text_view_words(shared), None);
+    let mut len = 0_i64;
+    let ptr = super::aura_direct_string_words(shared, &mut len);
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(ptr, len as usize) },
+        b"shared"
+    );
+    unsafe { release_value(shared) };
+
+    // A literal's one frozen box keeps the words it was made with.
+    // The program frees its frozen boxes when it ends, so the cell is a
+    // word that outlives the test, as a word of the program's data does.
+    let cell: &'static std::sync::atomic::AtomicUsize =
+        Box::leak(Box::new(std::sync::atomic::AtomicUsize::new(0)));
+    let literal = unsafe { super::aura_direct_string_literal_cell(cell, "lit".as_ptr(), 3) };
+    assert_eq!(text_view_words(literal).as_deref(), Some("lit"));
+    let again = unsafe { super::aura_direct_string_literal_cell(cell, "lit".as_ptr(), 3) };
+    assert_eq!(again, literal);
+}
+
+#[test]
+fn a_str_element_box_has_its_words_where_it_lies() {
+    let element = super::element_boxed_value(Value::string("in a box of its own"));
+    assert_eq!(
+        text_view_words(element).as_deref(),
+        Some("in a box of its own")
+    );
+    let short = super::element_boxed_value(Value::string("tiny"));
+    assert_eq!(text_view_words(short).as_deref(), Some("tiny"));
+    for value in [element, short] {
+        unsafe { super::release_untracked_value(value) };
+    }
+}
+
+#[test]
+fn a_boundary_leaves_with_one_word_for_its_count_and_a_generator_exit() {
+    let stack = super::DirectFrameStack::allocate();
+    // SAFETY: the stack was just allocated and nothing else uses it.
+    let frames = unsafe { &mut *stack.as_ptr() };
+
+    // Nested boundaries count up and down, and none finds an exit.
+    frames.enter_boundary();
+    frames.enter_boundary();
+    assert_eq!(frames.rust_boundary_depth(), 2);
+    assert!(!frames.leave_boundary());
+    assert!(!frames.leave_boundary());
+    assert_eq!(frames.rust_boundary_depth(), 0);
+
+    // A count that is zero already stays zero.
+    assert!(!frames.leave_boundary());
+    assert_eq!(frames.rust_boundary_depth(), 0);
+    assert!(!frames.generator_drop_exit_armed());
+
+    // An exit recorded inside a boundary is reported by every boundary
+    // that ends until one takes it, and the count goes on.
+    frames.enter_boundary();
+    frames.enter_boundary();
+    frames.set_generator_drop_exit_armed(true);
+    assert_eq!(frames.rust_boundary_depth(), 2);
+    assert!(frames.leave_boundary());
+    assert_eq!(frames.rust_boundary_depth(), 1);
+    assert!(frames.generator_drop_exit_armed());
+    frames.set_generator_drop_exit_armed(false);
+    assert!(!frames.leave_boundary());
+    assert_eq!(frames.rust_boundary_depth(), 0);
+
+    // A recovered call that restored a count of zero under an exit still
+    // reports the exit, and the count stays zero.
+    frames.set_generator_drop_exit_armed(true);
+    assert!(frames.leave_boundary());
+    assert_eq!(frames.rust_boundary_depth(), 0);
+    assert!(frames.generator_drop_exit_armed());
+    frames.enter_boundary();
+    assert_eq!(frames.rust_boundary_depth(), 1);
+    assert!(frames.leave_boundary());
+    frames.set_generator_drop_exit_armed(false);
+
+    // Setting the count keeps the exit's mark, and the other way round.
+    frames.set_rust_boundary_depth(3);
+    frames.set_generator_drop_exit_armed(true);
+    frames.set_rust_boundary_depth(5);
+    assert!(frames.generator_drop_exit_armed());
+    assert_eq!(frames.rust_boundary_depth(), 5);
+    frames.set_generator_drop_exit_armed(false);
+    assert_eq!(frames.rust_boundary_depth(), 5);
+    frames.set_rust_boundary_depth(0);
+
+    // SAFETY: nothing uses the stack afterwards.
+    unsafe { super::DirectFrameStack::free(stack) };
+}

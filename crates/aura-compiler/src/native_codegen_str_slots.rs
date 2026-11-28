@@ -1602,7 +1602,47 @@ impl FunctionCompiler<'_> {
 
     /// The `ptr` and `len` of the text in the `str` box `value`, which
     /// stay valid while the box lives unchanged.
+    ///
+    /// A box confined to its thread, or frozen, keeps them in its view
+    /// under `TEXT_VIEW_ACCESS`, where every write the runtime makes to
+    /// the box refreshes them, so they are two loads here. Any other box
+    /// takes the runtime call.
     pub(super) fn str_box_words(&mut self, value: Val) -> (Val, Val) {
+        use aura_runtime::native_runtime::TEXT_VIEW_ACCESS;
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let flags = MemFlags::trusted_in;
+        let view_block = self.builder.create_block();
+        let call_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder.append_block_param(join_block, types::I64);
+        let access =
+            self.builder
+                .uload32(flags(AliasClass::BoxAccess), value, layout.access_offset);
+        let viewed = self
+            .builder
+            .icmp_imm(IntCC::Equal, access, i64::from(TEXT_VIEW_ACCESS));
+        self.builder.brif(viewed, view_block, &[], call_block, &[]);
+
+        self.builder.switch_to_block(view_block);
+        self.builder.seal_block(view_block);
+        let ptr = self.builder.load(
+            types::I64,
+            flags(AliasClass::BoxElements),
+            value,
+            layout.elements_offset,
+        );
+        let len = self.builder.load(
+            types::I64,
+            flags(AliasClass::BoxLen),
+            value,
+            layout.len_offset,
+        );
+        self.builder.jump(join_block, &[ptr, len]);
+
+        self.builder.switch_to_block(call_block);
+        self.builder.seal_block(call_block);
+        self.builder.set_cold_block(call_block);
         let slot = self.builder.create_sized_stack_slot(8, 3);
         let len_at = self.builder.stack_addr(types::I64, slot, 0);
         let ptr = self
@@ -1612,7 +1652,12 @@ impl FunctionCompiler<'_> {
         let len = self
             .builder
             .load(types::I64, MemFlags::trusted(), len_at, 0);
-        (ptr, len)
+        self.builder.jump(join_block, &[ptr, len]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let words = self.builder.block_params(join_block);
+        (words[0], words[1])
     }
 
     /// `left == right` or `left != right` on two `str` boxes, or on a `str`
@@ -1773,7 +1818,16 @@ impl FunctionCompiler<'_> {
             }
             Some(ViewRead::ByteLen) => {
                 let Some(words) = self.load_place_words(receiver)? else {
-                    return Ok(None);
+                    // A local's box gives its length where its view keeps
+                    // it.
+                    let Some(held) = self.local_str_box(receiver)? else {
+                        return Ok(None);
+                    };
+                    let (_, len) = self.str_box_words(held);
+                    return Ok(Some(ValueRef {
+                        values: vec![len],
+                        ty: DirectType::Scalar(ScalarKind::Int64),
+                    }));
                 };
                 self.release_view_arguments(words.released.into_iter().collect());
                 Ok(Some(ValueRef {
@@ -1782,6 +1836,20 @@ impl FunctionCompiler<'_> {
                 }))
             }
             None => Ok(None),
+        }
+    }
+
+    /// The box of the `str` local `operand` names, when it names one.
+    fn local_str_box(&mut self, operand: &Operand) -> std::result::Result<Option<Val>, String> {
+        let Operand::Place(place) = operand else {
+            return Ok(None);
+        };
+        if place.contains('.') || self.view_places.contains_key(place.as_str()) {
+            return Ok(None);
+        }
+        match self.type_of_place(place)? {
+            DirectType::Opaque(ty) if is_str(&ty) => Ok(Some(self.load_place(place)?.values[0])),
+            _ => Ok(None),
         }
     }
 
@@ -1879,14 +1947,7 @@ impl FunctionCompiler<'_> {
     /// Jumps to `join_block` with the words of the `str` in the box
     /// `owner`, which owns them.
     fn jump_with_owned_str(&mut self, owner: Val, join_block: Blk) {
-        let ptr = self
-            .builder
-            .call(self.runtime[RuntimeFn::StringBytes], &[owner])
-            .results[0];
-        let len = self
-            .builder
-            .call(self.runtime[RuntimeFn::StringByteLen], &[owner])
-            .results[0];
+        let (ptr, len) = self.str_box_words(owner);
         self.builder.jump(join_block, &[ptr, len, owner]);
     }
 
@@ -2396,14 +2457,7 @@ impl FunctionCompiler<'_> {
                         return Ok(None);
                     }
                     let owner = self.load_place(place)?.values[0];
-                    let ptr = self
-                        .builder
-                        .call(self.runtime[RuntimeFn::StringBytes], &[owner])
-                        .results[0];
-                    let len = self
-                        .builder
-                        .call(self.runtime[RuntimeFn::StringByteLen], &[owner])
-                        .results[0];
+                    let (ptr, len) = self.str_box_words(owner);
                     (ptr, len, None)
                 }
             },

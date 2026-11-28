@@ -1632,8 +1632,12 @@ fn direct_value_thread_identity() -> usize {
 impl OpaqueValue {
     fn new(value: Value, runtime_type_name: Option<RuntimeName>) -> Self {
         // A new box has no room yet, so boxing a value costs no more. The
-        // first write to a list gives it room.
-        let view = list_view_of(&value);
+        // first write to a list gives it room. A `str` gets its view only
+        // where its box lies (see `follow_inline_block`).
+        let view = match &value {
+            Value::String(_) => EMPTY_VALUE_VIEW,
+            value => list_view_of(value),
+        };
         Self::with_view(value, runtime_type_name, view)
     }
 
@@ -2398,7 +2402,11 @@ fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue 
 }
 
 fn boxed_value_with_type(value: Value, runtime_type_name: Option<RuntimeName>) -> *mut OpaqueValue {
-    let view = list_view_of(&value);
+    // A `str` gets its view where its box lies (see `follow_inline_block`).
+    let view = match &value {
+        Value::String(_) => EMPTY_VALUE_VIEW,
+        value => list_view_of(value),
+    };
     let layout = std::alloc::Layout::new::<OpaqueValue>();
     // SAFETY: a box is not zero-sized.
     let boxed = unsafe { std::alloc::alloc(layout) }.cast::<OpaqueValue>();
@@ -2457,15 +2465,36 @@ fn allocate_box(value: OpaqueValue) -> *mut OpaqueValue {
 #[inline(always)]
 unsafe fn follow_inline_block(header: &OpaqueValue) {
     // SAFETY: the caller's contract.
-    if let Value::EnumVariant(EnumVariantValue {
-        payloads: VariantPayloads::Typed(typed),
-        ..
-    }) = unsafe { &*header.value.get() }
-    {
-        if typed.is_inline() {
-            header.list_elements.set(typed.data());
+    match unsafe { &*header.value.get() } {
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Typed(typed),
+            ..
+        }) if typed.is_inline() => header.list_elements.set(typed.data()),
+        // A short text lies inside the value, so its words are taken where
+        // the box now holds it.
+        Value::String(text) => {
+            let text = text.as_str();
+            header.list_elements.set(text.as_ptr() as usize);
+            header.list_len.set(text.len());
+            header
+                .list_access
+                .store(TEXT_VIEW_ACCESS, Ordering::Relaxed);
         }
+        _ => {}
     }
+}
+
+/// Points the view of the `str` box `header` at `text`, its value, after a
+/// write in place that took no access. A box another thread may reach
+/// keeps its view as it was, as [`OpaqueValue::refresh_list_view`] leaves it.
+///
+/// # Safety
+///
+/// `header` is confined to this thread and `text` is its value.
+#[inline(always)]
+unsafe fn refresh_text_view(header: &OpaqueValue, text: &crate::text::Text) {
+    header.list_elements.set(text.as_str().as_ptr() as usize);
+    header.list_len.set(text.len());
 }
 
 /// The thread a box of a list element records in debug builds: none. Such
@@ -3532,6 +3561,16 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
             VariantPayloads::Json(node) => (JSON_TAPE_ACCESS, node.address(), 0, 0, 0),
             VariantPayloads::Values(_) => EMPTY_VALUE_VIEW,
         },
+        // The words of a `str`. A short text lies inside the value, so a
+        // view made before the value reached its box points at the old
+        // place until [`follow_inline_block`] moves it.
+        Value::String(text) => (
+            TEXT_VIEW_ACCESS,
+            text.as_str().as_ptr() as usize,
+            text.len(),
+            0,
+            0,
+        ),
         _ => EMPTY_VALUE_VIEW,
     }
 }
@@ -3547,6 +3586,23 @@ pub const JSON_TAPE_ACCESS: u32 = 0xF0;
 pub const FUNCTION_VIEW_ACCESS: u32 = 0xF2;
 const _: () =
     assert!(JSON_TAPE_ACCESS < FUNCTION_VIEW_ACCESS && FUNCTION_VIEW_ACCESS < FIRST_PLAIN_ACCESS);
+
+/// The access code of a box that holds a `str` confined to its thread or
+/// frozen. The view's elements are the address of the text's UTF-8 bytes
+/// and its length is their count, so generated code reads a `str`'s words
+/// with two loads instead of a call to [`aura_direct_string_words`].
+///
+/// The words stay valid while the box lives and nothing writes it. Every
+/// write the runtime makes to such a box refreshes them, as it does a
+/// list's view: the writes through an access do so on the way out, and the
+/// few that write a confined box in place (an f-string part that fits, an
+/// owned `replace`) refresh it themselves. A box gets the code only where
+/// it lives (see [`follow_inline_block`]), since a short text lies inside
+/// the box. Sharing a box with another thread drops the code, and a frozen
+/// box, which nothing writes, keeps the words it had.
+pub const TEXT_VIEW_ACCESS: u32 = 0xF3;
+const _: () =
+    assert!(FUNCTION_VIEW_ACCESS < TEXT_VIEW_ACCESS && TEXT_VIEW_ACCESS < FIRST_PLAIN_ACCESS);
 
 const _: () = assert!(
     JSON_TAPE_ACCESS > direct_array_access(DirectListAccess::ArrayFloat64, DIRECT_ARRAY_MAX_RANK)
@@ -3831,6 +3887,7 @@ impl DirectListLayout {
             DirectListAccess::Boxes as i64,
             i64::from(DirectListAccess::LIST_FORMS),
             i64::from(FUNCTION_VIEW_ACCESS),
+            i64::from(TEXT_VIEW_ACCESS),
             i64::from(DirectCallable::WORDS_OFFSET),
             i64::from(DirectCallable::ABI_KEY_OFFSET),
             i64::from(DirectCallable::RELEASED_OFFSET),
@@ -5976,25 +6033,22 @@ struct RustBoundaryDepthGuard {
 // The boundary guards are plain loads and stores: debug builds of the
 // runtime run generated code too, and every runtime operation enters one.
 impl RustBoundaryDepthGuard {
-    #[inline]
+    #[inline(always)]
     fn enter() -> Self {
         let stack = aura_direct_frame_stack();
         // SAFETY: every task has a frame stack, which lives as long as the
         // task's runtime state, and only this task's thread touches it
-        // while the task runs. A depth never nears `usize::MAX`.
-        unsafe { (*stack).rust_boundary_depth += 1 };
+        // while the task runs.
+        unsafe { (*stack).enter_boundary() };
         Self { stack }
     }
-}
 
-impl Drop for RustBoundaryDepthGuard {
-    #[inline]
-    fn drop(&mut self) {
+    /// Ends the boundary's count, and returns whether a dropped generator
+    /// recorded an exit for it to propagate.
+    #[inline(always)]
+    fn leave(self) -> bool {
         // SAFETY: as in `enter`; a task never moves to another state.
-        let depth = unsafe { &mut (*self.stack).rust_boundary_depth };
-        if *depth > 0 {
-            *depth -= 1;
-        }
+        unsafe { (*self.stack).leave_boundary() }
     }
 }
 
@@ -6007,10 +6061,10 @@ pub(crate) fn record_generator_drop_exit(exit: crate::runtime_value::PendingGene
     // SAFETY: the stack belongs to the running task, and nothing else uses
     // it while that task runs.
     let stack = unsafe { &mut *stack.as_ptr() };
-    if stack.rust_boundary_depth == 0 || stack.generator_drop_exit_armed {
+    if stack.rust_boundary_depth() == 0 || stack.generator_drop_exit_armed() {
         return;
     }
-    stack.generator_drop_exit_armed = true;
+    stack.set_generator_drop_exit_armed(true);
     with_direct_task_runtime_state(|state| state.generator_drop_exit = Some(exit));
 }
 
@@ -6018,29 +6072,35 @@ pub(crate) fn record_generator_drop_exit(exit: crate::runtime_value::PendingGene
 fn take_generator_drop_exit() -> Option<crate::runtime_value::PendingGeneratorDropExit> {
     let stack = current_direct_frame_stack()?;
     // SAFETY: as in `record_generator_drop_exit`.
-    let armed = unsafe { &mut (*stack.as_ptr()).generator_drop_exit_armed };
-    if !std::mem::replace(armed, false) {
+    let stack = unsafe { &mut *stack.as_ptr() };
+    if !stack.generator_drop_exit_armed() {
         return None;
     }
+    stack.set_generator_drop_exit_armed(false);
     with_direct_task_runtime_state(|state| state.generator_drop_exit.take())
 }
 
 /// The runtime boundaries active on the current task's machine stack.
 fn current_rust_boundary_depth() -> usize {
     // SAFETY: as in `RustBoundaryDepthGuard::enter`.
-    unsafe { (*aura_direct_frame_stack()).rust_boundary_depth }
+    unsafe { (*aura_direct_frame_stack()).rust_boundary_depth() }
 }
 
 impl DirectTaskRuntimeState {
     fn rust_boundary_depth(&self) -> usize {
         // SAFETY: the state owns its frame stack.
-        unsafe { self.frames.as_ref().rust_boundary_depth }
+        unsafe { self.frames.as_ref().rust_boundary_depth() }
     }
 
-    fn rust_boundary_depth_mut(&mut self) -> &mut usize {
+    /// Sets the count of active runtime boundaries and returns the count
+    /// it replaces.
+    fn replace_rust_boundary_depth(&mut self, depth: usize) -> usize {
         // SAFETY: the state owns its frame stack, and `&mut self` excludes
         // other users on this thread.
-        unsafe { &mut (*self.frames.as_ptr()).rust_boundary_depth }
+        let frames = unsafe { &mut *self.frames.as_ptr() };
+        let previous = frames.rust_boundary_depth();
+        frames.set_rust_boundary_depth(depth);
+        previous
     }
 }
 
@@ -6065,9 +6125,7 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
     // the runtime run that code too. The failure paths are out of line.
     let depth_guard = RustBoundaryDepthGuard::enter();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-    // SAFETY: as in `RustBoundaryDepthGuard::enter`.
-    let drop_exit_armed = unsafe { (*depth_guard.stack).generator_drop_exit_armed };
-    drop(depth_guard);
+    let drop_exit_armed = depth_guard.leave();
     match outcome {
         Ok(value) => {
             if drop_exit_armed {
@@ -8457,24 +8515,27 @@ fn push_format_text(builder: *mut OpaqueValue, text: &str) {
 /// f-string `builder`. A part that fits in the room a builder confined to
 /// this thread already has, as a builder generated code makes is, goes in
 /// place without taking an access.
-#[inline]
+#[inline(always)]
 fn push_format_text_with(builder: *mut OpaqueValue, text: &str, ascii: bool) {
     // SAFETY: the builder is a live box. Only a `list` keeps elements apart
-    // from its value or a view of them, so a `str` needs neither, and no
-    // other access to a confined box is in progress while this one runs.
+    // from its value, so a `str` has none to take in, and no other access
+    // to a confined box is in progress while this one runs. The text's
+    // view is refreshed below.
     let confined = unsafe { builder.as_ref() }.and_then(|header| {
         if header.shared_lock().is_some() {
             return None;
         }
         match unsafe { &mut *header.value.get() } {
-            Value::String(output) => Some(output),
+            Value::String(output) => Some((header, output)),
             _ => None,
         }
     });
-    if let Some(output) = confined {
+    if let Some((header, output)) = confined {
         if output.len() + text.len() <= crate::runtime_value::MAX_STRING_BYTES
             && output.push_within_capacity(text, ascii)
         {
+            // SAFETY: the box is confined and `output` is its value.
+            unsafe { refresh_text_view(header, output) };
             return;
         }
     }
@@ -9036,12 +9097,19 @@ pub extern "C-unwind" fn aura_direct_string_split_literal_words(
             }
             _ => text.split(separator).map(part).collect(),
         };
-        boxed_value(Value::Vec(VecValue {
-            element_type: SharedType::named("str"),
-            elements: parts.into(),
-            str_view: Default::default(),
-        }))
+        boxed_str_list(parts)
     })
+}
+
+/// A new `list[str]` box of `parts`, every one a `str`. Its `Str` view is
+/// left for enough reads to pay for it: most split lists are read once or
+/// twice, and building the view costs two allocations and a pass.
+fn boxed_str_list(parts: Vec<Value>) -> *mut OpaqueValue {
+    boxed_value(Value::Vec(VecValue {
+        element_type: SharedType::named("str"),
+        elements: parts.into(),
+        str_view: Default::default(),
+    }))
 }
 
 /// A new `list[str]` box of the parts of the `str` box `value` between
@@ -9049,11 +9117,7 @@ pub extern "C-unwind" fn aura_direct_string_split_literal_words(
 fn split_value(value: *mut OpaqueValue, separator: &str) -> *mut OpaqueValue {
     unsafe {
         with_value(value, |value| match value {
-            Value::String(text) => boxed_value(Value::Vec(VecValue {
-                element_type: SharedType::named("str"),
-                elements: split_text(text, separator).into(),
-                str_view: Default::default(),
-            })),
+            Value::String(text) => boxed_str_list(split_text(text, separator)),
             other => runtime_error(format!(
                 "expected `str`, found `{}`",
                 value_type_name(other)
@@ -9219,13 +9283,13 @@ pub unsafe extern "C-unwind" fn aura_direct_string_replace_literal_owned(
                 return None;
             }
             // SAFETY: no other access to a confined box with one reference
-            // is in progress, and a `str` keeps no view of its value.
+            // is in progress. A `str`'s view is refreshed below where it changes.
             match unsafe { &mut *header.value.get() } {
-                Value::String(text) => Some(text),
+                Value::String(text) => Some((header, text)),
                 _ => None,
             }
         });
-        let Some(text) = confined else {
+        let Some((header, text)) = confined else {
             let replaced =
                 aura_direct_string_replace_literal(value, from_ptr, from_len, to_ptr, to_len);
             // SAFETY: the caller's contract.
@@ -9236,6 +9300,8 @@ pub unsafe extern "C-unwind" fn aura_direct_string_replace_literal_owned(
         let to = literal_str(to_ptr, to_len);
         if let Some(replaced) = replaced_text(text, from, to) {
             *text = replaced;
+            // SAFETY: the box is confined and `text` is its value.
+            unsafe { refresh_text_view(header, text) };
         }
         value
     })
@@ -10582,7 +10648,8 @@ unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> b
         return false;
     }
     // SAFETY: no other access to a confined box with one reference is in
-    // progress, and a `str` keeps no view of its value.
+    // progress. The caller frees the box once its text moved out, so its
+    // view need not follow.
     let (cell, named) = unsafe { (&mut *header.value.get(), &*header.runtime_type_name.get()) };
     if !matches!(cell, Value::String(_)) || named.is_some() {
         return false;
@@ -11817,15 +11884,41 @@ pub extern "C-unwind" fn aura_direct_string_words(
     value: *mut OpaqueValue,
     len: *mut i64,
 ) -> *const u8 {
-    // A `str` box confined to this thread, or frozen, is read where it
-    // lies: it is no list, so it has no appended elements to take in, and
-    // no other thread can be writing it.
+    // A `str` box confined to this thread, or frozen, has its words in its
+    // view (see [`TEXT_VIEW_ACCESS`]).
     // SAFETY: generated code passes a live box and a slot for one word.
+    if let Some(header) = unsafe { value.as_ref() } {
+        if header.list_access.load(Ordering::Relaxed) == TEXT_VIEW_ACCESS {
+            #[cfg(debug_assertions)]
+            check_text_view(header);
+            unsafe { len.write(header.list_len.get() as i64) };
+            return header.list_elements.get() as *const u8;
+        }
+    }
+    // Any other such box is read where it lies: it is no list, so it has
+    // no appended elements to take in, and no other thread can be writing
+    // it.
+    // SAFETY: as above.
     if let Some(text) = unsafe { unlocked_str(value) } {
         unsafe { len.write(text.len() as i64) };
         return text.as_ptr();
     }
     string_words_locked(value, len)
+}
+
+/// Stops a debug build whose `str` box's view is not its text's words.
+#[cfg(debug_assertions)]
+fn check_text_view(header: &OpaqueValue) {
+    // SAFETY: the box has the text view, so it is confined or frozen and
+    // nothing writes it meanwhile.
+    let Value::String(text) = (unsafe { &*header.value.get() }) else {
+        panic!("a box with the text view holds no `str`");
+    };
+    assert_eq!(
+        (header.list_elements.get(), header.list_len.get()),
+        (text.as_str().as_ptr() as usize, text.len()),
+        "a `str` box's view is not its text's words"
+    );
 }
 
 /// The text of `value` when it is a `str` box that needs no lock to read:
@@ -18793,6 +18886,74 @@ pub extern "C-unwind" fn aura_direct_instance_copy_field(
     })
 }
 
+/// A box the running task owns for `payload`, the box a variant in
+/// `scrutinee` lends, for generated code that releases its reference to
+/// `scrutinee` next. When that reference is the only one to a confined
+/// variant, the release frees the variant, so the payload's box moves out
+/// of it as it is, as an owning match takes it: the variant no longer
+/// holds the box when the task's ledger links it. Any other `scrutinee`
+/// keeps its payload, and the result is a copy, as
+/// [`aura_direct_instance_copy_field`] makes one.
+///
+/// # Safety
+///
+/// `payload` is a live box, and `scrutinee` is null or a live box the
+/// caller owns a reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_own_lent_payload(
+    payload: *mut OpaqueValue,
+    scrutinee: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        if let Some(taken) = unsafe { take_last_payload_box(scrutinee, payload) } {
+            return owned_element_box(taken);
+        }
+        let runtime_type_name = unsafe { explicit_runtime_type_tag(payload) };
+        let copied = unsafe { with_value(payload, try_clone_array_containing_value) };
+        boxed_value_with_type(direct_array_result(copied, 0, 0), runtime_type_name)
+    })
+}
+
+/// Moves `payload` out of the typed variant in `scrutinee` that holds it,
+/// when the caller's reference to `scrutinee` is its only one and the box
+/// is confined and not frozen. `None` leaves `scrutinee` as it is.
+///
+/// # Safety
+///
+/// As [`aura_direct_own_lent_payload`].
+unsafe fn take_last_payload_box(
+    scrutinee: *mut OpaqueValue,
+    payload: *mut OpaqueValue,
+) -> Option<ElementBox> {
+    // SAFETY: the caller passes null or a live box.
+    let header = unsafe { scrutinee.as_ref() }?;
+    if header.ref_count.load(Ordering::Acquire) != 1
+        || header.shared_lock().is_some()
+        || header.is_frozen()
+    {
+        return None;
+    }
+    // SAFETY: the only reference is the caller's and the box is confined,
+    // so nothing else reads or writes the value meanwhile.
+    unsafe {
+        value_mut(scrutinee, |value| {
+            let Value::EnumVariant(variant) = value else {
+                return None;
+            };
+            let VariantPayloads::Typed(typed) = &variant.payloads else {
+                return None;
+            };
+            let slot = (0..typed.len()).find(|index| {
+                typed
+                    .payload_box(*index)
+                    .is_some_and(|held| std::ptr::eq(held.as_ptr(), payload))
+            })?;
+            variant.payloads.take_box(slot)
+        })
+    }
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_instance_get_field(
     value: *mut OpaqueValue,
@@ -19767,11 +19928,11 @@ impl DirectGeneratorFrames {
                 &mut state.foreign_callback_failure,
                 &mut self.foreign_callback_failure,
             );
-            mem::swap(state.rust_boundary_depth_mut(), &mut self.boundary_depth);
+            self.boundary_depth = state.replace_rust_boundary_depth(self.boundary_depth);
             mem::swap(&mut state.generator_drop_exit, &mut self.drop_trap_exit);
             let armed = state.generator_drop_exit.is_some();
             // SAFETY: the state owns its frame stack.
-            unsafe { (*state.frames.as_ptr()).generator_drop_exit_armed = armed };
+            unsafe { (*state.frames.as_ptr()).set_generator_drop_exit_armed(armed) };
             state.refresh_frame_flags();
             state.refresh_stack_limit();
         });

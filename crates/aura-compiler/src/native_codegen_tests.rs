@@ -2049,6 +2049,58 @@ fn nested_field_list_reads_follow_the_field_s_boxes() {
 }
 
 #[test]
+fn a_str_box_is_read_through_its_view_with_the_runtime_as_fallback() {
+    let source = include_str!("../tests/fixtures/run-pass/str_box_words_follow_the_text.au");
+    let mir = lower_source_to_mir(source).expect("str box reads lower");
+    let object = emit_unoptimized_object(&mir).expect("str box reads emit");
+    // The length of a local's box, the sides of a comparison, and the
+    // bytes copied to a list come from the box's view. Only a box without
+    // the view calls the runtime, for both words at once.
+    for name in ["aura_fn_sizes", "aura_fn_grown", "aura_fn_checked"] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        // Mach-O symbol names carry a leading underscore.
+        assert!(
+            symbols
+                .iter()
+                .any(|symbol| symbol.ends_with("aura_direct_string_words")),
+            "{name}: {symbols:?}"
+        );
+        for replaced in ["aura_direct_string_byte_len", "aura_direct_string_bytes"] {
+            assert!(
+                !symbols.iter().any(|symbol| symbol.ends_with(replaced)),
+                "{name}: {symbols:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_try_takes_the_payload_box_out_of_the_result_it_releases() {
+    let source = include_str!("../tests/fixtures/run-pass/try_takes_the_payload_of_its_result.au");
+    let mir = lower_source_to_mir(source).expect("payload reads lower");
+    let object = emit_unoptimized_object(&mir).expect("payload reads emit");
+    // `try` releases the result it reads right after the read: the runtime
+    // moves the payload's box out of a result nothing else holds, and
+    // copies it otherwise.
+    let tried = object_function_referenced_symbols(&object, "aura_fn_stamped");
+    assert!(
+        tried
+            .iter()
+            .any(|symbol| symbol.ends_with("aura_direct_own_lent_payload")),
+        "{tried:?}"
+    );
+    // A variant read in place out of a list is not the function's to take
+    // from: its payload is copied.
+    let shared = object_function_referenced_symbols(&object, "aura_fn_shared");
+    assert!(
+        !shared
+            .iter()
+            .any(|symbol| symbol.ends_with("aura_direct_own_lent_payload")),
+        "{shared:?}"
+    );
+}
+
+#[test]
 fn indexed_text_compares_as_a_unicode_scalar() {
     let source = include_str!("../tests/fixtures/run-pass/indexed_str_comparison.au");
     let mir = lower_source_to_mir(source).expect("string comparisons lower");
@@ -9706,7 +9758,7 @@ def main() -> int32:
     let referenced = object_referenced_symbols(&object);
     for required in [
         "aura_direct_string_len",
-        "aura_direct_string_byte_len",
+        "aura_direct_string_words",
         "aura_direct_vec_len",
         "aura_direct_map_len",
         "aura_direct_set_len",
@@ -9759,7 +9811,7 @@ def main() -> int32:
             .any(|symbol| symbol.contains("aura_direct_string_to_bytes_view"))
             && referenced
                 .iter()
-                .any(|symbol| symbol.contains("aura_direct_string_bytes")),
+                .any(|symbol| symbol.contains("aura_direct_string_words")),
         "str.to_bytes copies the words of a literal or a box: {referenced:?}"
     );
     assert!(
@@ -9841,7 +9893,9 @@ fn direct_member_lengths_do_not_emit_implicit_int32_range_checks() {
                 "byte_len",
                 Vec::new(),
             ),
-            "aura_direct_string_byte_len",
+            // The length comes from the box's view, with the runtime's
+            // read of the words for a box that has none.
+            "aura_direct_string_words",
         ),
         (
             "list.len",

@@ -1503,6 +1503,11 @@ pub enum PayloadParts {
 /// `indirect` variants does not drop by recursion.
 impl Drop for VariantPayloads {
     fn drop(&mut self) {
+        // A typed variant freed from generated code released its boxes
+        // already, and one of bytes holds none: neither holds a variant.
+        if matches!(self, Self::Typed(typed) if typed.holds_no_box()) {
+            return;
+        }
         if !self.holds_nested_variant() {
             return;
         }

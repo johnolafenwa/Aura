@@ -3398,6 +3398,7 @@ impl<'a> NativeCodegen<'a> {
             lend_lookup: false,
             lent_elements,
             lent_payloads: lent_element_reads.payloads.into_keys().collect(),
+            take_payload: false,
             shaped_lent_payloads: HashSet::new(),
             element_promotions: lent_element_reads.promotions,
             lend_element: false,
@@ -5079,6 +5080,11 @@ struct FunctionCompiler<'a> {
     /// a reference to the box where a lent element copies it. See
     /// `elements::lent_payload_reads`.
     lent_payloads: HashSet<String>,
+    /// Set while the payload of a result that a `try` owns, and releases
+    /// next, is read: a payload the variant keeps in a box of its own
+    /// moves out of a variant nothing else holds, and is copied out of any
+    /// other (see `aura_direct_own_lent_payload`).
+    take_payload: bool,
     /// The locals of `lent_payloads` whose one read found a box that carries
     /// the local's type's tag: the variant's own box read as the type its
     /// variant declares, or a box the read tagged. A promotion only takes a
@@ -18578,9 +18584,14 @@ impl<'a> FunctionCompiler<'a> {
                 this.compile_variant_payload(value.clone(), 0)
             }
         }
-        match self.typed_variant_payload(value, variant_name, 0, target, |this| {
+        // The read in generated code of a result the function owns takes
+        // too: the caller releases the result right after it.
+        self.take_payload = owned;
+        let read = self.typed_variant_payload(value, variant_name, 0, target, |this| {
             runtime_read(this, value, owned)
-        })? {
+        });
+        self.take_payload = false;
+        match read? {
             Some(payload) => Ok(payload),
             None => runtime_read(self, value, owned),
         }

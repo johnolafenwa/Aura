@@ -929,13 +929,7 @@ fn optimized_ir(module: &LlvmModule) -> String {
     let lowered = module
         .lower(&context, &machine)
         .expect("the module should lower and verify");
-    lowered
-        .run_passes(
-            super::PASS_PIPELINE,
-            &machine,
-            inkwell::passes::PassBuilderOptions::create(),
-        )
-        .expect("the passes should run");
+    super::run_object_passes(&lowered, &machine).expect("the passes should run");
     lowered.print_to_string().to_string()
 }
 

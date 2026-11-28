@@ -1,0 +1,14 @@
+8
+11
+too large: 9
+negative
+2052
+186
+17
+9
+checked4! 13
+negative! 9
+Result.Ok(12014)
+Result.Err(too far)
+Result.Err(negative)
+too few cells

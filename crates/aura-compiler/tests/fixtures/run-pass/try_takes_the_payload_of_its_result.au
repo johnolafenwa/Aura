@@ -1,0 +1,170 @@
+# The payload a `try` reads lives on when its `Result` is released: the
+# payload's box moves out of a result nothing else holds. A payload read
+# out of a variant that something else still holds, such as a list, is
+# copied. Either way the payload is the function's own afterwards: it can
+# be changed, stored, and returned, and a variant that is still held is
+# unchanged for whoever holds it.
+import control
+
+
+class Row:
+    name: str
+    cells: list[int64]
+
+
+enum Statement:
+    Insert(row: Row)
+    Select(names: list[str], limit: int64)
+    Nothing
+
+
+def parse(kind: int64) -> Statement:
+    if kind == 0:
+        return Statement.Insert(row=Row(name=f"row{kind}", cells=[kind, kind + 1]))
+    if kind == 1:
+        return Statement.Select(names=["alpha", "beta", "gamma"], limit=2)
+    return Statement.Nothing
+
+
+def checked(kind: int64) -> Result[Row, str]:
+    if kind < 0:
+        return Result.Err("negative")
+    return Result.Ok(Row(name=f"checked{kind}", cells=[kind]))
+
+
+def named(kind: int64) -> Result[str, str]:
+    if kind > 5:
+        return Result.Err(f"too large: {kind}")
+    return Result.Ok(f"name-{kind}")
+
+
+def total(row: Row) -> int64:
+    mut sum = 0
+    for cell in row.cells:
+        sum += cell
+    return sum
+
+
+# The result of `try` outlives the `Result` it came in.
+def tried(kind: int64) -> Result[int64, str]:
+    row = try checked(kind)
+    name = try named(kind)
+    mut cells: list[int64] = []
+    for cell in row.cells:
+        cells.append(cell)
+    cells.append(name.byte_len())
+    return Result.Ok(total(row) + cells.len() + name.byte_len())
+
+
+# The payloads of a statement outlive it and are stored.
+def run(kinds: list[int64]) -> int64:
+    mut rows: list[Row] = []
+    mut seen: list[str] = []
+    mut nothing = 0
+    for kind in kinds:
+        match own parse(kind):
+            case Statement.Insert(row):
+                rows.append(row)
+            case Statement.Select(names, limit):
+                for index in range(limit):
+                    seen.append(names[index].clone())
+                seen.append(names[names.len() - 1].clone())
+            case Statement.Nothing:
+                nothing += 1
+    mut sum = nothing * 1000
+    for row in rows:
+        sum += total(row) + row.name.byte_len()
+    for name in seen:
+        sum += name.byte_len()
+    return sum
+
+
+# A variant a list holds keeps its payload when a reader lets go.
+def shared(kind: int64) -> int64:
+    kept = [parse(kind), parse(kind)]
+    mut sum = 0
+    for index in range(2):
+        match kept[index]:
+            case Statement.Insert(row):
+                mut cells: list[int64] = []
+                for cell in row.cells:
+                    cells.append(cell + 40)
+                sum += total(row) + cells.len() + cells[0]
+            case Statement.Select(names, limit):
+                sum += names.len() + limit
+            case Statement.Nothing:
+                sum += 1
+    match kept[0]:
+        case Statement.Insert(row):
+            sum += total(row) * 100
+        case _:
+            sum += 7
+    return sum
+
+
+# A payload changed after its variant is gone.
+def renamed(kind: int64) -> str:
+    mut row = try_row(kind)
+    row.name = row.name + "!"
+    row.cells.append(9)
+    return f"{row.name} {total(row)}"
+
+
+def try_row(kind: int64) -> Row:
+    match own checked(kind):
+        case Ok(row):
+            return row
+        case Err(message):
+            return Row(name=message.clone(), cells=[])
+
+
+class Stamp:
+    seconds: int64
+    offset: int64
+
+    def shifted(self, by: int64) -> Result[Stamp, str]:
+        if by > 100:
+            return Result.Err("too far")
+        return Result.Ok(Stamp(seconds=self.seconds + by, offset=by))
+
+
+def stamp(kind: int64) -> Result[Stamp, str]:
+    if kind < 0:
+        return Result.Err("negative")
+    return Result.Ok(Stamp(seconds=kind, offset=0))
+
+
+# Each `try` takes its stamp out of a result nothing else holds.
+def stamped(kind: int64) -> Result[int64, str]:
+    mut moved = try (try stamp(kind)).shifted(kind * 10)
+    moved.seconds += 1
+    again = try moved.shifted(1)
+    return Result.Ok(moved.seconds * 1000 + again.seconds + again.offset)
+
+
+def failing(kind: int64) -> int64:
+    row = try_row(kind)
+    assert row.cells.len() > 5, "too few cells"
+    return total(row)
+
+
+def main():
+    for kind in [0, 3, 9, -1]:
+        match tried(kind):
+            case Ok(sum):
+                print(sum)
+            case Err(message):
+                print(message)
+    print(run([0, 1, 2, 0, 1, 1, 2]))
+    print(shared(0))
+    print(shared(1))
+    print(shared(2))
+    print(renamed(4))
+    print(renamed(-2))
+    for kind in [1, 11, -1]:
+        print(stamped(kind))
+    match control.recover(failing, 3):
+        case Ok(sum):
+            print(sum)
+        case Err(trap):
+            print(trap.message)
