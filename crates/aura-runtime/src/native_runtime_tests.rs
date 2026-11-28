@@ -30799,6 +30799,16 @@ fn text_from_a_byte_slice_reads_the_bytes_in_place() {
     // UTF-8.
     assert_eq!(text(bytes, 0, 3, 1).as_deref(), Some("String(\"hé\")"));
     assert_eq!(text(bytes, 0, 2, 1), None);
+    // The text knows whether it is ASCII, as one made from a `str` does.
+    for (start, end, expected) in [(3, 6, "llo"), (0, 3, "hé"), (0, 1, "h"), (4, 4, "")] {
+        let cut = super::aura_direct_str_from_byte_slice(bytes, start, 1, end, 1, 3, 4, 1);
+        let Value::String(cut) = (unsafe { take_value(cut) }) else {
+            panic!("expected a str");
+        };
+        assert_eq!(cut.as_str(), expected);
+        assert_eq!(cut.is_ascii(), expected.is_ascii());
+        assert_eq!(cut, crate::text::Text::from(expected));
+    }
     assert_eq!(
         payload_debug(super::aura_direct_str_from_byte_slice(
             bytes, 0, 0, 0, 0, 0, 0, 1

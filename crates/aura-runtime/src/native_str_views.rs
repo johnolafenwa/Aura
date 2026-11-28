@@ -361,7 +361,24 @@ fn next_part<'a>(
         }
         _ => {
             // The place is the end of the part before, a scalar boundary.
-            let part = text.get(start..)?.split_whitespace().next()?;
+            let rest = text.get(start..)?.as_bytes();
+            // Every white space scalar outside ASCII is more than one
+            // byte, so a word of ASCII bytes between ASCII white space or
+            // the ends of the text is found a byte at a time. The first
+            // byte outside ASCII hands the word to the general walk,
+            // which starts at the word's first byte, a scalar boundary.
+            let space = |byte: u8| byte == b' ' || (b'\t'..=b'\r').contains(&byte);
+            let from = rest.iter().position(|byte| !space(*byte))?;
+            let word = &rest[from..];
+            let len = word
+                .iter()
+                .position(|byte| space(*byte) || !byte.is_ascii())
+                .unwrap_or(word.len());
+            if word.get(len).is_none_or(u8::is_ascii) {
+                let from = start + from;
+                return Some((part(from, from + len), from + len));
+            }
+            let part = text.get(start + from..)?.split_whitespace().next()?;
             let offset = part.as_ptr() as usize - text.as_ptr() as usize;
             Some((part, offset + part.len()))
         }
@@ -658,6 +675,12 @@ mod tests {
             "one two  three\tfour\n",
             "  lead and trail  ",
             " \u{2003}wide\u{a0}spaces\u{3000}here ",
+            "\u{a0}lead",
+            "tail\u{2003}",
+            "plain é mixed\u{a0}in x\u{85}y \u{1c}z\u{b}w\u{c}v",
+            "é",
+            " \u{3000} ",
+            "a\u{a0}",
             "line\nline two\r\nthree\n\nfive\r",
             "\n",
             "\r\n",

@@ -10491,8 +10491,20 @@ pub extern "C-unwind" fn aura_direct_str_from_byte_slice(
             (ListElements::Uint8(bytes), true) => {
                 let (start, end) =
                     crate::runtime_value::normalize_slice_bounds(start, end, bytes.len())?;
-                let text = std::str::from_utf8(&bytes[start..end]).ok();
-                Ok(Ok(text.map(|text| Value::String(text.into()))))
+                let bytes = &bytes[start..end];
+                // ASCII bytes, nearly every text cut out of a buffer, are
+                // UTF-8 as they are, and one pass finds that out for both
+                // the check and the flag the text keeps.
+                let text = if bytes.is_ascii() {
+                    // SAFETY: ASCII bytes are UTF-8.
+                    let text = unsafe { str::from_utf8_unchecked(bytes) };
+                    Some(crate::text::Text::from_str_with(text, true))
+                } else {
+                    std::str::from_utf8(bytes)
+                        .ok()
+                        .map(|text| crate::text::Text::from_str_with(text, false))
+                };
+                Ok(Ok(text.map(Value::String)))
             }
             _ => slice_vec_owned(vector, start, end)
                 .map(|slice| Err(host_builtins::host_str_from_bytes_ref(&Value::Vec(slice)))),
