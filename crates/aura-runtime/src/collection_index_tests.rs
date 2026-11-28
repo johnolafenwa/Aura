@@ -1260,6 +1260,47 @@ fn int64_fast_paths_agree_with_value_lookups_on_large_dicts() {
     assert_eq!(shared.len(), 38);
 }
 
+/// An `int64` lookup tries the slot after the last one found only while
+/// the keys come in slot order, and finds the same entries either way.
+#[test]
+fn int64_lookups_try_the_next_slot_only_during_a_walk() {
+    let mut entries = DictEntries::new();
+    for key in 0..40i64 {
+        entries.insert(int(key * 7), int(key));
+    }
+    entries.remove_i64(5 * 7);
+    let walking = |entries: &DictEntries| match &entries.storage {
+        Storage::Large(large) => large.cursor.walking(),
+        _ => panic!("expected a large dict"),
+    };
+    assert!(!walking(&entries));
+    // Keys in any order hash each time and leave the hint alone.
+    for key in [30i64, 2, 17, 39, 11, 0, 25] {
+        assert_eq!(entries.value_of_i64(key * 7), Some(&int(key)));
+        assert!(!walking(&entries), "after {key}");
+    }
+    assert_eq!(entries.value_of_i64(3), None);
+    assert!(!walking(&entries));
+    // A walk is seen at its second key, and then crosses the hole.
+    assert_eq!(entries.position_i64(0), Some(0));
+    assert!(!walking(&entries));
+    for key in 1..40i64 {
+        let expected = (key != 5).then(|| int(key));
+        assert_eq!(entries.value_of_i64(key * 7), expected.as_ref());
+        assert!(walking(&entries), "after {key}");
+    }
+    // A copy keeps the hint, and a missing key leaves it as it was.
+    let copy = entries.clone();
+    assert!(walking(&copy));
+    assert_eq!(copy.value_of_i64(-1), None);
+    assert!(walking(&copy));
+    // A key behind the walk hashes and ends it.
+    assert_eq!(entries.value_of_i64(14), Some(&int(2)));
+    assert!(!walking(&entries));
+    assert_eq!(entries.value_of_i64(21), Some(&int(3)));
+    assert!(walking(&entries));
+}
+
 #[test]
 fn str_positions_find_keys_stored_bare_or_inside_a_union() {
     let union_type = Type::normalize_union(

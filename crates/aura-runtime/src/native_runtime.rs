@@ -14904,8 +14904,22 @@ pub extern "C-unwind" fn aura_direct_map_get_int64_payload(
 /// `out` points to writable storage for one aligned `i64`.
 unsafe fn map_lookup_word(found: Option<&Value>, out: *mut i64) -> i64 {
     // SAFETY: the caller's contract.
-    unsafe { out.write(found.map_or(0, unbox_int64_of)) };
+    unsafe { out.write(found.map_or(0, lookup_word_of)) };
     i64::from(found.is_some())
+}
+
+/// [`unbox_int64_of`] for the value a lookup found, with the integer that
+/// fits read in place: the two words are all such a lookup costs, so the
+/// read is not worth a call. Any other value takes the general path and
+/// its errors.
+#[inline(always)]
+fn lookup_word_of(value: &Value) -> i64 {
+    if let Value::Int(integer) = value {
+        if let Some(word) = integer.as_i128().and_then(|wide| i64::try_from(wide).ok()) {
+            return word;
+        }
+    }
+    unbox_int64_of(value)
 }
 
 /// `aura_direct_map_get_payload` for a dict of `int64` values, as the two

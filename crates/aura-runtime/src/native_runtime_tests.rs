@@ -14358,6 +14358,24 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "unbox-int64-type" => {
                 super::aura_direct_unbox_int64(bool_value(true));
             }
+            "lookup-word-overflow" => {
+                let map = super::aura_direct_map_empty();
+                super::aura_direct_map_set_in_place(
+                    map,
+                    int_value(1),
+                    boxed_value(Value::Int(IntegerValue::from_literal(
+                        (i64::MAX as u128) + 1,
+                    ))),
+                );
+                let mut word = 0_i64;
+                unsafe { super::aura_direct_map_get_int64_word(map, 1, &mut word) };
+            }
+            "lookup-word-type" => {
+                let map = super::aura_direct_map_empty();
+                super::aura_direct_map_set_in_place(map, int_value(1), bool_value(true));
+                let mut word = 0_i64;
+                unsafe { super::aura_direct_map_get_int64_word(map, 1, &mut word) };
+            }
             "unbox-u64-negative" => {
                 super::aura_direct_unbox_u64(int_value(-1));
             }
@@ -15444,6 +15462,14 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "unbox-int64-type",
+            "direct backend expected `int64`, found `bool`",
+        ),
+        (
+            "lookup-word-overflow",
+            "integer value `9223372036854775808` does not fit in `int64`",
+        ),
+        (
+            "lookup-word-type",
             "direct backend expected `int64`, found `bool`",
         ),
         (
