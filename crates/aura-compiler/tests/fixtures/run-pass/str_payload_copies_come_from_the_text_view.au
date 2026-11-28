@@ -1,0 +1,69 @@
+# A `str` payload read out of a variant that keeps its payloads in place
+# is copied from the address and length its box shows. The copy is the
+# reader's own: changing it leaves the variant's text as it was.
+
+enum Value:
+    Int(value: int64)
+    Text(value: str)
+
+enum Pair:
+    Both(left: str, right: str)
+    Neither
+
+def name_of(value: Value) -> str:
+    mut name = ""
+    match value:
+        case Value.Text(s):
+            name = s.clone()
+        case Value.Int(v):
+            name = f"{v}"
+    return name
+
+def grown(value: Value) -> str:
+    match value:
+        case Value.Text(s):
+            mut copy = s.clone()
+            copy += "!"
+            return copy
+        case Value.Int(_):
+            return "?"
+
+def joined(pair: Pair) -> str:
+    match pair:
+        case Pair.Both(left, right):
+            mut out = left.clone()
+            out += "-"
+            out += right
+            return out
+        case Pair.Neither:
+            return ""
+
+def names(row: list[Value]) -> list[str]:
+    mut found: list[str] = []
+    for i in range(row.len()):
+        match row[i]:
+            case Value.Text(s):
+                found.append(s.clone())
+            case Value.Int(v):
+                found.append(f"#{v}")
+    return found
+
+def main():
+    long = "a text long enough that no box keeps it inline, by a wide margin"
+    row = [
+        Value.Text(value="lima"),
+        Value.Int(value=7),
+        Value.Text(value=""),
+        Value.Text(value=long.clone()),
+        Value.Text(value="žluťoučký"),
+    ]
+    for i in range(row.len()):
+        print(name_of(row[i]))
+    print(grown(row[0]))
+    print(grown(row[0]))
+    print(grown(row[2]))
+    print(name_of(row[0]))
+    print(joined(Pair.Both(left="a", right="b")))
+    print(joined(Pair.Neither))
+    for name in names(row):
+        print(name.byte_len())

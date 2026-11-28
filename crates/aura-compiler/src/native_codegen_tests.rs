@@ -20280,3 +20280,26 @@ fn an_fstring_builds_in_the_box_of_a_str_it_reads_last() {
         );
     }
 }
+
+#[test]
+fn a_str_payload_is_copied_from_the_words_its_box_shows() {
+    let source =
+        include_str!("../tests/fixtures/run-pass/str_payload_copies_come_from_the_text_view.au");
+    let mir = lower_source_to_mir(source).expect("the payload reads lower");
+    emit_host_object(&mir).expect("the payload reads compile directly");
+    let object = emit_unoptimized_object(&mir).expect("the payload reads emit");
+    // The read of a variant a list lends copies the text from its view,
+    // and keeps the runtime's copy for a box that shows none.
+    for name in ["aura_fn_names"] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        for helper in [
+            "aura_direct_string_from_view",
+            "aura_direct_instance_copy_field",
+        ] {
+            assert!(
+                symbols.iter().any(|symbol| symbol.ends_with(helper)),
+                "{name}: {symbols:?}"
+            );
+        }
+    }
+}

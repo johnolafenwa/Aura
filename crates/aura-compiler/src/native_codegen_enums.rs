@@ -606,6 +606,64 @@ impl FunctionCompiler<'_> {
         Ok(Some(params[0]))
     }
 
+    /// A new box holding a copy of the text in `boxed`, the box of a `str`
+    /// payload a typed variant holds.
+    ///
+    /// A `str` box confined to its thread, or frozen, keeps the address
+    /// and length of its text in its view, so the copy is made from those
+    /// two words. A `str` takes no type tag (see `emit_runtime_type_tag`),
+    /// so the new box needs none. Any other box, one another thread may be
+    /// writing among them, takes the runtime's copy, which locks it.
+    fn copy_str_payload(&mut self, boxed: Val) -> Val {
+        use aura_runtime::native_runtime::TEXT_VIEW_ACCESS;
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let flags = MemFlags::trusted_in;
+        let view_block = self.builder.create_block();
+        let call_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        let access =
+            self.builder
+                .uload32(flags(AliasClass::BoxAccess), boxed, layout.access_offset);
+        let viewed = self
+            .builder
+            .icmp_imm(IntCC::Equal, access, i64::from(TEXT_VIEW_ACCESS));
+        self.builder.brif(viewed, view_block, &[], call_block, &[]);
+
+        self.builder.switch_to_block(view_block);
+        self.builder.seal_block(view_block);
+        let ptr = self.builder.load(
+            types::I64,
+            flags(AliasClass::BoxElements),
+            boxed,
+            layout.elements_offset,
+        );
+        let len = self.builder.load(
+            types::I64,
+            flags(AliasClass::BoxLen),
+            boxed,
+            layout.len_offset,
+        );
+        let copy = self
+            .builder
+            .call(self.runtime[RuntimeFn::StringFromView], &[ptr, len])
+            .results[0];
+        self.builder.jump(join_block, &[copy]);
+
+        self.builder.switch_to_block(call_block);
+        self.builder.seal_block(call_block);
+        self.builder.set_cold_block(call_block);
+        let copy = self
+            .builder
+            .call(self.runtime[RuntimeFn::InstanceCopyField], &[boxed])
+            .results[0];
+        self.builder.jump(join_block, &[copy]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        self.builder.block_params(join_block)[0]
+    }
+
     /// Reads payload `index` of variant `variant_name` from the variant box
     /// `scrutinee` into a value of direct type `target`: a scalar where it
     /// lies, or a fresh copy of the payload's box, when the variant keeps
@@ -770,6 +828,8 @@ impl FunctionCompiler<'_> {
                         .builder
                         .call(self.runtime[RuntimeFn::OwnLentPayload], &[boxed, object]);
                     vec![taken.results[0]]
+                } else if shaped && *declared == Type::named("str") {
+                    vec![self.copy_str_payload(boxed)]
                 } else {
                     let copy = self
                         .builder
