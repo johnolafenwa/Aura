@@ -30414,6 +30414,18 @@ fn entry_loans_read_and_write_values_where_the_map_keeps_them() {
     }
     let read = super::aura_direct_map_value_slot_int64(ints, 2, 0);
     assert_eq!(unsafe { super::aura_direct_value_slot_int64(read) }, 21);
+    // A slot that holds no signed integer takes the boundary: an unsigned
+    // one still reads as its value, and a store drops what was there.
+    let mut unsigned = Value::Int(IntegerValue::from_u64(9));
+    assert_eq!(unsafe { super::aura_direct_value_slot_int64(&unsigned) }, 9);
+    unsafe { super::aura_direct_value_slot_set_int64(&mut unsigned, -3) };
+    assert_eq!(
+        unsafe { super::aura_direct_value_slot_int64(&unsigned) },
+        -3
+    );
+    let mut other = Value::String("text".into());
+    unsafe { super::aura_direct_value_slot_set_int64(&mut other, 4) };
+    assert_eq!(unsafe { super::aura_direct_value_slot_int64(&other) }, 4);
     assert!(super::aura_direct_map_value_slot_int64(ints, 9, 0).is_null());
     let key = string_value("a");
     for mutable in [0, 1] {
