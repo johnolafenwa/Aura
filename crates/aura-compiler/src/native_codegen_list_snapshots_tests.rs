@@ -255,6 +255,34 @@ fn loops_inside_and_across_each_other_compile_with_their_copies() {
 }
 
 #[test]
+fn loops_whose_operations_check_one_access_code_compile_entered_on_it() {
+    // Loops over two lists of boxes, over plain records next to scalars,
+    // over a list the loop writes, and over a list of `str`, whose form
+    // no copy runs in.
+    let source = include_str!(
+        "../tests/fixtures/run-pass/loops_enter_their_copies_on_checked_access_codes.au"
+    );
+    let module = lower_source_to_mir(source).expect("the source should lower");
+    crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
+        .expect("the loops should compile");
+    super::super::emit_host_object(&module).expect("the loops should compile optimized");
+}
+
+#[test]
+fn only_an_access_code_of_a_form_a_copy_runs_in_stands_for_the_form() {
+    use aura_runtime::native_runtime::{DirectListAccess, FIRST_CLASS_ACCESS, FIRST_PLAIN_ACCESS};
+    let holds = super::super::FunctionCompiler::form_holds;
+    assert!(holds(DirectListAccess::Boxes as i64));
+    assert!(holds(DirectListAccess::Int64 as i64));
+    assert!(holds(DirectListAccess::Float32 as i64));
+    assert!(holds(i64::from(FIRST_PLAIN_ACCESS)));
+    assert!(!holds(DirectListAccess::Str as i64));
+    assert!(!holds(i64::from(FIRST_CLASS_ACCESS)));
+    assert!(!holds(0));
+    assert!(!holds(DirectListAccess::Int64 as i64 - 1));
+}
+
+#[test]
 fn loops_after_other_loops_compile_taking_their_words() {
     // Loops that take the words of loops before them, over lists of
     // scalars and an Array, which reads its layout itself.

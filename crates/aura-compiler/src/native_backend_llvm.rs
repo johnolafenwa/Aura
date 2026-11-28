@@ -1496,17 +1496,19 @@ impl FunctionIr {
             let earlier = self.insts[last as usize].op.clone();
             let pick = self.pick(&earlier, &set).expect("checked above");
             let mut condition = *condition;
-            if let Some((word, constant)) = equal {
-                // The check goes in before the pad's branch.
+            if !equal.is_empty() {
+                // The checks go in before the pad's branch.
                 self.blocks[pad.0 as usize].insts.pop();
                 let saved = (self.current, self.location);
                 self.current = Some(pad.0);
                 self.location = self.insts[last as usize].location;
-                let same =
-                    self.push_value(Op::IcmpImm(IntCC::Equal, *word, *constant), ScalarType::I8);
-                let wide = self.push_value(Op::Unary(UnaryOp::Uextend, same), ScalarType::I64);
-                condition =
-                    self.push_value(Op::Binary(BinaryOp::Band, condition, wide), ScalarType::I64);
+                for (word, constant) in equal {
+                    let same = self
+                        .push_value(Op::IcmpImm(IntCC::Equal, *word, *constant), ScalarType::I8);
+                    let wide = self.push_value(Op::Unary(UnaryOp::Uextend, same), ScalarType::I64);
+                    condition = self
+                        .push_value(Op::Binary(BinaryOp::Band, condition, wide), ScalarType::I64);
+                }
                 (self.current, self.location) = saved;
                 self.blocks[pad.0 as usize].insts.push(last);
             }

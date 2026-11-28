@@ -781,9 +781,9 @@ pub(crate) trait ModuleBackend {
 }
 
 /// An entry to blocks a backend copies: the pad that jumps into them, the
-/// condition that picks the copy, and a value the copy also expects to equal
-/// a constant.
-pub(crate) type VersionEntry = (Blk, Val, Option<(Val, i64)>);
+/// condition that picks the copy, and the values the copy also expects to
+/// equal a constant each.
+pub(crate) type VersionEntry = (Blk, Val, Vec<(Val, i64)>);
 
 /// Builds one function body: blocks, variables, stack slots, and
 /// instructions.
@@ -806,7 +806,7 @@ pub(crate) trait FunctionBackend {
     ///
     /// Each `(pad, condition)` of `entries` is a block outside `blocks` that
     /// ends in a jump into them; it then jumps to the copy when
-    /// `condition` is not zero, and the given value equals the given
+    /// `condition` is not zero, and each given value equals its
     /// constant, and to `blocks` otherwise. A pad whose jump an earlier
     /// call already turned into a branch among copies keeps that branch
     /// where the condition fails, and runs a copy of it among the new
