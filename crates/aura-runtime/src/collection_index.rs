@@ -1568,7 +1568,16 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
             self.storage = Storage::Small(EntriesArc::new(entries));
             return;
         }
-        let mut index = HashTable::with_capacity(entries.len());
+        // Entries with far more room than they fill come from a cleared
+        // large collection (see `clear`), which grows back to its old size
+        // more often than not: the index takes that room at once instead
+        // of doubling its way back.
+        let room = if entries.capacity() / 4 > entries.len() {
+            entries.capacity()
+        } else {
+            entries.len()
+        };
+        let mut index = HashTable::with_capacity(room);
         for (position, entry) in entries.iter().enumerate() {
             let hash = hash_value(entry.key());
             let duplicate = index

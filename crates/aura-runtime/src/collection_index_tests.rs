@@ -707,6 +707,27 @@ fn clearing_keeps_room_unless_shared() {
 }
 
 #[test]
+fn a_cleared_large_collection_grows_back_with_the_same_entries() {
+    // The index a refilled collection builds takes the room the cleared
+    // entries left, and answers every lookup as one grown step by step.
+    let mut entries: DictEntries = (0..500).map(|index| (int(index), int(index))).collect();
+    for round in 1..3_i64 {
+        entries.clear();
+        assert!(entries.is_empty());
+        for index in 0..300 {
+            assert_eq!(entries.insert_i64(index * round, int(index)), None);
+        }
+        assert_eq!(entries.len(), 300);
+        for index in 0..300 {
+            assert_eq!(entries.value_of_i64(index * round), Some(&int(index)));
+        }
+        assert_eq!(entries.value_of_i64(-1), None);
+        assert_eq!(entries.insert_i64(0, int(7)), Some(int(0)));
+        assert_eq!(entries.len(), 300);
+    }
+}
+
+#[test]
 #[allow(clippy::manual_next_back)]
 fn small_and_large_entries_answer_the_same_reads() {
     for size in [4_i64, 40] {
