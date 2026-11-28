@@ -638,12 +638,10 @@ pub(super) enum Step {
         /// a part of a local.
         kept: Option<Var>,
     },
-    /// The length read of such a loop: count the parts.
-    LoopLen {
-        target: String,
-        walk: super::split_loops::Walk,
-    },
-    /// The element read of such a loop: find the next part.
+    /// The length read of such a loop: find the first part.
+    LoopLen { walk: super::split_loops::Walk },
+    /// The element read of such a loop: hand over the part found ahead
+    /// and find the next.
     LoopFetch {
         element: String,
         walk: super::split_loops::Walk,
@@ -968,7 +966,7 @@ impl FunctionCompiler<'_> {
                 walk,
                 kept,
             } => self.compile_loop_split(&receiver, &list, &walk, kept)?,
-            Step::LoopLen { target, walk } => self.compile_loop_len(&target, &walk)?,
+            Step::LoopLen { walk } => self.compile_loop_len(&walk)?,
             Step::LoopFetch { element, walk } => self.compile_loop_fetch(&element, &walk)?,
             Step::LoopRelease { receiver, kept } => {
                 if let Some(kept) = kept {

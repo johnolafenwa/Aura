@@ -1,6 +1,7 @@
 use crate::lower_source_to_mir;
 
 use super::{split_loops, SplitLoop};
+use crate::mir::{Instruction, Operand, Rvalue};
 
 const SOURCE: &str = r#"
 def count_lines(text: str) -> int64:
@@ -97,4 +98,31 @@ fn a_walk_holds_a_field_and_leaves_a_changed_text_alone() {
         let found = loops(FIXTURE, name);
         assert!(found.is_empty(), "{name}: {found:?}");
     }
+}
+
+/// The loop keeps no count of the parts, so a length that is read for
+/// anything but the loop's own compare keeps the list.
+#[test]
+fn a_length_read_for_more_than_the_compare_keeps_the_list() {
+    let mut function = lower_source_to_mir(SOURCE)
+        .expect("the source should lower")
+        .functions
+        .into_iter()
+        .find(|function| function.name == "words_of")
+        .expect("the function should exist");
+    let found = split_loops(&function);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].counter.starts_with('%'), "{found:?}");
+    let (block, _) = &found[0].len;
+    let length = found[0].len_target.clone();
+    let block = function
+        .blocks
+        .iter_mut()
+        .find(|candidate| candidate.label == *block)
+        .expect("the block of the length read");
+    block.instructions.push(Instruction::Assign {
+        target: "%copy".to_string(),
+        value: Rvalue::Use(Operand::Place(length)),
+    });
+    assert!(split_loops(&function).is_empty());
 }

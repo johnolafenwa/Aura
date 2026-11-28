@@ -665,12 +665,23 @@ struct Large<T> {
 
 /// [`Large::cursor`]: a word any thread may overwrite, since a wrong hint
 /// costs one compare and a stale one is never trusted without one.
+///
+/// The second word says whether the last integer lookup that hashed found
+/// its key in the few slots after the one before it, which is what a walk
+/// in insertion order looks like. [`Large::lookup_i64`] tries the hint
+/// only then, so a dict read at keys in any order pays one test for it.
 #[derive(Debug, Default)]
-struct LookupCursor(std::sync::atomic::AtomicUsize);
+struct LookupCursor(
+    std::sync::atomic::AtomicUsize,
+    std::sync::atomic::AtomicBool,
+);
 
 impl Clone for LookupCursor {
     fn clone(&self) -> Self {
-        Self(std::sync::atomic::AtomicUsize::new(self.get()))
+        Self(
+            std::sync::atomic::AtomicUsize::new(self.get()),
+            std::sync::atomic::AtomicBool::new(self.walking()),
+        )
     }
 }
 
@@ -684,7 +695,25 @@ impl LookupCursor {
     fn set(&self, slot: usize) {
         self.0.store(slot, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// Whether integer lookups are finding their keys in slot order.
+    #[inline(always)]
+    fn walking(&self) -> bool {
+        self.1.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Remembers `slot`, which a hashed integer lookup found, and whether
+    /// it lies in the slots the hint would have tried.
+    #[inline(always)]
+    fn set_hashed(&self, slot: usize) {
+        let ahead = slot.wrapping_sub(self.get().wrapping_add(1)) < CURSOR_REACH;
+        self.1.store(ahead, std::sync::atomic::Ordering::Relaxed);
+        self.set(slot);
+    }
 }
+
+/// How many slots after the last one found a lookup tries before it hashes.
+const CURSOR_REACH: usize = 3;
 
 impl<T: Keyed> Large<T> {
     /// The slot and entry of an integer key equal to `integer`, by the same
@@ -692,14 +721,18 @@ impl<T: Keyed> Large<T> {
     /// called through a closure and the hash is computed in place.
     #[inline(always)]
     fn lookup_i64(&self, integer: i64) -> Option<(usize, &T)> {
-        let start = self.cursor.get().wrapping_add(1);
-        for slot in start..self.slots.len().min(start.saturating_add(3)) {
-            if let Some(entry) = &self.slots[slot] {
-                if key_is_i64(entry.key(), integer) {
-                    self.cursor.set(slot);
-                    return Some((slot, entry));
+        // The hint is tried only while the keys come in slot order: a
+        // lookup at any other key would pay for the try and then hash.
+        if self.cursor.walking() {
+            let start = self.cursor.get().wrapping_add(1);
+            for slot in start..self.slots.len().min(start.saturating_add(CURSOR_REACH)) {
+                if let Some(entry) = &self.slots[slot] {
+                    if key_is_i64(entry.key(), integer) {
+                        self.cursor.set(slot);
+                        return Some((slot, entry));
+                    }
+                    break;
                 }
-                break;
             }
         }
         let hash = hash_i64(integer);
@@ -709,7 +742,7 @@ impl<T: Keyed> Large<T> {
                     .as_ref()
                     .is_some_and(|entry| key_is_i64(entry.key(), integer))
         })?;
-        self.cursor.set(slot);
+        self.cursor.set_hashed(slot);
         self.slots[slot].as_ref().map(|entry| (slot, entry))
     }
 

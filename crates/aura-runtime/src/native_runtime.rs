@@ -2393,34 +2393,53 @@ fn direct_timer_error(error: io::Error) -> ! {
     runtime_diagnostic_error(direct_timer_diagnostic(error))
 }
 
+/// A new box of `value` with no type name, linked into the running task's
+/// ledger. A `str`, the value most boxes hold, takes its own shorter path.
+#[inline]
 fn boxed_value(value: Value) -> *mut OpaqueValue {
-    boxed_value_with_type(value, None)
+    match value {
+        value @ Value::String(_) => boxed_str_value(value),
+        value => boxed_value_with_type(value, None),
+    }
 }
 
-fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue {
-    boxed_value_with_type(value, Some(RuntimeName::from(runtime_type_name)))
+/// [`boxed_value_with_type`] for a `str` with no type name: the same box,
+/// made without the look at what kind of value it holds, which decides a
+/// list view the `str` does not have and which words follow the block.
+/// The text's view is set where the box lies, as
+/// [`follow_inline_block`] sets it.
+fn boxed_str_value(value: Value) -> *mut OpaqueValue {
+    debug_assert!(matches!(value, Value::String(_)));
+    let boxed = new_box_block();
+    // SAFETY: the block is new, sized and aligned for a box, and nothing
+    // else reads it yet. The view is taken from the text after the write
+    // put it where it stays.
+    unsafe {
+        boxed.write(OpaqueValue::with_view(value, None, EMPTY_VALUE_VIEW));
+        if let Value::String(text) = &*(*boxed).value.get() {
+            place_text_view(&*boxed, text);
+        }
+    }
+    link_new_box(boxed);
+    boxed
 }
 
-fn boxed_value_with_type(value: Value, runtime_type_name: Option<RuntimeName>) -> *mut OpaqueValue {
-    // A `str` gets its view where its box lies (see `follow_inline_block`).
-    let view = match &value {
-        Value::String(_) => EMPTY_VALUE_VIEW,
-        value => list_view_of(value),
-    };
+/// The block of a new box, not yet written.
+#[inline(always)]
+fn new_box_block() -> *mut OpaqueValue {
     let layout = std::alloc::Layout::new::<OpaqueValue>();
     // SAFETY: a box is not zero-sized.
     let boxed = unsafe { std::alloc::alloc(layout) }.cast::<OpaqueValue>();
     if boxed.is_null() {
         std::alloc::handle_alloc_error(layout);
     }
-    // The header is written where it will live, so making a box moves the
-    // value once and the header not at all.
-    // SAFETY: the block is new, sized and aligned for a box, and nothing
-    // else reads it yet.
-    unsafe {
-        boxed.write(OpaqueValue::with_view(value, runtime_type_name, view));
-        follow_inline_block(&*boxed);
-    }
+    boxed
+}
+
+/// Counts the new box `boxed` and links it into the running task's ledger
+/// when the task keeps one.
+#[inline(always)]
+fn link_new_box(boxed: *mut OpaqueValue) {
     #[cfg(coverage)]
     DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
     crate::runtime_value::representation_stats::note_opaque_box();
@@ -2434,6 +2453,28 @@ fn boxed_value_with_type(value: Value, runtime_type_name: Option<RuntimeName>) -
             runtime_error("direct task owned-value reference count overflow");
         }
     }
+}
+
+fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue {
+    boxed_value_with_type(value, Some(RuntimeName::from(runtime_type_name)))
+}
+
+fn boxed_value_with_type(value: Value, runtime_type_name: Option<RuntimeName>) -> *mut OpaqueValue {
+    // A `str` gets its view where its box lies (see `follow_inline_block`).
+    let view = match &value {
+        Value::String(_) => EMPTY_VALUE_VIEW,
+        value => list_view_of(value),
+    };
+    let boxed = new_box_block();
+    // The header is written where it will live, so making a box moves the
+    // value once and the header not at all.
+    // SAFETY: the block is new, sized and aligned for a box, and nothing
+    // else reads it yet.
+    unsafe {
+        boxed.write(OpaqueValue::with_view(value, runtime_type_name, view));
+        follow_inline_block(&*boxed);
+    }
+    link_new_box(boxed);
     boxed
 }
 
@@ -2472,16 +2513,27 @@ unsafe fn follow_inline_block(header: &OpaqueValue) {
         }) if typed.is_inline() => header.list_elements.set(typed.data()),
         // A short text lies inside the value, so its words are taken where
         // the box now holds it.
-        Value::String(text) => {
-            let text = text.as_str();
-            header.list_elements.set(text.as_ptr() as usize);
-            header.list_len.set(text.len());
-            header
-                .list_access
-                .store(TEXT_VIEW_ACCESS, Ordering::Relaxed);
-        }
+        // SAFETY: the caller's contract, and the text is the box's.
+        Value::String(text) => unsafe { place_text_view(header, text) },
         _ => {}
     }
+}
+
+/// Gives the `str` box `header` the view of `text`, its value, where the
+/// box now lies.
+///
+/// # Safety
+///
+/// The caller has exclusive access to the box, and `text` is its value in
+/// its final place.
+#[inline(always)]
+unsafe fn place_text_view(header: &OpaqueValue, text: &crate::text::Text) {
+    let text = text.as_str();
+    header.list_elements.set(text.as_ptr() as usize);
+    header.list_len.set(text.len());
+    header
+        .list_access
+        .store(TEXT_VIEW_ACCESS, Ordering::Relaxed);
 }
 
 /// Points the view of the `str` box `header` at `text`, its value, after a
@@ -10491,8 +10543,20 @@ pub extern "C-unwind" fn aura_direct_str_from_byte_slice(
             (ListElements::Uint8(bytes), true) => {
                 let (start, end) =
                     crate::runtime_value::normalize_slice_bounds(start, end, bytes.len())?;
-                let text = std::str::from_utf8(&bytes[start..end]).ok();
-                Ok(Ok(text.map(|text| Value::String(text.into()))))
+                let bytes = &bytes[start..end];
+                // ASCII bytes, nearly every text cut out of a buffer, are
+                // UTF-8 as they are, and one pass finds that out for both
+                // the check and the flag the text keeps.
+                let text = if bytes.is_ascii() {
+                    // SAFETY: ASCII bytes are UTF-8.
+                    let text = unsafe { str::from_utf8_unchecked(bytes) };
+                    Some(crate::text::Text::from_str_with(text, true))
+                } else {
+                    std::str::from_utf8(bytes)
+                        .ok()
+                        .map(|text| crate::text::Text::from_str_with(text, false))
+                };
+                Ok(Ok(text.map(Value::String)))
             }
             _ => slice_vec_owned(vector, start, end)
                 .map(|slice| Err(host_builtins::host_str_from_bytes_ref(&Value::Vec(slice)))),
@@ -12232,7 +12296,12 @@ pub extern "C-unwind" fn aura_direct_string_clone(value: *mut OpaqueValue) -> *m
                 )),
             })
         };
-        boxed_value_with_type(Value::String(text), runtime_type_name)
+        // A copy with no type name, nearly every one, is a plain `str`
+        // box.
+        match runtime_type_name {
+            None => boxed_value(Value::String(text)),
+            named => boxed_value_with_type(Value::String(text), named),
+        }
     })
 }
 
@@ -14904,8 +14973,22 @@ pub extern "C-unwind" fn aura_direct_map_get_int64_payload(
 /// `out` points to writable storage for one aligned `i64`.
 unsafe fn map_lookup_word(found: Option<&Value>, out: *mut i64) -> i64 {
     // SAFETY: the caller's contract.
-    unsafe { out.write(found.map_or(0, unbox_int64_of)) };
+    unsafe { out.write(found.map_or(0, lookup_word_of)) };
     i64::from(found.is_some())
+}
+
+/// [`unbox_int64_of`] for the value a lookup found, with the integer that
+/// fits read in place: the two words are all such a lookup costs, so the
+/// read is not worth a call. Any other value takes the general path and
+/// its errors.
+#[inline(always)]
+fn lookup_word_of(value: &Value) -> i64 {
+    if let Value::Int(integer) = value {
+        if let Some(word) = integer.as_i128().and_then(|wide| i64::try_from(wide).ok()) {
+            return word;
+        }
+    }
+    unbox_int64_of(value)
 }
 
 /// `aura_direct_map_get_payload` for a dict of `int64` values, as the two

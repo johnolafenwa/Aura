@@ -49,7 +49,7 @@ impl Text {
 
     /// `text`, whose flag the caller already knows, in the value itself
     /// when it fits.
-    fn from_str_with(text: &str, ascii: bool) -> Self {
+    pub(crate) fn from_str_with(text: &str, ascii: bool) -> Self {
         if text.len() <= INLINE_CAPACITY {
             let mut bytes = [0; INLINE_CAPACITY];
             bytes[..text.len()].copy_from_slice(text.as_bytes());

@@ -3,11 +3,17 @@
 //! `for line in text.split("\n"):` makes a list of every part, a `str`
 //! box each, and then reads the list once, front to back. When the list is
 //! named by nothing but the loop's own length read, its one element read
-//! and its releases, native code makes no list: the length read counts the
-//! parts in the text, and the element read finds the next part there and
-//! holds it as words (see `str_slots` and `split_parts`), the way a
-//! loaned element of a `list[str]` is held. `text.lines()` and
-//! `text.split_whitespace()` are walked the same way.
+//! and its releases, native code makes no list: the element read gives
+//! the next part of the text, held as words (see `str_slots` and
+//! `split_parts`), the way a loaned element of a `list[str]` is held.
+//! `text.lines()` and `text.split_whitespace()` are walked the same way.
+//!
+//! The parts are not counted first, which would read the text twice. The
+//! loop reads the length only to compare its index with it, so the walk
+//! keeps one part ahead: the length read finds the first part, each
+//! element read hands over the part found before it and finds the one
+//! after, and the length is the index of the last part known plus one,
+//! so the compare is true exactly while a part is left.
 //!
 //! The element read is the next part of the walk because the loop's index
 //! starts at zero in the block of the split and changes only by the one
@@ -58,6 +64,8 @@ pub(super) struct SplitLoop {
     /// The block and position of the element read, and its target.
     pub(super) fetch: (String, usize),
     pub(super) element: String,
+    /// The index of the loop.
+    pub(super) counter: String,
     /// The releases of the list.
     pub(super) list_releases: Vec<(String, usize)>,
     /// The release of the receiver inside the region.
@@ -363,6 +371,27 @@ pub(super) fn split_loops(function: &MirFunction) -> Vec<SplitLoop> {
             if !(counted && zeroed && stepped) {
                 continue;
             }
+            // The length: read once, and otherwise only what the index
+            // is less than, so the loop needs to know no more of it than
+            // whether a part is left.
+            let compared = !is_param(&len_target) && uses_of(&len_target).iter().all(|&at| {
+                at == len_at
+                    || matches!(
+                        instruction_at(at),
+                        Some(Instruction::Assign {
+                            target,
+                            value: Rvalue::Binary {
+                                op: BinaryOp::Less,
+                                left: Operand::Place(left),
+                                right: Operand::Place(right),
+                                ..
+                            },
+                        }) if *left == counter && *right == len_target && root(target) != len_target
+                    )
+            });
+            if !compared {
+                continue;
+            }
             // The element: read by instructions that only read a `str`,
             // and released, inside the region.
             if !local_is(&element, &text)
@@ -445,6 +474,7 @@ pub(super) fn split_loops(function: &MirFunction) -> Vec<SplitLoop> {
                 len_target,
                 fetch: at_label(fetch_at),
                 element,
+                counter,
                 list_releases,
                 receiver_release,
             });
@@ -519,6 +549,7 @@ impl FunctionCompiler<'_> {
                 variable
             };
             let (ptr, len, cursor) = (declare(self), declare(self), declare(self));
+            let ahead = (declare(self), declare(self));
             let kept = found.held.then(|| declare(self));
             let walk = Walk {
                 separator: found.separator.clone(),
@@ -526,6 +557,9 @@ impl FunctionCompiler<'_> {
                 ptr,
                 len,
                 cursor,
+                ahead,
+                counter: found.counter.clone(),
+                len_target: found.len_target.clone(),
             };
             self.split_part_steps.insert(
                 found.split.clone(),
@@ -536,13 +570,8 @@ impl FunctionCompiler<'_> {
                     kept,
                 },
             );
-            self.split_part_steps.insert(
-                found.len.clone(),
-                Step::LoopLen {
-                    target: found.len_target.clone(),
-                    walk: walk.clone(),
-                },
-            );
+            self.split_part_steps
+                .insert(found.len.clone(), Step::LoopLen { walk: walk.clone() });
             self.split_part_steps.insert(
                 found.fetch.clone(),
                 Step::LoopFetch {
@@ -624,33 +653,11 @@ impl FunctionCompiler<'_> {
         ])
     }
 
-    /// Counts the parts of `walk` into `target`, the length the list
-    /// would have.
-    pub(super) fn compile_loop_len(
-        &mut self,
-        target: &str,
-        walk: &Walk,
-    ) -> std::result::Result<(), String> {
-        let words = self.walk_words(walk)?;
-        let count = self
-            .builder
-            .call(self.runtime[RuntimeFn::StrPartsCountView], &words)
-            .results[0];
-        self.store_place(
-            target,
-            ValueRef {
-                values: vec![count],
-                ty: DirectType::Scalar(ScalarKind::Int64),
-            },
-        )
-    }
-
-    /// Finds the next part of `walk` and gives it to `element` as words.
-    pub(super) fn compile_loop_fetch(
-        &mut self,
-        element: &str,
-        walk: &Walk,
-    ) -> std::result::Result<(), String> {
+    /// Finds the next part of `walk` and keeps it ahead of the loop, and
+    /// gives the loop's length the value that says whether there is one:
+    /// `known`, the parts handed over so far, plus one when a part was
+    /// found. The loop's index is `known` when it next compares the two.
+    fn step_walk(&mut self, walk: &Walk, known: Val) -> std::result::Result<(), String> {
         let mut words = self.walk_words(walk)?.to_vec();
         let slot = self.builder.create_sized_stack_slot(16, 3);
         let cursor_at = self.builder.stack_addr(types::I64, slot, 0);
@@ -670,7 +677,43 @@ impl FunctionCompiler<'_> {
         let part_len = self
             .builder
             .load(types::I64, MemFlags::trusted(), len_at, 0);
-        self.define_str_slot(element, part, part_len)
+        self.builder.def_var(walk.ahead.0, part);
+        self.builder.def_var(walk.ahead.1, part_len);
+        // After the last part the walk gives no address.
+        let found = self.builder.icmp_imm(IntCC::NotEqual, part, 0);
+        let found = self.builder.uextend(types::I64, found);
+        let length = self.builder.iadd(known, found);
+        self.store_place(
+            &walk.len_target,
+            ValueRef {
+                values: vec![length],
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            },
+        )
+    }
+
+    /// The length read of a loop over `walk`: finds the first part, so
+    /// the length is one when there is a part and zero when there is
+    /// none.
+    pub(super) fn compile_loop_len(&mut self, walk: &Walk) -> std::result::Result<(), String> {
+        let none = self.builder.iconst(types::I64, 0);
+        self.step_walk(walk, none)
+    }
+
+    /// The element read of a loop over `walk`: gives `element` the part
+    /// found ahead, as words, and finds the one after it. The index still
+    /// counts the parts before this one.
+    pub(super) fn compile_loop_fetch(
+        &mut self,
+        element: &str,
+        walk: &Walk,
+    ) -> std::result::Result<(), String> {
+        let part = self.builder.use_var(walk.ahead.0);
+        let part_len = self.builder.use_var(walk.ahead.1);
+        self.define_str_slot(element, part, part_len)?;
+        let index = self.load_place(&walk.counter)?.values[0];
+        let known = self.builder.iadd_imm(index, 1);
+        self.step_walk(walk, known)
     }
 }
 
@@ -693,6 +736,11 @@ pub(super) struct Walk {
     pub(super) ptr: Var,
     pub(super) len: Var,
     pub(super) cursor: Var,
+    /// The address and the length of the part found ahead of the loop.
+    pub(super) ahead: (Var, Var),
+    /// The index of the loop, and the length it compares it with.
+    pub(super) counter: String,
+    pub(super) len_target: String,
 }
 
 #[cfg(test)]

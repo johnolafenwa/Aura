@@ -361,7 +361,24 @@ fn next_part<'a>(
         }
         _ => {
             // The place is the end of the part before, a scalar boundary.
-            let part = text.get(start..)?.split_whitespace().next()?;
+            let rest = text.get(start..)?.as_bytes();
+            // Every white space scalar outside ASCII is more than one
+            // byte, so a word of ASCII bytes between ASCII white space or
+            // the ends of the text is found a byte at a time. The first
+            // byte outside ASCII hands the word to the general walk,
+            // which starts at the word's first byte, a scalar boundary.
+            let space = |byte: u8| byte == b' ' || (b'\t'..=b'\r').contains(&byte);
+            let from = rest.iter().position(|byte| !space(*byte))?;
+            let word = &rest[from..];
+            let len = word
+                .iter()
+                .position(|byte| space(*byte) || !byte.is_ascii())
+                .unwrap_or(word.len());
+            if word.get(len).is_none_or(u8::is_ascii) {
+                let from = start + from;
+                return Some((part(from, from + len), from + len));
+            }
+            let part = text.get(start + from..)?.split_whitespace().next()?;
             let offset = part.as_ptr() as usize - text.as_ptr() as usize;
             Some((part, offset + part.len()))
         }
@@ -412,7 +429,8 @@ pub unsafe extern "C-unwind" fn aura_direct_str_parts_count_view(
 /// [`aura_direct_str_parts_count_view`]): its address, with its length
 /// written to `len`. `cursor` holds the walk's place between calls. It
 /// starts at zero, and the call moves it on. After the last part the
-/// result is an empty text.
+/// result is no address, with a length of zero: a part, even an empty
+/// one, lies in the text and has one.
 ///
 /// A loop over the parts makes no list and no value for a part.
 ///
@@ -438,8 +456,14 @@ pub unsafe extern "C-unwind" fn aura_direct_str_parts_next_view(
             *cursor,
         )
     };
-    let (part, next) =
-        next_part(text, separator, kind, start).unwrap_or(("", STR_VIEW_ITERATION_DONE));
+    let Some((part, next)) = next_part(text, separator, kind, start) else {
+        // SAFETY: the caller's contract.
+        unsafe {
+            cursor.write(STR_VIEW_ITERATION_DONE);
+            len.write(0);
+        }
+        return std::ptr::null();
+    };
     // SAFETY: the caller's contract.
     unsafe { cursor.write(next) };
     part_of(part, len)
@@ -638,12 +662,16 @@ mod tests {
                     &mut len,
                 )
             };
-            text_of(part, len).to_string()
+            (!part.is_null()).then(|| text_of(part, len).to_string())
         };
-        let parts = (0..count).map(|_| next()).collect::<Vec<_>>();
-        // A walk past its last part gives empty texts.
-        assert_eq!(next(), "");
-        assert_eq!(next(), "");
+        // Every part has an address, an empty one too.
+        let parts = (0..count)
+            .map(|_| next().expect("a part for each one counted"))
+            .collect::<Vec<_>>();
+        // A walk past its last part gives no address, however often.
+        assert_eq!(next(), None);
+        assert_eq!(next(), None);
+        assert_eq!((cursor, len), (STR_VIEW_ITERATION_DONE, 0));
         parts
     }
 
@@ -658,6 +686,12 @@ mod tests {
             "one two  three\tfour\n",
             "  lead and trail  ",
             " \u{2003}wide\u{a0}spaces\u{3000}here ",
+            "\u{a0}lead",
+            "tail\u{2003}",
+            "plain é mixed\u{a0}in x\u{85}y \u{1c}z\u{b}w\u{c}v",
+            "é",
+            " \u{3000} ",
+            "a\u{a0}",
             "line\nline two\r\nthree\n\nfive\r",
             "\n",
             "\r\n",

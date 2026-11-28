@@ -1,6 +1,6 @@
 # A loop over the parts of a split, the lines, or the words of a text,
-# whose list nothing else reads, makes no list in native code: it counts
-# the parts and then finds each one in the text as it comes to it. The
+# whose list nothing else reads, makes no list in native code: it finds
+# each part in the text as it comes to it, one part ahead of the body. The
 # text may be a parameter, a local, a part of another walk, or a field,
 # and it stays alive until the loop is left, by its end, a `break`, a
 # `return`, or a trap. A loop that changes what it walks, or reads its
@@ -147,7 +147,33 @@ def page_sums_task():
     print(total)
 
 
+# The walk keeps one part ahead of the loop in place of a count, so each
+# loop runs once for each part and no more: for no part at all, for empty
+# parts at either end, and when the body skips or leaves early.
+def tally(text: str) -> str:
+    mut commas = 0
+    mut lines = 0
+    mut words = 0
+    mut marks = ""
+    for part in text.split(","):
+        commas += 1
+        if part == "":
+            continue
+        marks += f"({part.byte_len()})"
+    for line in text.lines():
+        lines += 1
+        marks += f"|{line.byte_len()}"
+    for word in text.split_whitespace():
+        words += 1
+        if words == 3:
+            break
+        marks += f"<{word}>"
+    return f"{commas}/{lines}/{words}{marks}"
+
+
 def main() -> int32:
+    for text in ["", " ", "\n", ",", "a", "a\n", ",a,,", "\n\na \u{a0}b\u{3000}\n", "é x\ty z w"]:
+        print(tally(text))
     print(count_lines("a bb\n\nccc dddd\nx y"))
     print(words_of("  hello  big world "))
     print(words_of(""))

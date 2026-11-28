@@ -14358,6 +14358,24 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "unbox-int64-type" => {
                 super::aura_direct_unbox_int64(bool_value(true));
             }
+            "lookup-word-overflow" => {
+                let map = super::aura_direct_map_empty();
+                super::aura_direct_map_set_in_place(
+                    map,
+                    int_value(1),
+                    boxed_value(Value::Int(IntegerValue::from_literal(
+                        (i64::MAX as u128) + 1,
+                    ))),
+                );
+                let mut word = 0_i64;
+                unsafe { super::aura_direct_map_get_int64_word(map, 1, &mut word) };
+            }
+            "lookup-word-type" => {
+                let map = super::aura_direct_map_empty();
+                super::aura_direct_map_set_in_place(map, int_value(1), bool_value(true));
+                let mut word = 0_i64;
+                unsafe { super::aura_direct_map_get_int64_word(map, 1, &mut word) };
+            }
             "unbox-u64-negative" => {
                 super::aura_direct_unbox_u64(int_value(-1));
             }
@@ -15444,6 +15462,14 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ),
         (
             "unbox-int64-type",
+            "direct backend expected `int64`, found `bool`",
+        ),
+        (
+            "lookup-word-overflow",
+            "integer value `9223372036854775808` does not fit in `int64`",
+        ),
+        (
+            "lookup-word-type",
             "direct backend expected `int64`, found `bool`",
         ),
         (
@@ -30773,6 +30799,16 @@ fn text_from_a_byte_slice_reads_the_bytes_in_place() {
     // UTF-8.
     assert_eq!(text(bytes, 0, 3, 1).as_deref(), Some("String(\"hé\")"));
     assert_eq!(text(bytes, 0, 2, 1), None);
+    // The text knows whether it is ASCII, as one made from a `str` does.
+    for (start, end, expected) in [(3, 6, "llo"), (0, 3, "hé"), (0, 1, "h"), (4, 4, "")] {
+        let cut = super::aura_direct_str_from_byte_slice(bytes, start, 1, end, 1, 3, 4, 1);
+        let Value::String(cut) = (unsafe { take_value(cut) }) else {
+            panic!("expected a str");
+        };
+        assert_eq!(cut.as_str(), expected);
+        assert_eq!(cut.is_ascii(), expected.is_ascii());
+        assert_eq!(cut, crate::text::Text::from(expected));
+    }
     assert_eq!(
         payload_debug(super::aura_direct_str_from_byte_slice(
             bytes, 0, 0, 0, 0, 0, 0, 1
@@ -34185,6 +34221,80 @@ fn text_view_words(text: *mut OpaqueValue) -> Option<String> {
         let bytes = std::slice::from_raw_parts(ptr, len);
         Some(std::str::from_utf8(bytes).expect("UTF-8 words").to_owned())
     }
+}
+
+/// A `str` box made on the short path is the box the general path makes:
+/// the same view where the box lies, one reference, no type name, and the
+/// same link in the task's ledger, so each release frees it.
+#[test]
+fn a_str_box_from_the_short_path_is_the_box_the_general_path_makes() {
+    let long = "a text too long to be kept inside its value";
+    for text in ["", "short", "žluť", long] {
+        let short_path = super::boxed_value(Value::String(text.into()));
+        let general = super::boxed_value_with_type(Value::String(text.into()), None);
+        let typed = super::boxed_typed_value(Value::String(text.into()), "Name");
+        for boxed in [short_path, general, typed] {
+            assert_eq!(text_view_words(boxed).as_deref(), Some(text));
+            assert_eq!(list_view_len(boxed), text.len());
+            let header = unsafe { &*boxed };
+            assert_eq!(
+                header.ref_count.load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                header
+                    .list_capacity
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert!(header
+                .shared_lock
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .is_null());
+            assert!(header
+                .shape_tag
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .is_null());
+            assert_eq!(header.array_holders.get(), 0);
+        }
+        let (short_header, general_header) = unsafe { (&*short_path, &*general) };
+        assert_eq!(short_header.owner.get(), general_header.owner.get());
+        assert_eq!(short_header.owned.get(), general_header.owned.get());
+        assert!(unsafe { &*short_header.runtime_type_name.get() }.is_none());
+        // A short text lies in its own box.
+        if text.len() < 30 && !text.is_empty() {
+            let words = unsafe { &*boxed_elements_cell(short_path) };
+            let block = short_path as usize;
+            assert!((block..block + std::mem::size_of::<OpaqueValue>()).contains(words));
+        }
+        // A copy keeps the type name of a box that has one, and is a
+        // plain box otherwise.
+        for (source, named) in [(short_path, false), (typed, true)] {
+            let copy = super::aura_direct_string_clone(source);
+            assert_ne!(copy, source);
+            assert_eq!(text_view_words(copy).as_deref(), Some(text));
+            let name = unsafe { &*(*copy).runtime_type_name.get() };
+            assert_eq!(
+                name.as_ref().map(|name| name.as_str()),
+                named.then_some("Name")
+            );
+            unsafe { release_value(copy) };
+        }
+        for boxed in [short_path, general, typed] {
+            unsafe { release_value(boxed) };
+        }
+    }
+    // Any other value takes the general path through the same entry.
+    let number = super::boxed_value(Value::Int(IntegerValue::from_i64(7)));
+    assert_eq!(text_view_words(number), None);
+    assert_eq!(super::aura_direct_unbox_int64(number), 7);
+    unsafe { release_value(number) };
+}
+
+/// Where the view of `boxed` says its elements or bytes lie.
+fn boxed_elements_cell(boxed: *mut OpaqueValue) -> *const usize {
+    let layout = super::direct_list_layout();
+    unsafe { (boxed as *const u8).add(layout.elements_offset as usize) as *const usize }
 }
 
 #[test]
