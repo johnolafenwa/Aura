@@ -273,6 +273,8 @@ runtime_functions! {
     StrParseFloat64View => ("aura_direct_str_parse_float64_view", [I64, I64, I64], Some(I64)),
     StrSplitNextView => ("aura_direct_str_split_next_view", [I64, I64, I64, I64, I64, I64], Some(I64)),
     StrLinesNextView => ("aura_direct_str_lines_next_view", [I64, I64, I64, I64], Some(I64)),
+    StrPartsCountView => ("aura_direct_str_parts_count_view", [I64, I64, I64, I64, I64], Some(I64)),
+    StrPartsNextView => ("aura_direct_str_parts_next_view", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     StrBufferPushView => ("aura_direct_str_buffer_push_view", [I64, I64, I64], None),
     StrBufferPushI64 => ("aura_direct_str_buffer_push_i64", [I64, I64], None),
     StrBufferReserve => ("aura_direct_str_buffer_reserve", [I64, I64], None),

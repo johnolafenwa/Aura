@@ -1772,7 +1772,7 @@ fn define_versioned_loop(
         result.set(builder.version_blocks(
             &[header, body],
             &[(select, None)],
-            &[(entry, flag, Some((flag, 1)))],
+            &[(entry, flag, vec![(flag, 1), (count, 3)])],
         ));
     });
     copied
@@ -1784,8 +1784,10 @@ fn versioned_blocks_get_a_copy_that_keeps_the_true_side_of_their_selects() {
     let copied = define_versioned_loop(&mut module, "versioned", false);
     let ir = ir(&module);
     assert!(copied.get(), "{ir}");
-    // The entry tests the flag and that it equals 1 before it picks a copy.
-    assert!(ir.contains("icmp eq i64"), "{ir}");
+    // The entry tests the flag, that it equals 1, and that the count
+    // equals 3 before it picks a copy.
+    assert_eq!(ir.matches("icmp eq i64").count(), 2, "{ir}");
+    assert!(ir.contains(", 3\n"), "{ir}");
     // The copy adds 7 and the original the load, with no select left.
     assert!(!ir.contains("select"), "{ir}");
     assert!(ir.contains(", 7\n"), "{ir}");
@@ -1858,8 +1860,11 @@ fn a_select_of_blocks_already_copied_keeps_its_false_side_in_the_copy_too() {
             builder.seal_block(exit);
             let returned = builder.use_var(total);
             builder.return_(&[returned]);
-            let outer =
-                builder.version_blocks(&[header, body], &[(first, None)], &[(entry, flag, None)]);
+            let outer = builder.version_blocks(
+                &[header, body],
+                &[(first, None)],
+                &[(entry, flag, Vec::new())],
+            );
             let inner = builder.version_blocks(&[header, body], &[(second, None)], &[]);
             result.set((outer, inner));
         },
@@ -1932,12 +1937,15 @@ fn blocks_copied_for_a_weaker_condition_are_copied_again_for_a_stronger_one() {
             builder.seal_block(exit);
             let returned = builder.use_var(total);
             builder.return_(&[returned]);
-            let weaker =
-                builder.version_blocks(&[header, body], &[(first, None)], &[(entry, flag, None)]);
+            let weaker = builder.version_blocks(
+                &[header, body],
+                &[(first, None)],
+                &[(entry, flag, Vec::new())],
+            );
             let stronger = builder.version_blocks(
                 &[header, body],
                 &[(first, None), (second, None)],
-                &[(entry, both, None)],
+                &[(entry, both, Vec::new())],
             );
             result.set((weaker, stronger));
         },
@@ -2050,15 +2058,16 @@ fn a_loop_copied_before_the_loop_around_it_has_each_version_in_each_copy() {
             let inner_copied = builder.version_blocks(
                 &[inner, inner_body],
                 &[(own, None)],
-                &[(inner_pad, inner_flag, None)],
+                &[(inner_pad, inner_flag, Vec::new())],
             );
             builder.seal_versions();
             let blocks = [outer, outer_body, inner_pad, inner, inner_body, latch];
-            let weaker = builder.version_blocks(&blocks, &[(first, None)], &[(entry, flag, None)]);
+            let weaker =
+                builder.version_blocks(&blocks, &[(first, None)], &[(entry, flag, Vec::new())]);
             let stronger = builder.version_blocks(
                 &blocks,
                 &[(first, None), (second, None)],
-                &[(entry, both, None)],
+                &[(entry, both, Vec::new())],
             );
             builder.seal_versions();
             result.set((inner_copied, weaker, stronger));
@@ -2155,13 +2164,16 @@ fn loops_that_share_all_but_one_block_are_both_copied_through_one_entry() {
             let returned = builder.use_var(total);
             builder.return_(&[returned]);
 
-            let narrow =
-                builder.version_blocks(&[header, body], &[(first, None)], &[(entry, flag, None)]);
+            let narrow = builder.version_blocks(
+                &[header, body],
+                &[(first, None)],
+                &[(entry, flag, Vec::new())],
+            );
             builder.seal_versions();
             let wide = builder.version_blocks(
                 &[header, body, side],
                 &[(second, None)],
-                &[(entry, other_flag, None)],
+                &[(entry, other_flag, Vec::new())],
             );
             builder.seal_versions();
             result.set((narrow, wide));
@@ -2232,7 +2244,7 @@ fn copies_stop_when_the_body_would_outgrow_its_budget() {
                 if !builder.version_blocks(
                     &[header, body],
                     &[(picked, None)],
-                    &[(entry, flag, None)],
+                    &[(entry, flag, Vec::new())],
                 ) {
                     break;
                 }
@@ -2284,9 +2296,9 @@ fn an_entry_that_does_not_end_in_a_jump_into_the_blocks_copies_nothing() {
             builder.switch_to_block(exit);
             builder.seal_block(exit);
             builder.return_(&[zero]);
-            let branch = builder.version_blocks(&[header], &[], &[(entry, flag, None)]);
+            let branch = builder.version_blocks(&[header], &[], &[(entry, flag, Vec::new())]);
             // The exit returns.
-            let returns = builder.version_blocks(&[header], &[], &[(exit, flag, None)]);
+            let returns = builder.version_blocks(&[header], &[], &[(exit, flag, Vec::new())]);
             result.set((branch, returns));
         },
     );
@@ -2335,7 +2347,11 @@ fn versioned_blocks_keep_the_order_their_instructions_were_built_in() {
         builder.switch_to_block(exit);
         builder.seal_block(exit);
         builder.return_(&[count]);
-        result.set(builder.version_blocks(&[header, latch, body], &[], &[(entry, flag, None)]));
+        result.set(builder.version_blocks(
+            &[header, latch, body],
+            &[],
+            &[(entry, flag, Vec::new())],
+        ));
     });
     assert!(copied.get());
     // The module lowers, which fails on a value used before its block.
@@ -2531,7 +2547,7 @@ fn define_copied_call(module: &mut LlvmModule, extra: usize, recursive: bool) ->
         assert!(builder.version_blocks(
             &[header, body],
             &[(select, None)],
-            &[(entry, flag, Some((flag, 1)))],
+            &[(entry, flag, vec![(flag, 1)])],
         ));
     });
     callee

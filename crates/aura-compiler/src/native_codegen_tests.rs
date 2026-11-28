@@ -2095,13 +2095,16 @@ fn a_split_read_at_known_positions_finds_its_parts_in_the_text() {
     }
     assert!(calls("aura_fn_late", "aura_direct_string_trim"));
     assert!(!calls("aura_fn_late", "aura_direct_str_trim_view"));
-    // The loops of `main` read parts, and its split into lines is walked.
+    // The loops of `main` read parts, and its split into lines is walked
+    // in the text, with no list.
     assert!(calls("aura_fn_main", "aura_direct_string_split_part_words"));
-    assert!(calls("aura_fn_main", "aura_direct_string_split_literal"));
-    assert!(!calls(
-        "aura_fn_main",
-        "aura_direct_string_split_literal_words"
-    ));
+    assert!(calls("aura_fn_main", "aura_direct_str_parts_next_view"));
+    for list in [
+        "aura_direct_string_split_literal",
+        "aura_direct_string_split_literal_words",
+    ] {
+        assert!(!calls("aura_fn_main", list), "main calls {list}");
+    }
     // A list read in another block, asked for its length, walked, or whose
     // text changes before the read is made.
     for name in [
@@ -20278,5 +20281,28 @@ fn an_fstring_builds_in_the_box_of_a_str_it_reads_last() {
                     || symbol.ends_with("aura_direct_format_append_str")),
             "{name}: {symbols:?}"
         );
+    }
+}
+
+#[test]
+fn a_str_payload_is_copied_from_the_words_its_box_shows() {
+    let source =
+        include_str!("../tests/fixtures/run-pass/str_payload_copies_come_from_the_text_view.au");
+    let mir = lower_source_to_mir(source).expect("the payload reads lower");
+    emit_host_object(&mir).expect("the payload reads compile directly");
+    let object = emit_unoptimized_object(&mir).expect("the payload reads emit");
+    // The read of a variant a list lends copies the text from its view,
+    // and keeps the runtime's copy for a box that shows none.
+    for name in ["aura_fn_names"] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        for helper in [
+            "aura_direct_string_from_view",
+            "aura_direct_instance_copy_field",
+        ] {
+            assert!(
+                symbols.iter().any(|symbol| symbol.ends_with(helper)),
+                "{name}: {symbols:?}"
+            );
+        }
     }
 }

@@ -3202,6 +3202,7 @@ impl<'a> NativeCodegen<'a> {
                 selects: Vec::new(),
                 entries: Vec::new(),
                 scalar_entries: Vec::new(),
+                loose_entries: Vec::new(),
                 expected: Vec::new(),
                 field_box: None,
             })
@@ -3286,6 +3287,7 @@ impl<'a> NativeCodegen<'a> {
                 selects: Vec::new(),
                 entries: Vec::new(),
                 scalar_entries: Vec::new(),
+                loose_entries: Vec::new(),
                 expected: Vec::new(),
                 field_box: Some(field_box),
             });
@@ -3546,6 +3548,7 @@ impl<'a> NativeCodegen<'a> {
             && self.module.ownership == crate::mir::MirOwnership::Explicit
         {
             compiler.plan_split_parts(function);
+            compiler.plan_split_loops(function);
         }
         let return_ty = ensure_direct_type(
             &function.return_type,
@@ -26260,6 +26263,8 @@ fn collect_task_start_targets(
 mod reachability;
 #[path = "native_codegen_result_slots.rs"]
 mod result_slots;
+#[path = "native_codegen_split_loops.rs"]
+mod split_loops;
 #[path = "native_codegen_split_parts.rs"]
 mod split_parts;
 #[path = "native_codegen_str_slots.rs"]

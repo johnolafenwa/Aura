@@ -1,0 +1,111 @@
+# A list of scalars that has room to grow is reversed, and extended by
+# another list of the same scalars, where its elements lie. A list that is
+# shared, a list of boxes, and an extension
+# past the room go the long way, with the same result.
+import control
+
+
+def digits(value: int64) -> list[uint8]:
+    mut bytes: list[uint8] = []
+    mut rest = value
+    while rest > 0:
+        bytes.append((rest % 10) as uint8)
+        rest = rest // 10
+    bytes.reverse()
+    return bytes
+
+
+def joined(count: int64) -> list[uint8]:
+    mut out: list[uint8] = []
+    for i in range(count):
+        entry = digits(i * 37 + 5)
+        out.extend(entry)
+    return out
+
+
+def wide(count: int64) -> list[int64]:
+    mut out: list[int64] = []
+    for i in range(count):
+        mut step: list[int64] = []
+        for j in range(i % 4):
+            step.append(i * 100 + j)
+        step.reverse()
+        out.extend(step)
+        out.reverse()
+    return out
+
+
+def halves(count: int64) -> list[float64]:
+    mut out: list[float64] = []
+    for i in range(count):
+        mut step = [(i as float64) / 2.0, i as float64]
+        step.reverse()
+        out.extend(step)
+    out.reverse()
+    return out
+
+
+def flags(count: int64) -> list[bool]:
+    mut out: list[bool] = []
+    for i in range(count):
+        mut step = [i % 2 == 0, i % 3 == 0, true]
+        step.reverse()
+        out.extend(step)
+    out.reverse()
+    return out
+
+
+def kept_source() -> str:
+    mut out: list[int64] = []
+    out.append(1)
+    source = [2, 3, 4]
+    out.extend(source.copy())
+    out.extend(source.copy())
+    out.reverse()
+    return f"{out} {source}"
+
+
+def doubled() -> list[int64]:
+    mut out: list[int64] = []
+    for i in range(5):
+        out.append(i)
+    copy = out[1:4]
+    out.extend(copy.copy())
+    out.extend(copy)
+    out.reverse()
+    return out
+
+
+def names() -> list[str]:
+    mut out: list[str] = []
+    for i in range(3):
+        mut step = [f"n{i}", f"m{i}"]
+        step.reverse()
+        out.extend(step)
+    out.reverse()
+    return out
+
+
+def past_the_end():
+    mut out: list[uint8] = []
+    out.extend(digits(123456789))
+    out.reverse()
+    print(out[out.len()])
+
+
+def main() -> int32:
+    print(digits(9041))
+    print(digits(0))
+    print(joined(12))
+    print(wide(9))
+    print(halves(3))
+    print(flags(4))
+    print(kept_source())
+    print(doubled())
+    print(names())
+    match control.recover(past_the_end):
+        case Err(trap):
+            print(trap.message)
+        case _:
+            print("expected failure")
+    return 0

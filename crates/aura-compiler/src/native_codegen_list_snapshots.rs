@@ -1114,6 +1114,12 @@ pub(super) struct ListSnapshot {
     /// of scalars alone, when the loop also reads other lists (see
     /// `version_snapshot_loops`).
     pub(super) scalar_entries: Vec<(Blk, Val)>,
+    /// Each block that enters the loop, with the flag that leaves out
+    /// which form each list of the loop is in (see `view_qualifies`),
+    /// when every list read where the loop is entered has one. The copy
+    /// of a loop whose operations all check each such list for one access
+    /// code is entered on this flag and those codes.
+    pub(super) loose_entries: Vec<(Blk, Val)>,
     /// The access codes the loop's operations check the view for.
     pub(super) expected: Vec<i64>,
     /// The element accesses that stay in range while the guards hold
@@ -1455,7 +1461,7 @@ impl FunctionCompiler<'_> {
                         for (variable, value) in vars.into_iter().zip(params) {
                             self.builder.def_var(variable, *value);
                         }
-                        oks.push((*index, (params[0], params[1])));
+                        oks.push((*index, (params[0], params[1], None)));
                     }
                 }
                 None => {
@@ -1468,11 +1474,13 @@ impl FunctionCompiler<'_> {
             // while every view qualifies. The jump on is in the block the
             // reads end in.
             let pad = self.builder.current_block().unwrap_or(pad);
-            for (index, (_, access)) in &oks {
+            for (index, (_, access, _)) in &oks {
                 let mut flag = None;
                 let mut scalars = None;
                 let mut mixed = false;
-                for (other, (ok, _)) in &oks {
+                // The flag without the forms, while every list has one.
+                let mut loose = Some(None);
+                for (other, (ok, _, rest)) in &oks {
                     if self.list_snapshots[*other].region.blocks
                         == self.list_snapshots[*index].region.blocks
                     {
@@ -1480,6 +1488,13 @@ impl FunctionCompiler<'_> {
                             None => *ok,
                             Some(flag) => self.builder.band(flag, *ok),
                         });
+                        loose = match (loose, rest) {
+                            (Some(None), Some(rest)) => Some(Some(*rest)),
+                            (Some(Some(loose)), Some(rest)) => {
+                                Some(Some(self.builder.band(loose, *rest)))
+                            }
+                            _ => None,
+                        };
                         if self.list_snapshots[*other].scalar_element().is_some() {
                             scalars = Some(match scalars {
                                 None => *ok,
@@ -1494,6 +1509,9 @@ impl FunctionCompiler<'_> {
                 self.list_snapshots[*index]
                     .entries
                     .push((pad, flag, *access));
+                if let Some(loose) = loose.flatten() {
+                    self.list_snapshots[*index].loose_entries.push((pad, loose));
+                }
                 if let Some(scalars) = scalars.filter(|_| mixed) {
                     self.list_snapshots[*index]
                         .scalar_entries
@@ -1661,18 +1679,33 @@ impl FunctionCompiler<'_> {
         let elements = self
             .builder
             .load(types::I64, flags, handle, layout.elements_offset);
-        let qualifies =
-            self.view_qualifies(&snapshot, handle, access, len, Some((&source, source_ok)))?;
+        let qualifies = self.view_qualifies(
+            &snapshot,
+            handle,
+            access,
+            len,
+            Some((&source, source_ok)),
+            true,
+        )?;
         let ok = self.builder.uextend(types::I64, qualifies);
         Ok([ok, access, len, elements])
     }
 
     /// Copies the view of snapshot `index`'s list into its variables, with
     /// whether the view qualifies (see the module documentation).
-    fn emit_list_snapshot(&mut self, index: usize) -> std::result::Result<(Val, Val), String> {
+    ///
+    /// The result is the flag, the access code, and the flag that leaves
+    /// out the form of the view where the loop has one: a loop that names
+    /// the access code its copy runs for checks the code in its flag, so
+    /// it has no other.
+    fn emit_list_snapshot(
+        &mut self,
+        index: usize,
+    ) -> std::result::Result<(Val, Val, Option<Val>), String> {
         let snapshot = self.list_snapshots[index].clone();
         if let Some(array) = &snapshot.array {
-            return self.emit_array_snapshot(index, array);
+            let (ok, access) = self.emit_array_snapshot(index, array)?;
+            return Ok((ok, access, None));
         }
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let flags = MemFlags::trusted();
@@ -1686,7 +1719,7 @@ impl FunctionCompiler<'_> {
         };
         let read_block = self.builder.create_block();
         let join_block = self.builder.create_block();
-        for _ in 0..4 {
+        for _ in 0..5 {
             self.builder.append_block_param(join_block, types::I64);
         }
         let zero = self.builder.iconst(types::I64, 0);
@@ -1695,7 +1728,7 @@ impl FunctionCompiler<'_> {
             read_block,
             &[],
             join_block,
-            &[zero, zero, zero, zero],
+            &[zero, zero, zero, zero, zero],
         );
 
         self.builder.switch_to_block(read_block);
@@ -1707,9 +1740,17 @@ impl FunctionCompiler<'_> {
         let elements = self
             .builder
             .load(types::I64, flags, handle, layout.elements_offset);
-        let qualifies = self.view_qualifies(&snapshot, handle, access, len, None)?;
+        let qualifies = self.view_qualifies(&snapshot, handle, access, len, None, true)?;
         let ok = self.builder.uextend(types::I64, qualifies);
-        self.builder.jump(join_block, &[ok, access, len, elements]);
+        let loose = match snapshot.scalar_element() {
+            Some(_) => ok,
+            None => {
+                let rest = self.view_qualifies(&snapshot, handle, access, len, None, false)?;
+                self.builder.uextend(types::I64, rest)
+            }
+        };
+        self.builder
+            .jump(join_block, &[ok, access, len, elements, loose]);
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
@@ -1725,13 +1766,15 @@ impl FunctionCompiler<'_> {
         {
             self.builder.def_var(variable, value);
         }
-        Ok((params[0], params[1]))
+        Ok((params[0], params[1], Some(params[4])))
     }
 
     /// Whether the view words `access` and `len` of the list `handle`
     /// let the loop of `snapshot` run its copy (see the module
     /// documentation). `carried` is the loop the words come from, with
-    /// its flag, when they are that loop's.
+    /// its flag, when they are that loop's. Without `form` the result
+    /// leaves out which form the view is in, for a caller that compares
+    /// the access code with one code of such a form itself.
     fn view_qualifies(
         &mut self,
         snapshot: &ListSnapshot,
@@ -1739,6 +1782,7 @@ impl FunctionCompiler<'_> {
         access: Val,
         len: Val,
         carried: Option<(&ListSnapshot, Val)>,
+        form: bool,
     ) -> std::result::Result<Val, String> {
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let flags = MemFlags::trusted();
@@ -1747,6 +1791,7 @@ impl FunctionCompiler<'_> {
             Some((source, source_ok)) if source.scalar_element() == snapshot.scalar_element() => {
                 self.builder.icmp_imm(IntCC::NotEqual, source_ok, 0)
             }
+            _ if !form => self.builder.icmp(IntCC::Equal, access, access),
             _ => self.view_form(snapshot, access),
         };
         // A loop that wrote the list found its storage unshared, and the
@@ -1874,6 +1919,74 @@ impl FunctionCompiler<'_> {
                 self.builder.bor(form, typed)
             }
         }
+    }
+
+    /// Whether `code` is an access code [`Self::view_form`] accepts for
+    /// a loop that names no kind of scalar.
+    fn form_holds(code: i64) -> bool {
+        use aura_runtime::native_runtime::{
+            DirectListAccess, FIRST_CLASS_ACCESS, FIRST_PLAIN_ACCESS,
+        };
+        let scalar = (DirectListAccess::Int64 as i64..=DirectListAccess::Float32 as i64)
+            .contains(&code)
+            && code != DirectListAccess::Str as i64;
+        scalar
+            || code == DirectListAccess::Boxes as i64
+            || (i64::from(FIRST_PLAIN_ACCESS)..i64::from(FIRST_CLASS_ACCESS)).contains(&code)
+    }
+
+    /// The one access code every operation of loop `member` checks its
+    /// list for, when the loop names no kind of scalar and the code is
+    /// one of a form its copy runs in: the copy then runs for that code
+    /// alone, so where the loop is entered the code stands for the form.
+    fn checked_form_code(&self, member: usize) -> Option<i64> {
+        let snapshot = &self.list_snapshots[member];
+        if snapshot.scalar_element().is_some() || snapshot.array.is_some() {
+            return None;
+        }
+        let first = *snapshot.expected.first()?;
+        (snapshot.expected.iter().all(|code| *code == first) && Self::form_holds(first))
+            .then_some(first)
+    }
+
+    /// The entries of the loops of `group`, which share their blocks,
+    /// that pick the copy on each list's one checked access code in place
+    /// of its form, with the code each loop's copy then knows. `None`
+    /// when a list of the group has no such code and no code of its own,
+    /// or an entry read a view some other way.
+    fn loose_version_entries(
+        &self,
+        group: &[usize],
+    ) -> Option<(Vec<crate::native_backend::VersionEntry>, Vec<Option<i64>>)> {
+        let codes = group
+            .iter()
+            .map(|member| self.checked_form_code(*member))
+            .collect::<Vec<_>>();
+        let settled = group.iter().zip(&codes).all(|(member, code)| {
+            let snapshot = &self.list_snapshots[*member];
+            code.is_some() || snapshot.scalar_element().is_some() || snapshot.array.is_some()
+        });
+        let first = &self.list_snapshots[group[0]];
+        if !settled
+            || codes.iter().all(Option::is_none)
+            || first.loose_entries.len() != first.entries.len()
+        {
+            return None;
+        }
+        let mut entries = Vec::new();
+        for (pad, loose) in &first.loose_entries {
+            let mut equal = Vec::new();
+            for (member, code) in group.iter().zip(&codes) {
+                let Some(code) = code else { continue };
+                let (_, _, access) = self.list_snapshots[*member]
+                    .entries
+                    .iter()
+                    .find(|(entered, _, _)| entered == pad)?;
+                equal.push((*access, *code));
+            }
+            entries.push((*pad, *loose, equal));
+        }
+        Some((entries, codes))
     }
 
     /// The box of the local list `list`.
@@ -2047,10 +2160,17 @@ impl FunctionCompiler<'_> {
                 }
                 _ => None,
             };
+            // Each list whose operations all check it for one code of a
+            // form the copy runs in is entered on that code, with no test
+            // of the form.
+            let loose = self.loose_version_entries(&group);
             let mut blocks = Vec::new();
             let mut selects = Vec::new();
-            for member in &group {
-                let known = code_of(&self.list_snapshots[*member]).or(expected);
+            for (position, member) in group.iter().enumerate() {
+                let checked = loose.as_ref().and_then(|(_, codes)| codes[position]);
+                let known = code_of(&self.list_snapshots[*member])
+                    .or(expected)
+                    .or(checked);
                 blocks.extend(self.list_snapshots[*member].ir_blocks.iter().copied());
                 selects.extend(
                     self.list_snapshots[*member]
@@ -2059,11 +2179,17 @@ impl FunctionCompiler<'_> {
                         .map(|(select, access)| (*select, known.filter(|_| *access))),
                 );
             }
-            let entries = self.list_snapshots[index]
-                .entries
-                .iter()
-                .map(|(pad, flag, access)| (*pad, *flag, expected.map(|code| (*access, code))))
-                .collect::<Vec<_>>();
+            let entries = match loose {
+                Some((entries, _)) => entries,
+                None => self.list_snapshots[index]
+                    .entries
+                    .iter()
+                    .map(|(pad, flag, access)| {
+                        let equal = expected.map(|code| (*access, code));
+                        (*pad, *flag, equal.into_iter().collect())
+                    })
+                    .collect::<Vec<_>>(),
+            };
             // A loop that reads lists of scalars and other lists first gets
             // a copy for while the lists of scalars qualify, whose view is
             // the cheapest to keep and the likeliest to qualify. The copy
@@ -2089,7 +2215,7 @@ impl FunctionCompiler<'_> {
                 let scalar_entries = self.list_snapshots[index]
                     .scalar_entries
                     .iter()
-                    .map(|(pad, flag)| (*pad, *flag, None))
+                    .map(|(pad, flag)| (*pad, *flag, Vec::new()))
                     .collect::<Vec<_>>();
                 self.builder
                     .version_blocks(&blocks, &scalar_selects, &scalar_entries);

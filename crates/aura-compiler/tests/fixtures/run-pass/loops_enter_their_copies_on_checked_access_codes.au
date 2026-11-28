@@ -1,0 +1,89 @@
+# A loop whose operations all check each of its lists for one access code
+# enters its copy on those codes: lists of boxes, of plain records, and of
+# scalars next to them. A list in another form runs
+# the loop as written.
+enum Value:
+    Int(value: int64)
+    Text(value: str)
+
+class Condition:
+    column: int64
+    op: int64
+    value: Value
+
+copy class Item:
+    kind: int64
+    column: int64
+
+def compare(cell: Value, op: int64, value: Value) -> bool:
+    match cell:
+        case Value.Int(a):
+            match value:
+                case Value.Int(b):
+                    if op == 0:
+                        return a == b
+                    return a >= b
+                case Value.Text(_):
+                    return false
+        case Value.Text(a):
+            match value:
+                case Value.Text(b):
+                    return a == b
+                case Value.Int(_):
+                    return false
+
+# Two lists of boxes, one of them loaned by element.
+def matches(row: list[Value], conditions: list[Condition]) -> bool:
+    for condition in conditions:
+        if not compare(row[condition.column], condition.op, condition.value):
+            return false
+    return true
+
+# A list of plain records and a list of scalars.
+def weigh(items: list[Item], weights: list[int64]) -> int64:
+    mut total = 0
+    for i in range(items.len()):
+        total += items[i].kind * weights[items[i].column]
+    return total
+
+# A list of boxes that the loop writes through its elements.
+def bump(conditions: mut list[Condition]) -> int64:
+    mut total = 0
+    mut i = 0
+    while i < conditions.len():
+        conditions[i].op += 1
+        total += conditions[i].op
+        i += 1
+    return total
+
+# A list of `str`, whose form no copy runs in.
+def lengths(names: list[str]) -> int64:
+    mut total = 0
+    for i in range(names.len()):
+        total += names[i].byte_len()
+    return total
+
+def main():
+    row = [Value.Int(value=7), Value.Text(value="lima"), Value.Int(value=30)]
+    mut conditions = [
+        Condition(column=0, op=0, value=Value.Int(value=7)),
+        Condition(column=2, op=1, value=Value.Int(value=18)),
+        Condition(column=1, op=0, value=Value.Text(value="lima")),
+    ]
+    print(matches(row, conditions))
+    print(matches(row, []))
+    print(matches([Value.Int(value=8), Value.Text(value="oslo"), Value.Int(value=3)], conditions))
+    empty: list[Value] = []
+    print(matches(empty, []))
+    print(weigh([Item(kind=2, column=1), Item(kind=3, column=0)], [10, 100]))
+    print(weigh([], []))
+    print(bump(conditions))
+    print(matches(row, conditions))
+    print(lengths(["a", "bc", "def"]))
+    # A row an element of another list keeps has no room of its own.
+    rows = [[Value.Int(value=7), Value.Text(value="lima"), Value.Int(value=30)], [Value.Int(value=7), Value.Text(value="x"), Value.Int(value=20)]]
+    mut found = 0
+    for kept in rows:
+        if matches(kept, conditions):
+            found += 1
+    print(found)
