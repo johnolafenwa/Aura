@@ -34223,6 +34223,80 @@ fn text_view_words(text: *mut OpaqueValue) -> Option<String> {
     }
 }
 
+/// A `str` box made on the short path is the box the general path makes:
+/// the same view where the box lies, one reference, no type name, and the
+/// same link in the task's ledger, so each release frees it.
+#[test]
+fn a_str_box_from_the_short_path_is_the_box_the_general_path_makes() {
+    let long = "a text too long to be kept inside its value";
+    for text in ["", "short", "žluť", long] {
+        let short_path = super::boxed_value(Value::String(text.into()));
+        let general = super::boxed_value_with_type(Value::String(text.into()), None);
+        let typed = super::boxed_typed_value(Value::String(text.into()), "Name");
+        for boxed in [short_path, general, typed] {
+            assert_eq!(text_view_words(boxed).as_deref(), Some(text));
+            assert_eq!(list_view_len(boxed), text.len());
+            let header = unsafe { &*boxed };
+            assert_eq!(
+                header.ref_count.load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                header
+                    .list_capacity
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert!(header
+                .shared_lock
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .is_null());
+            assert!(header
+                .shape_tag
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .is_null());
+            assert_eq!(header.array_holders.get(), 0);
+        }
+        let (short_header, general_header) = unsafe { (&*short_path, &*general) };
+        assert_eq!(short_header.owner.get(), general_header.owner.get());
+        assert_eq!(short_header.owned.get(), general_header.owned.get());
+        assert!(unsafe { &*short_header.runtime_type_name.get() }.is_none());
+        // A short text lies in its own box.
+        if text.len() < 30 && !text.is_empty() {
+            let words = unsafe { &*boxed_elements_cell(short_path) };
+            let block = short_path as usize;
+            assert!((block..block + std::mem::size_of::<OpaqueValue>()).contains(words));
+        }
+        // A copy keeps the type name of a box that has one, and is a
+        // plain box otherwise.
+        for (source, named) in [(short_path, false), (typed, true)] {
+            let copy = super::aura_direct_string_clone(source);
+            assert_ne!(copy, source);
+            assert_eq!(text_view_words(copy).as_deref(), Some(text));
+            let name = unsafe { &*(*copy).runtime_type_name.get() };
+            assert_eq!(
+                name.as_ref().map(|name| name.as_str()),
+                named.then_some("Name")
+            );
+            unsafe { release_value(copy) };
+        }
+        for boxed in [short_path, general, typed] {
+            unsafe { release_value(boxed) };
+        }
+    }
+    // Any other value takes the general path through the same entry.
+    let number = super::boxed_value(Value::Int(IntegerValue::from_i64(7)));
+    assert_eq!(text_view_words(number), None);
+    assert_eq!(super::aura_direct_unbox_int64(number), 7);
+    unsafe { release_value(number) };
+}
+
+/// Where the view of `boxed` says its elements or bytes lie.
+fn boxed_elements_cell(boxed: *mut OpaqueValue) -> *const usize {
+    let layout = super::direct_list_layout();
+    unsafe { (boxed as *const u8).add(layout.elements_offset as usize) as *const usize }
+}
+
 #[test]
 fn a_str_box_keeps_its_words_in_its_view_through_writes_in_place() {
     // A short text lies inside the box and a long one on the heap: both
