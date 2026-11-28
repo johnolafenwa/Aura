@@ -813,6 +813,203 @@ fn a_payload_whose_scrutinee_a_task_reaches_is_not_lent() {
     );
 }
 
+const KEYS: &str = r#"
+enum Stmt:
+    Assign(name: str, value: int64)
+    Skip
+
+def store(stmt: Stmt, env: mut dict[str, int64]):
+    match stmt:
+        case Stmt.Assign(name, value):
+            match mut env.lookup(name):
+                case Lookup.Found(slot):
+                    slot = value
+                case Lookup.Missing:
+                    env[name.clone()] = value
+        case _:
+            pass
+
+def main():
+    mut env: dict[str, int64] = {}
+    store(Stmt.Assign(name = "a", value = 1), env)
+    print(len(env))
+"#;
+
+/// `store` of [`KEYS`] after `change`, which gets its blocks, the block and
+/// position of the entry loan's beginning, the loan, and its key. Returns
+/// whether the key is still lent from `stmt`, and its promotions.
+fn key_lent_after(change: impl FnOnce(&mut MirFunction, usize, usize, &str, &str)) -> (bool, bool) {
+    let module = lower_source_to_mir(KEYS).expect("the source should lower");
+    let borrowing = crate::mir::ownership::kept_arguments(&module);
+    let mut function = module
+        .functions
+        .iter()
+        .find(|function| function.name == "store")
+        .expect("the function should exist")
+        .clone();
+    let (block, position, loan, key) = function
+        .blocks
+        .iter()
+        .enumerate()
+        .find_map(|(block, instructions)| {
+            instructions
+                .instructions
+                .iter()
+                .enumerate()
+                .find_map(|(position, instruction)| match instruction {
+                    Instruction::BeginElementLoan {
+                        loan,
+                        selector: Operand::Place(key),
+                        ..
+                    } => Some((block, position, loan.clone(), key.clone())),
+                    _ => None,
+                })
+        })
+        .expect("the lookup should begin an entry loan");
+    change(&mut function, block, position, &loan, &key);
+    let mut found = lent_element_reads(&function, |_| true, |_| false, |_| Vec::new());
+    lent_payload_reads(
+        &function,
+        &mut found,
+        |_| true,
+        |place| place == "stmt",
+        |instruction| {
+            crate::mir::ownership::callee_borrowed_operands(instruction, |name| borrowing.get(name))
+        },
+    );
+    (
+        found.payloads.get(&key).map(String::as_str) == Some("stmt"),
+        found.promotions.values().any(|temps| temps.contains(&key)),
+    )
+}
+
+#[test]
+fn a_payload_an_entry_loan_reads_as_its_key_is_lent() {
+    // The test, the loan, and the copy the insert stores only read `name`.
+    assert_eq!(key_lent_after(|_, _, _, _, _| {}), (true, false));
+}
+
+#[test]
+fn a_key_whose_scrutinee_changes_while_its_loan_lives_is_copied() {
+    let release = || Instruction::Release {
+        place: "stmt".to_string(),
+    };
+    // The loan still reads its key after the scrutinee is gone.
+    let (lent, promoted) = key_lent_after(|function, block, position, _, _| {
+        function.blocks[block]
+            .instructions
+            .insert(position + 1, release());
+    });
+    assert_eq!((lent, promoted), (false, false));
+
+    // So does a loan of the loan, after the loan itself ended.
+    let reborrow = |function: &mut MirFunction, block: usize, position: usize, loan: &str| {
+        function.blocks[block].instructions.insert(
+            position + 1,
+            Instruction::Reborrow {
+                loan: "%t_inner".to_string(),
+                parent: loan.to_string(),
+                projection: String::new(),
+                mutable: true,
+            },
+        );
+        let end = function.blocks[block]
+            .instructions
+            .iter()
+            .position(|instruction| matches!(instruction, Instruction::EndLoan { loan: ended } if ended == loan))
+            .expect("the loan should end in its block");
+        function.blocks[block].instructions.insert(
+            end + 1,
+            Instruction::EndLoan {
+                loan: "%t_inner".to_string(),
+            },
+        );
+        end + 1
+    };
+    assert_eq!(
+        key_lent_after(|function, block, position, loan, _| {
+            reborrow(function, block, position, loan);
+        }),
+        (true, false)
+    );
+    assert_eq!(
+        key_lent_after(|function, block, position, loan, _| {
+            let end = reborrow(function, block, position, loan);
+            function.blocks[block].instructions.insert(end, release());
+        }),
+        (false, false)
+    );
+}
+
+#[test]
+fn a_key_its_loan_may_keep_is_copied() {
+    // A returned loan hands the caller a reference to its key.
+    let (lent, _) = key_lent_after(|function, block, position, loan, _| {
+        function.blocks[block].instructions.insert(
+            position + 1,
+            Instruction::ReturnLoan {
+                loan: loan.to_string(),
+                origin: "env".to_string(),
+            },
+        );
+    });
+    assert!(!lent);
+
+    // A loan begun twice is two loans under one name.
+    let (lent, _) = key_lent_after(|function, block, position, _, _| {
+        let again = function.blocks[block].instructions[position].clone();
+        function.blocks[block]
+            .instructions
+            .insert(position + 1, again);
+    });
+    assert!(!lent);
+
+    // A task that names the loan may read it at any later point.
+    let (lent, _) = key_lent_after(|function, block, position, loan, _| {
+        function.blocks[block].instructions.insert(
+            position + 1,
+            Instruction::Assign {
+                target: "%t_task".to_string(),
+                value: Rvalue::StartTask {
+                    recover: false,
+                    returns_handle: true,
+                    result_is_copy: true,
+                    stack_size: None,
+                    task_group: Operand::Int(0),
+                    function: Operand::Place("%t_function".to_string()),
+                    args: vec![MirArg {
+                        name: None,
+                        value: Operand::Place(loan.to_string()),
+                        writeback_place: None,
+                    }],
+                    span: crate::diag::Span::new(1, 1),
+                },
+            },
+        );
+    });
+    assert!(!lent);
+
+    // A loan of the key itself, or one that moves it, does more than read.
+    let (lent, _) = key_lent_after(|function, block, position, _, key| {
+        let Instruction::BeginElementLoan { source, .. } =
+            &mut function.blocks[block].instructions[position]
+        else {
+            unreachable!("the position names the loan's beginning");
+        };
+        *source = key.to_string();
+    });
+    assert!(!lent);
+    let (lent, _) = key_lent_after(|function, block, position, _, key| {
+        let Instruction::BeginElementLoan { selector, .. } =
+            &mut function.blocks[block].instructions[position]
+        else {
+            unreachable!("the position names the loan's beginning");
+        };
+        *selector = Operand::MovePlace(key.to_string());
+    });
+    assert!(!lent);
+}
+
 #[test]
 fn a_read_of_a_union_member_s_payload_is_lent_from_the_union() {
     let module = lower_source_to_mir(

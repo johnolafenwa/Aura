@@ -1,0 +1,212 @@
+# A `str` payload that an entry loan reads as its key is read where the
+# variant holds it. The dict never keeps that box: an insert copies the key
+# first, and the source may change or go away after the loan.
+
+
+enum Kind:
+    Plain
+    Loud
+
+
+enum Stmt:
+    Assign(name: str, value: int64)
+    Bump(name: str)
+    Nested(outer: str, inner: str)
+    Tagged(kind: Kind)
+    Skip
+
+
+class Machine:
+    env: dict[str, int64]
+    log: list[str]
+
+
+# The loan writes the entry the payload names, and a missing name is
+# inserted under a copy.
+def run(body: list[Stmt], env: mut dict[str, int64]):
+    for statement in body:
+        match statement:
+            case Stmt.Assign(name, value):
+                match mut env.lookup(name):
+                    case Lookup.Found(slot):
+                        slot = value
+                    case Lookup.Missing:
+                        env[name.clone()] = value
+            case Stmt.Bump(name):
+                env[name] += 1
+            case _:
+                pass
+
+
+# The loan only reads the entry.
+def total(body: list[Stmt], env: dict[str, int64]) -> int64:
+    mut sum = 0
+    for statement in body:
+        match statement:
+            case Stmt.Assign(name, _):
+                match env.lookup(name):
+                    case Lookup.Found(slot):
+                        sum += slot
+                    case Lookup.Missing:
+                        sum -= 1
+            case Stmt.Bump(name):
+                sum += env[name] * 100
+            case _:
+                pass
+    return sum
+
+
+# Two payloads select an entry of an entry.
+def count(body: list[Stmt], tables: mut dict[str, dict[str, int64]]):
+    for statement in body:
+        match statement:
+            case Stmt.Nested(outer, inner):
+                tables[outer][inner] += 1
+            case _:
+                pass
+
+
+# A key of a Copy type, which nothing releases, is read the same way.
+def tally(body: list[Stmt], kinds: mut dict[Kind, int64]):
+    for statement in body:
+        match statement:
+            case Stmt.Tagged(kind):
+                match mut kinds.lookup(kind):
+                    case Lookup.Found(seen):
+                        seen = seen + 1
+                    case Lookup.Missing:
+                        kinds[kind] = 1
+            case _:
+                pass
+
+
+# The scrutinee is a local that changes right after the loan ends.
+def replace(env: mut dict[str, int64]) -> str:
+    mut statement = Stmt.Assign(name="total".to_upper().to_lower(), value=7)
+    mut seen = ""
+    for round in range(3):
+        match statement:
+            case Stmt.Assign(name, value):
+                match mut env.lookup(name):
+                    case Lookup.Found(slot):
+                        seen = f"{seen}{name};"
+                        slot = slot + value + round
+                    case Lookup.Missing:
+                        env[name.clone()] = value
+                statement = Stmt.Bump(name=f"total{round}")
+            case Stmt.Bump(name):
+                seen = f"{seen}bump {name};"
+                statement = Stmt.Assign(name="total".to_upper().to_lower(), value=round)
+            case _:
+                pass
+    return seen
+
+
+# A field's dict is lent from under a payload key.
+def apply(machine: mut Machine, body: list[Stmt]):
+    for statement in body:
+        match statement:
+            case Stmt.Assign(name, value):
+                if name in machine.env:
+                    machine.env[name] += value
+                else:
+                    machine.env[name.clone()] = value
+                    machine.log.append(name.clone())
+            case _:
+                pass
+
+
+# A missing key traps while the loan reads the payload.
+def bump_all(body: list[Stmt], counts: dict[str, int64]) -> int64:
+    mut env = counts.copy()
+    for statement in body:
+        match statement:
+            case Stmt.Bump(name):
+                env[name] += 1
+            case _:
+                pass
+    return len(env)
+
+
+def outcome(task: Task[int64]) -> str:
+    match task.result(timeout=5s):
+        case TaskResult.Ready(value):
+            return f"ready {value}"
+        case TaskResult.Error(message):
+            return f"error {message}"
+        case TaskResult.TimedOut:
+            return "timed out"
+        case TaskResult.Cancelled:
+            return "cancelled"
+
+
+def bump_in_task(body: own list[Stmt], env: own dict[str, int64]) -> str:
+    with TaskGroup() as group:
+        task = group.start(bump_all, body, env)
+        return outcome(task)
+
+
+def program(tag: int64) -> list[Stmt]:
+    mut body: list[Stmt] = []
+    for index in range(6):
+        body.append(Stmt.Assign(name=f"v{index % 3}_{tag}", value=index * 10))
+    body.append(Stmt.Bump(name=f"v1_{tag}"))
+    body.append(Stmt.Nested(outer=f"t{tag}", inner=f"k{tag}"))
+    body.append(Stmt.Skip)
+    body.append(Stmt.Tagged(kind=Kind.Loud))
+    body.append(Stmt.Tagged(kind=Kind.Plain))
+    body.append(Stmt.Tagged(kind=Kind.Loud))
+    return body
+
+
+def show(env: dict[str, int64]) -> str:
+    mut names = env.keys()
+    names.sort()
+    mut text = ""
+    for name in names:
+        text = f"{text}{name}={env[name]} "
+    return text
+
+
+def main():
+    mut body = program(1)
+    mut env: dict[str, int64] = {}
+    run(body, env)
+    run(body, env)
+    print(show(env))
+    print(total(body, env))
+    # The statements the keys were read from change and go away; the dict
+    # keeps its own keys.
+    body[0] = Stmt.Skip
+    body.pop()
+    body.clear()
+    body = program(2)
+    run(body, env)
+    print(show(env))
+    print(total(body, env))
+
+    mut tables: dict[str, dict[str, int64]] = {"t2": {"k2": 40}}
+    count(body, tables)
+    count(body, tables)
+    body.clear()
+    print(tables["t2"]["k2"])
+
+    mut totals = {"total": 1}
+    print(replace(totals))
+    print(show(totals))
+
+    mut machine = Machine(env={}, log=[])
+    body = program(3)
+    apply(machine, body)
+    body.clear()
+    print(show(machine.env))
+    print(machine.log)
+
+    mut kinds: dict[Kind, int64] = {}
+    body = program(6)
+    tally(body, kinds)
+    body.clear()
+    print(f"{kinds[Kind.Loud]} {kinds[Kind.Plain]} {len(kinds)}")
+
+    print(bump_in_task(program(4), {"v1_4": 1}))
+    print(bump_in_task(program(5), {"other": 1}))

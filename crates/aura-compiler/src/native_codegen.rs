@@ -13988,8 +13988,11 @@ impl<'a> FunctionCompiler<'a> {
         // so a key read from its place is lent to the loan. A key the load
         // made, such as a string literal's box, is the loan's own until it
         // ends.
+        // A lent payload holds its scrutinee's box, which the loan only
+        // reads as its key (see `entry_loan_keys`) and so never counts.
         let lent_key = matches!(selector_ty, DirectType::Opaque(_))
-            && matches!(selector, Operand::Place(place) if self.tracked_roots.contains(place))
+            && matches!(selector, Operand::Place(place)
+                if self.tracked_roots.contains(place) || self.lent_payloads.contains(place))
             && !self.temporary_owns_opaque(&selected);
         let words = if lent_key {
             selected.values.clone()

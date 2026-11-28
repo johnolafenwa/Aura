@@ -20145,3 +20145,23 @@ def main():
         "{referenced:?}"
     );
 }
+
+#[test]
+fn an_entry_loan_reads_a_payload_key_where_its_variant_holds_it() {
+    let source = include_str!("../tests/fixtures/run-pass/payload_keys_lent_to_entry_loans.au");
+    let mir = lower_source_to_mir(source).expect("payload keys lower");
+    emit_host_object(&mir).expect("payload keys compile directly");
+    let object = emit_unoptimized_object(&mir).expect("payload keys emit");
+    // The loans of `total` and `count` only read their keys, so no payload
+    // is copied out of its variant for them. `tally`, whose key is of a
+    // Copy type that the MIR never releases, copies it only to insert it.
+    for name in ["aura_fn_total", "aura_fn_count"] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        assert!(
+            !symbols
+                .iter()
+                .any(|symbol| symbol.ends_with("aura_direct_instance_copy_field")),
+            "{name}: {symbols:?}"
+        );
+    }
+}

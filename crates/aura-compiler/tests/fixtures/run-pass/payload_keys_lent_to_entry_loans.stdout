@@ -1,0 +1,12 @@
+v0_1=30 v1_1=41 v2_1=50 
+4342
+v0_1=30 v0_2=30 v1_1=41 v1_2=41 v2_1=50 v2_2=50 
+4342
+42
+total;bump total0;total;
+total=11 
+v0_3=30 v1_3=50 v2_3=70 
+[v0_3, v1_3, v2_3]
+2 1 2
+ready 1
+error dict key `v1_5` was not present

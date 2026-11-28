@@ -908,94 +908,118 @@ pub(super) fn lent_payload_reads<'f>(
     let assigned = assignments(function);
     let params = param_names(function);
     let union_loans = union_payload_loans(function);
-    let mut sources = HashMap::<&str, &str>::new();
-    for instruction in instructions() {
-        let (target, source) = match instruction {
-            Instruction::Assign {
-                target,
-                value:
-                    Rvalue::VariantPayload {
-                        scrutinee: Operand::Place(source),
-                        ..
-                    },
-            } => (target, source.as_str()),
-            Instruction::ReadLoan { target, loan } => match union_loans.get(loan.as_str()) {
-                Some(&source) => (target, source),
-                None => continue,
-            },
-            _ => continue,
-        };
-        if !target.contains('.')
-            && !source.contains('.')
-            && target != source
-            && !params.contains(target.as_str())
-            && assigned.get(target.as_str()) == Some(&1)
-            && !lent.lists.contains_key(target.as_str())
-            && lendable(target)
-            && scrutinee(source)
-        {
-            sources.insert(target, source);
-        }
-    }
-    let mut rejected = HashSet::<&str>::new();
-    for block in &function.blocks {
-        for instruction in &block.instructions {
-            let roots = mentioned_roots(instruction);
-            let borrowed = borrowed(instruction);
-            for (&temp, &source) in &sources {
-                let defines = matches!(
-                    instruction,
-                    Instruction::Assign {
-                        target,
-                        value: Rvalue::VariantPayload { .. },
-                    }
-                    | Instruction::ReadLoan { target, .. } if target == temp
-                );
-                if shares_list(instruction, source)
-                    || (roots.contains(temp)
-                        && !defines
-                        && !reads_lent(instruction, temp, &borrowed))
-                {
-                    rejected.insert(temp);
-                }
-            }
-        }
-        let match_scrutinee = match &block.terminator {
-            Terminator::Match {
-                scrutinee: Operand::Place(place),
-                ..
-            } => Some(place.as_str()),
-            _ => None,
-        };
-        for place in terminator_place_mentions(&block.terminator) {
-            if Some(place) != match_scrutinee && sources.contains_key(root(place)) {
-                rejected.insert(root(place));
-            }
-        }
-    }
-    sources.retain(|temp, _| !rejected.contains(temp));
-
+    let keys = entry_loan_keys(function);
+    let no_readers = HashSet::new();
     let blocks = function
         .blocks
         .iter()
         .map(|block| (block.label.as_str(), block))
         .collect::<HashMap<_, _>>();
-    let mut temps = sources.iter().collect::<Vec<_>>();
-    temps.sort();
-    for (&temp, &source) in temps {
-        let live_in = live_blocks(function, &blocks, temp);
+    // The keys that would have to take a reference of their own while
+    // their loan lives, which copy their payload instead.
+    let mut denied = HashSet::<&str>::new();
+    let (sources, promotions) = loop {
+        let mut sources = HashMap::<&str, &str>::new();
+        for instruction in instructions() {
+            let (target, source) = match instruction {
+                Instruction::Assign {
+                    target,
+                    value:
+                        Rvalue::VariantPayload {
+                            scrutinee: Operand::Place(source),
+                            ..
+                        },
+                } => (target, source.as_str()),
+                Instruction::ReadLoan { target, loan } => match union_loans.get(loan.as_str()) {
+                    Some(&source) => (target, source),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            if !target.contains('.')
+                && !source.contains('.')
+                && target != source
+                && !params.contains(target.as_str())
+                && assigned.get(target.as_str()) == Some(&1)
+                && !lent.lists.contains_key(target.as_str())
+                && !denied.contains(target.as_str())
+                && lendable(target)
+                && scrutinee(source)
+            {
+                sources.insert(target, source);
+            }
+        }
+        let mut rejected = HashSet::<&str>::new();
         for block in &function.blocks {
-            let mut live = live_at_end(block, &live_in, temp);
-            for (index, instruction) in block.instructions.iter().enumerate().rev() {
-                live = live_before(instruction, temp, live);
-                if live && ends_payload_loan(instruction, source, &sources, lent, &borrowed) {
-                    lent.promotions
-                        .entry((block.label.clone(), index))
-                        .or_default()
-                        .push(temp.to_string());
+            for instruction in &block.instructions {
+                let roots = mentioned_roots(instruction);
+                let borrowed = borrowed(instruction);
+                for (&temp, &source) in &sources {
+                    let defines = matches!(
+                        instruction,
+                        Instruction::Assign {
+                            target,
+                            value: Rvalue::VariantPayload { .. },
+                        }
+                        | Instruction::ReadLoan { target, .. } if target == temp
+                    );
+                    if shares_list(instruction, source)
+                        || (roots.contains(temp)
+                            && !defines
+                            && !reads_lent(instruction, temp, &borrowed)
+                            && !reads_entry_key(instruction, temp, &keys))
+                    {
+                        rejected.insert(temp);
+                    }
+                }
+            }
+            let match_scrutinee = match &block.terminator {
+                Terminator::Match {
+                    scrutinee: Operand::Place(place),
+                    ..
+                } => Some(place.as_str()),
+                _ => None,
+            };
+            for place in terminator_place_mentions(&block.terminator) {
+                if Some(place) != match_scrutinee && sources.contains_key(root(place)) {
+                    rejected.insert(root(place));
                 }
             }
         }
+        sources.retain(|temp, _| !rejected.contains(temp));
+
+        let mut promotions = Vec::new();
+        let mut moved = Vec::new();
+        let mut temps = sources.iter().collect::<Vec<_>>();
+        temps.sort();
+        for (&temp, &source) in temps {
+            // A loan that reads the payload as its key reads it until the
+            // loan ends.
+            let readers = keys.get(temp).unwrap_or(&no_readers);
+            let live_in = live_blocks_with(function, &blocks, temp, readers);
+            for block in &function.blocks {
+                let mut live = live_at_end_with(block, &live_in, temp, readers);
+                for (index, instruction) in block.instructions.iter().enumerate().rev() {
+                    live = live_before_with(instruction, temp, readers, live);
+                    if live && ends_payload_loan(instruction, source, &sources, lent, &borrowed) {
+                        promotions.push(((block.label.clone(), index), temp.to_string()));
+                        // The loan keeps the word its key held when it
+                        // began, which a reference taken later would leave
+                        // behind.
+                        if !readers.is_empty() {
+                            moved.push(temp);
+                        }
+                    }
+                }
+            }
+        }
+        if moved.is_empty() {
+            break (sources, promotions);
+        }
+        denied.extend(moved);
+    };
+    for (at, temp) in promotions {
+        lent.promotions.entry(at).or_default().push(temp);
     }
     lent.payloads.extend(
         sources
@@ -1006,6 +1030,108 @@ pub(super) fn lent_payload_reads<'f>(
         temps.sort();
         temps.dedup();
     }
+}
+
+/// The locals of `function` that an entry loan reads as its key and never
+/// keeps, each with the loans that read it: that loan, and every loan of
+/// it.
+///
+/// `d[key]` as a loan evaluates `key` once, into a word generated code
+/// holds until the loan ends, and every walk to the entry reads the key
+/// where its box holds it: `direct_element_step`, `map_value_slot` and
+/// `map_probe_slot` in the runtime compare the key and keep nothing, and a
+/// missing key is copied for its report. A loan handed to the caller is the
+/// exception, since `ReturnLoan` hands over a reference to the key. So a
+/// key is only read when its loan is begun once, on another root, and
+/// neither the loan nor a loan of it is returned or captured.
+fn entry_loan_keys(function: &MirFunction) -> HashMap<&str, HashSet<&str>> {
+    let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
+    let mut begun = HashMap::<&str, usize>::new();
+    let mut parents = Vec::<(&str, &str)>::new();
+    let mut selected = Vec::<(&str, &str)>::new();
+    for instruction in instructions() {
+        let (loan, source) = match instruction {
+            Instruction::BeginLoan { loan, source, .. }
+            | Instruction::BeginElementLoan { loan, source, .. }
+            | Instruction::BeginReturnedLoan {
+                loan,
+                origin: source,
+                ..
+            }
+            | Instruction::Reborrow {
+                loan,
+                parent: source,
+                ..
+            }
+            | Instruction::ReborrowElement {
+                loan,
+                parent: source,
+                ..
+            } => (loan.as_str(), root(source)),
+            _ => continue,
+        };
+        *begun.entry(loan).or_default() += 1;
+        parents.push((loan, source));
+        if let Instruction::BeginElementLoan {
+            selector: Operand::Place(key),
+            ..
+        } = instruction
+        {
+            if !key.contains('.') && key != source && key != loan {
+                selected.push((key.as_str(), loan));
+            }
+        }
+    }
+    let mut keys = HashMap::<&str, HashSet<&str>>::new();
+    let mut kept = HashSet::<&str>::new();
+    for (key, loan) in selected {
+        let readers = keys.entry(key).or_default();
+        readers.insert(loan);
+        // Each pass adds the loans of the loans found so far.
+        for _ in 0..parents.len() {
+            for (child, parent) in &parents {
+                if readers.contains(parent) {
+                    readers.insert(child);
+                }
+            }
+        }
+        let keeps = instructions().any(|instruction| match instruction {
+            Instruction::ReturnLoan { loan, .. } => readers.contains(root(loan)),
+            Instruction::Assign {
+                value: Rvalue::Closure { .. } | Rvalue::StartTask { .. },
+                ..
+            } => {
+                let roots = mentioned_roots(instruction);
+                readers.iter().any(|reader| roots.contains(reader))
+            }
+            _ => false,
+        });
+        if keeps || readers.iter().any(|reader| begun[reader] != 1) {
+            kept.insert(key);
+        }
+    }
+    keys.retain(|key, _| !kept.contains(key));
+    keys
+}
+
+/// Whether `instruction` begins an entry loan that only reads `temp` as its
+/// key (see [`entry_loan_keys`]).
+fn reads_entry_key(
+    instruction: &Instruction,
+    temp: &str,
+    keys: &HashMap<&str, HashSet<&str>>,
+) -> bool {
+    matches!(
+        instruction,
+        Instruction::BeginElementLoan {
+            loan,
+            source,
+            selector: Operand::Place(key),
+            ..
+        } if key == temp
+            && root(source) != temp
+            && keys.get(temp).is_some_and(|readers| readers.contains(loan.as_str()))
+    )
 }
 
 /// Adds the `views` of `function` (see `json_views`) that may hold the box
@@ -1242,22 +1368,49 @@ fn apart(a: &str, b: &str) -> bool {
 /// Whether `temp` is still to be read before `instruction`, given whether
 /// it is after it. Its assignment and release end what it held.
 fn live_before(instruction: &Instruction, temp: &str, live_after: bool) -> bool {
+    live_before_with(instruction, temp, &HashSet::new(), live_after)
+}
+
+/// [`live_before`] for a `temp` that the loans `readers` read as their key
+/// for as long as they live, so an instruction that names one of them
+/// reads `temp` too.
+fn live_before_with(
+    instruction: &Instruction,
+    temp: &str,
+    readers: &HashSet<&str>,
+    live_after: bool,
+) -> bool {
     match instruction {
         Instruction::Release { place } if place == temp => false,
         Instruction::Assign { target, .. } if target == temp => false,
-        _ => live_after || mentioned_roots(instruction).contains(temp),
+        _ => {
+            live_after || {
+                let roots = mentioned_roots(instruction);
+                roots.contains(temp) || readers.iter().any(|reader| roots.contains(reader))
+            }
+        }
     }
 }
 
 /// Whether `temp` is still to be read at the end of `block`: by its
 /// terminator, or before one of its successors.
 fn live_at_end(block: &BasicBlock, live_in: &HashSet<&str>, temp: &str) -> bool {
+    live_at_end_with(block, live_in, temp, &HashSet::new())
+}
+
+/// [`live_at_end`] with the loans that read `temp` as their key.
+fn live_at_end_with(
+    block: &BasicBlock,
+    live_in: &HashSet<&str>,
+    temp: &str,
+    readers: &HashSet<&str>,
+) -> bool {
     successors(&block.terminator)
         .into_iter()
         .any(|label| live_in.contains(label))
         || terminator_place_mentions(&block.terminator)
             .into_iter()
-            .any(|place| root(place) == temp)
+            .any(|place| root(place) == temp || readers.contains(root(place)))
 }
 
 /// The blocks before which `temp` is still to be read, by a backward pass
@@ -1266,6 +1419,16 @@ fn live_blocks<'f>(
     function: &'f MirFunction,
     blocks: &HashMap<&'f str, &'f BasicBlock>,
     temp: &str,
+) -> HashSet<&'f str> {
+    live_blocks_with(function, blocks, temp, &HashSet::new())
+}
+
+/// [`live_blocks`] with the loans that read `temp` as their key.
+fn live_blocks_with<'f>(
+    function: &'f MirFunction,
+    blocks: &HashMap<&'f str, &'f BasicBlock>,
+    temp: &str,
+    readers: &HashSet<&str>,
 ) -> HashSet<&'f str> {
     let mut live_in = HashSet::new();
     let mut changed = true;
@@ -1277,9 +1440,9 @@ fn live_blocks<'f>(
                 continue;
             }
             let block = blocks[label];
-            let mut live = live_at_end(block, &live_in, temp);
+            let mut live = live_at_end_with(block, &live_in, temp, readers);
             for instruction in block.instructions.iter().rev() {
-                live = live_before(instruction, temp, live);
+                live = live_before_with(instruction, temp, readers, live);
             }
             if live {
                 live_in.insert(label);
