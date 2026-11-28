@@ -3438,6 +3438,7 @@ impl<'a> NativeCodegen<'a> {
             stand_in_slots: HashMap::new(),
             element_lend_temps,
             native_loans: HashMap::new(),
+            split_part_steps: HashMap::new(),
             push_entry_loans: element_loans::push_entry_loans(function),
             fused_entry_probes,
             pending_try_read: None,
@@ -3539,6 +3540,11 @@ impl<'a> NativeCodegen<'a> {
                 // list holds it and never assigns the slot's words.
                 || compiler.str_key_tests.contains_key(local)
         });
+        if self.freestanding.is_none()
+            && self.module.ownership == crate::mir::MirOwnership::Explicit
+        {
+            compiler.plan_split_parts(function);
+        }
         let return_ty = ensure_direct_type(
             &function.return_type,
             &self.classes,
@@ -5197,6 +5203,9 @@ struct FunctionCompiler<'a> {
     element_lend_temps: HashSet<String>,
     /// The element loans generated code followed when they began.
     native_loans: HashMap<String, element_loans::NativeLoan>,
+    /// What to do at each instruction, by block and position, of a split
+    /// whose parts are read where the text keeps them (see `split_parts`).
+    split_part_steps: HashMap<(String, usize), split_parts::Step>,
     /// The entry loans that only append scalars to their entry's list (see
     /// `element_loans::push_entry_loans`).
     push_entry_loans: HashSet<String>,
@@ -6304,6 +6313,7 @@ impl<'a> FunctionCompiler<'a> {
         let mut skipped = 0;
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
             if skipped > 0 {
+                self.refuse_skipped_split_part_step(&block.label, instruction_index)?;
                 skipped -= 1;
                 continue;
             }
@@ -6325,6 +6335,9 @@ impl<'a> FunctionCompiler<'a> {
                 self.checked_variant = None;
             }
             self.current_snapshot_instruction = instruction_index;
+            if self.compile_split_part_step(&block.label, instruction_index)? {
+                continue;
+            }
             if self.freestanding.is_some() && self.compile_scale_offset(block, instruction_index)? {
                 skipped = 3;
                 continue;
@@ -26236,6 +26249,8 @@ fn collect_task_start_targets(
 mod reachability;
 #[path = "native_codegen_result_slots.rs"]
 mod result_slots;
+#[path = "native_codegen_split_parts.rs"]
+mod split_parts;
 #[path = "native_codegen_str_slots.rs"]
 mod str_slots;
 

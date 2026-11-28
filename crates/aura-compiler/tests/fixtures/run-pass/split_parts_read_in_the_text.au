@@ -1,0 +1,200 @@
+# A split whose list is only read at known positions, in the block that
+# makes it, makes no list in native code: each read finds its part in the
+# text that was split. The text may be an element of a list, a parameter,
+# or a local, and it is not released before the last read of a part. A
+# list that is read any other way is made as before.
+import control
+
+
+def to_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return -1
+
+
+def shout(text: str) -> str:
+    return text.to_upper()
+
+
+def second(line: str) -> str:
+    return line.split(" ")[1].clone()
+
+
+def keyed(line: str) -> int64:
+    fields = line.split("=")
+    if fields[0] == "size":
+        return to_int(fields[1])
+    return 0
+
+
+def both(line: str) -> str:
+    parts = line.split(", ")
+    return f"{parts[1]}/{parts[0]}"
+
+
+def lengths(line: str) -> int64:
+    parts = line.split(":")
+    return parts[0].len() + parts[2].byte_len() + shout(parts[1]).len()
+
+
+def fresh(seed: int64) -> int64:
+    line = f"event {seed} value {seed * 3}"
+    fields = line.split(" ")
+    return to_int(fields[3]) - to_int(fields[1])
+
+
+def kept(seed: int64) -> str:
+    line = f"a{seed} b{seed}"
+    fields = line.split(" ")
+    first = fields[0].clone()
+    return f"{first}+{line}"
+
+
+def changed() -> str:
+    mut line = "one two"
+    fields = line.split(" ")
+    line = line + " three"
+    return f"{fields[1]}|{line}"
+
+
+def counted(line: str) -> int64:
+    fields = line.split(" ")
+    return fields.len() + to_int(fields[0])
+
+
+def walked(line: str) -> int64:
+    fields = line.split(" ")
+    mut total = 0
+    mut index = 0
+    while index < fields.len():
+        total += to_int(fields[index])
+        index += 1
+    return total
+
+
+def branches(line: str) -> int64:
+    fields = line.split(" ")
+    mut total = to_int(fields[0])
+    if total > 1:
+        total += to_int(fields[1])
+    return total
+
+
+def short(line: str) -> int64:
+    fields = line.split(" ")
+    return to_int(fields[3])
+
+
+def dated(line: str) -> int64:
+    fields = line.split(",")
+    date = fields[0].split("-")
+    return to_int(date[1]) * 100 + to_int(fields[1])
+
+
+def pick(values: list[int64], text: str) -> int64:
+    return values[text.len()]
+
+
+def fresh_short(seed: int64) -> int64:
+    line = f"a {seed}"
+    fields = line.split(" ")
+    return to_int(fields[5])
+
+
+def fresh_short_task():
+    print(fresh_short(4))
+
+
+def callee_trap(seed: int64) -> int64:
+    values = [seed, seed + 1]
+    line = f"x{seed} long-part"
+    fields = line.split(" ")
+    kept = shout(fields[0])
+    return pick(values, fields[1]) + kept.len()
+
+
+def callee_trap_task():
+    print(callee_trap(4))
+
+
+def short_task():
+    print(short("only three parts"))
+
+
+def empty_task():
+    words = ["", "x"]
+    for word in words:
+        parts = word.split(",")
+        print(to_int(parts[1]))
+
+
+def main() -> int32:
+    text = "event 0 value 11\nevent 1 value 22\n\nevent 2 value 33"
+    mut lines = 0
+    mut total = 0
+    for line in text.split("\n"):
+        if line == "":
+            continue
+        fields = line.split(" ")
+        lines += 1
+        total += to_int(fields[3])
+    print(f"{lines} {total}")
+
+    batch = ["7 retry 100", "8 ok 200", "9 retry x"]
+    mut retries = 0
+    mut sum = 0
+    for line in batch:
+        fields = line.split(" ")
+        sum += to_int(fields[2])
+        if fields[1] == "retry":
+            retries += 1
+    print(f"{retries} {sum}")
+
+    mut grown = ["1 2", "3 4"]
+    mut seen = 0
+    mut index = 0
+    while index < grown.len():
+        line = grown[index].clone()
+        parts = line.split(" ")
+        seen += to_int(parts[1])
+        if grown.len() < 4:
+            grown.append(f"{index} {index + 5}")
+        index += 1
+    print(f"{seen} {grown}")
+
+    print(second("GET /index HTTP/1.1"))
+    print(second(batch[1]))
+    v0 = keyed("size=42")
+    v1 = keyed("name=42")
+    print(f"{v0} {v1}")
+    print(both("left, right"))
+    print(both("é, ü, ö"))
+    print(lengths("ab:cde:é"))
+    print(f"{fresh(5)} {fresh(-2)}")
+    print(kept(3))
+    print(changed())
+    print(counted("4 5 6"))
+    print(walked("1 2 3"))
+    b0 = branches("1 9")
+    b1 = branches("2 9")
+    print(f"{b0} {b1}")
+    match control.recover(short_task):
+        case Err(trap):
+            print(trap.message)
+        case _:
+            print("expected failure")
+    print(dated("2026-11-28,7"))
+    for task in [fresh_short_task, callee_trap_task]:
+        match control.recover(task):
+            case Err(trap):
+                print(trap.message)
+            case _:
+                print("expected failure")
+    match control.recover(empty_task):
+        case Err(trap):
+            print(trap.message)
+        case _:
+            print("expected failure")
+    return 0
